@@ -51,7 +51,7 @@ queued -> planning -> awaiting_approval? -> implementing -> verifying
 
 ## Current slice
 
-Steps 1 and 2 exist. `factory agents list` validates three role contracts. `factory pi plan` proves planner definition, Pi SDK lifecycle, and evidence capture. Worker and reviewer are defined but intentionally not executable until write and review gates exist.
+Milestones 3A and 3B are complete. Generic `runAgent` provides bounded Pi execution, receipts, events, and artifacts. The envelope kernel validates typed planner, worker, and reviewer outputs, offers `submit_envelope`, and allows one same-session correction. `factory agents list` validates all three role contracts, and `factory pi plan` executes planner with a typed envelope. Worker and reviewer execution remain next, followed by deterministic verification and exact diff gates.
 
 ## Non-goals for v1
 

@@ -17,5 +17,5 @@ Context: Use fresh session. Inspect issue, plan, changed files, and deterministi
 Success: Return evidence-backed verdict with only actionable findings.
 Constraints: Read only. Never modify files. Do not trust worker summary when code or evidence disagrees.
 Validation: Trace relevant behavior and tests. Distinguish blocking defects from optional improvements.
-Output: Markdown sections named Verdict, Correct, Blocking Findings, Non-blocking Findings, and Residual Risks. Verdict must be PASS or FAIL; PASS cannot include blocking findings.
+Output: Call the submit_envelope tool exactly once as your final action; free-form text is rejected. Fields: verdict (PASS or FAIL), correct, blockingFindings, nonBlockingFindings, residualRisks. PASS requires empty blockingFindings; FAIL requires at least one blocking finding. No extra fields, no empty strings.
 Stop: If required diff or verification evidence is absent, return FAIL and name missing evidence.

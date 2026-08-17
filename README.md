@@ -2,7 +2,7 @@
 
 Small internal software factory, built one proven slice at a time.
 
-Current foundation loads validated specialist definitions and runs planner through Pi SDK.
+Current foundation loads validated specialist definitions, runs planner through Pi SDK, and validates typed role envelopes.
 
 ```bash
 npm install
@@ -36,4 +36,4 @@ Current timeout is cooperative through Pi SDK. Future controller will enforce ha
 
 Evidence root is `.factory/` under directory where command runs.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for full blueprint and build order, and [docs/foundation-checkpoint.md](docs/foundation-checkpoint.md) for a verified snapshot of what exists today.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for full blueprint and build order, [docs/envelopes.md](docs/envelopes.md) for the envelope model, and [docs/foundation-checkpoint.md](docs/foundation-checkpoint.md) for a verified snapshot of what exists today.
