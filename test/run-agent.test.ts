@@ -52,7 +52,9 @@ test("runAgent finalizes a failed receipt without completion artifacts when the 
     assert.equal(deltas, 0);
     assert.ok(!existsSync(resolve(artifacts.runDir, "plan.md")));
 
-    const receipt = JSON.parse(readFileSync(resolve(artifacts.runDir, "receipt.json"), "utf8")) as Record<string, unknown>;
+    const receipt = JSON.parse(
+      readFileSync(resolve(artifacts.runDir, "receipt.json"), "utf8"),
+    ) as Record<string, unknown>;
     assert.deepEqual(Object.keys(receipt), [
       "runId",
       "status",

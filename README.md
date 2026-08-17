@@ -5,10 +5,11 @@ Small internal software factory, built one proven slice at a time.
 Current foundation loads validated specialist definitions, runs planner through Pi SDK, and validates typed role envelopes.
 
 ```bash
-npm install
-npm run build
-npm run factory -- agents list
-npm run factory -- pi plan \
+corepack enable
+pnpm install --frozen-lockfile
+pnpm run build
+pnpm run factory -- agents list
+pnpm run factory -- pi plan \
   --repo /absolute/path/to/repository \
   --issue ./examples/issue.md \
   --model provider/model \

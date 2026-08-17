@@ -16,12 +16,17 @@ const PlannerChangeSchema = Type.Object(
 export const PlannerEnvelopeSchema = Type.Object(
   {
     summary: Type.String({ description: "One-paragraph summary of the plan" }),
-    evidence: Type.Array(Type.String(), { description: "Observed issue or repository facts backing the plan" }),
+    evidence: Type.Array(Type.String(), {
+      description: "Observed issue or repository facts backing the plan",
+    }),
     changes: Type.Array(PlannerChangeSchema, { description: "Planned file changes" }),
-    verification: Type.Array(Type.String(), { description: "Commands or checks that verify the implementation" }),
+    verification: Type.Array(Type.String(), {
+      description: "Commands or checks that verify the implementation",
+    }),
     risks: Type.Array(Type.String(), { description: "Known risks of the plan" }),
     decisionsNeeded: Type.Array(Type.String(), {
-      description: "Unresolved decisions blocking planning; non-empty permits empty changes and verification",
+      description:
+        "Unresolved decisions blocking planning; non-empty permits empty changes and verification",
     }),
   },
   { additionalProperties: false },
@@ -44,7 +49,9 @@ export const WorkerEnvelopeSchema = Type.Object(
   {
     implemented: Type.String({ description: "What was implemented" }),
     changedFiles: Type.Array(Type.String(), { description: "Files actually changed" }),
-    validation: Type.Array(WorkerValidationSchema, { description: "Checks run with honest outcomes" }),
+    validation: Type.Array(WorkerValidationSchema, {
+      description: "Checks run with honest outcomes",
+    }),
     openRisks: Type.Array(Type.String(), { description: "Remaining risks or follow-ups" }),
   },
   { additionalProperties: false },
@@ -52,9 +59,15 @@ export const WorkerEnvelopeSchema = Type.Object(
 
 export const ReviewerEnvelopeSchema = Type.Object(
   {
-    verdict: Type.Unsafe<"PASS" | "FAIL">({ type: "string", enum: ["PASS", "FAIL"], description: "Review verdict" }),
+    verdict: Type.Unsafe<"PASS" | "FAIL">({
+      type: "string",
+      enum: ["PASS", "FAIL"],
+      description: "Review verdict",
+    }),
     correct: Type.Array(Type.String(), { description: "What the implementation gets right" }),
-    blockingFindings: Type.Array(Type.String(), { description: "Defects that must be fixed; empty iff verdict is PASS" }),
+    blockingFindings: Type.Array(Type.String(), {
+      description: "Defects that must be fixed; empty iff verdict is PASS",
+    }),
     nonBlockingFindings: Type.Array(Type.String(), { description: "Optional improvements" }),
     residualRisks: Type.Array(Type.String(), { description: "Risks remaining after review" }),
   },
@@ -77,7 +90,9 @@ export type EnvelopeParseResult<T extends Envelope = Envelope> =
   | { ok: false; errors: string[] };
 
 function structuralErrors(schema: TSchema, value: unknown): string[] {
-  return Value.Errors(schema, value).map((error) => `${error.instancePath || "/"}: ${error.message}`);
+  return Value.Errors(schema, value).map(
+    (error) => `${error.instancePath || "/"}: ${error.message}`,
+  );
 }
 
 function trimStrings(value: unknown, path: string, errors: string[]): unknown {
@@ -86,9 +101,15 @@ function trimStrings(value: unknown, path: string, errors: string[]): unknown {
     if (!trimmed) errors.push(`${path || "/"}: must not be empty`);
     return trimmed;
   }
-  if (Array.isArray(value)) return value.map((item, index) => trimStrings(item, `${path}/${index}`, errors));
+  if (Array.isArray(value))
+    return value.map((item, index) => trimStrings(item, `${path}/${index}`, errors));
   if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, trimStrings(item, `${path}/${key}`, errors)]));
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        trimStrings(item, `${path}/${key}`, errors),
+      ]),
+    );
   }
   return value;
 }
@@ -101,7 +122,9 @@ function semanticErrors(role: EnvelopeRole, envelope: Envelope): string[] {
         errors.push("/changes: at least one change is required when decisionsNeeded is empty");
       }
       if (envelope.verification.length === 0) {
-        errors.push("/verification: at least one verification step is required when decisionsNeeded is empty");
+        errors.push(
+          "/verification: at least one verification step is required when decisionsNeeded is empty",
+        );
       }
     }
   }
@@ -110,20 +133,29 @@ function semanticErrors(role: EnvelopeRole, envelope: Envelope): string[] {
       errors.push("/blockingFindings: must be empty when verdict is PASS");
     }
     if (envelope.verdict === "FAIL" && envelope.blockingFindings.length === 0) {
-      errors.push("/blockingFindings: at least one blocking finding is required when verdict is FAIL");
+      errors.push(
+        "/blockingFindings: at least one blocking finding is required when verdict is FAIL",
+      );
     }
   }
   return errors;
 }
 
-export function parseEnvelope(role: "planner", value: unknown): EnvelopeParseResult<PlannerEnvelope>;
+export function parseEnvelope(
+  role: "planner",
+  value: unknown,
+): EnvelopeParseResult<PlannerEnvelope>;
 export function parseEnvelope(role: "worker", value: unknown): EnvelopeParseResult<WorkerEnvelope>;
-export function parseEnvelope(role: "reviewer", value: unknown): EnvelopeParseResult<ReviewerEnvelope>;
+export function parseEnvelope(
+  role: "reviewer",
+  value: unknown,
+): EnvelopeParseResult<ReviewerEnvelope>;
 export function parseEnvelope(role: EnvelopeRole, value: unknown): EnvelopeParseResult;
 export function parseEnvelope(role: EnvelopeRole, value: unknown): EnvelopeParseResult {
   const schema = Schemas[role];
   if (!Value.Check(schema, value)) return { ok: false, errors: structuralErrors(schema, value) };
   const trimErrors: string[] = [];
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Value.Check validates the role schema above.
   const envelope = trimStrings(value, "", trimErrors) as Envelope;
   const errors = [...trimErrors, ...semanticErrors(role, envelope)];
   return errors.length ? { ok: false, errors } : { ok: true, envelope };
@@ -150,7 +182,9 @@ export function renderPlannerPlan(envelope: PlannerEnvelope): string {
     renderList(envelope.evidence),
     "## Changes",
     envelope.changes.length
-      ? envelope.changes.map((change) => `- \`${change.path}\` (${change.action}): ${change.rationale}`).join("\n")
+      ? envelope.changes
+          .map((change) => `- \`${change.path}\` (${change.action}): ${change.rationale}`)
+          .join("\n")
       : "- None",
     "## Verification",
     renderList(envelope.verification),
@@ -166,7 +200,10 @@ export interface EnvelopeCapture {
   calls: number;
 }
 
-export function createSubmitEnvelopeTool(role: EnvelopeRole, capture: EnvelopeCapture): ToolDefinition {
+export function createSubmitEnvelopeTool(
+  role: EnvelopeRole,
+  capture: EnvelopeCapture,
+): ToolDefinition {
   return defineTool({
     name: "submit_envelope",
     label: "Submit envelope",

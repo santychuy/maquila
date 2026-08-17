@@ -20,7 +20,7 @@ const validPlanner = {
   summary: "Add envelope validation to the run loop.",
   evidence: ["src/run-agent.ts has no structured final output"],
   changes: [{ path: "src/envelope.ts", action: "add", rationale: "Validate role envelopes" }],
-  verification: ["npm run check"],
+  verification: ["pnpm run check"],
   risks: ["Model may ignore the tool"],
   decisionsNeeded: [],
 };
@@ -28,7 +28,7 @@ const validPlanner = {
 const validWorker = {
   implemented: "Added envelope validation",
   changedFiles: ["src/envelope.ts"],
-  validation: [{ command: "npm run check", outcome: "pass", detail: "5 tests pass" }],
+  validation: [{ command: "pnpm run check", outcome: "pass", detail: "5 tests pass" }],
   openRisks: ["none"],
 };
 
@@ -67,7 +67,8 @@ test("ready planner without changes or verification is invalid", () => {
 
   const noVerification = parseEnvelope("planner", { ...validPlanner, verification: [] });
   assert.equal(noVerification.ok, false);
-  if (!noVerification.ok) assert.ok(noVerification.errors.some((error) => error.startsWith("/verification")));
+  if (!noVerification.ok)
+    assert.ok(noVerification.errors.some((error) => error.startsWith("/verification")));
 
   const neither = parseEnvelope("planner", { ...validPlanner, changes: [], verification: [] });
   assert.equal(neither.ok, false);
@@ -86,7 +87,10 @@ test("blocked planner with decisions and no changes or verification is valid", (
 });
 
 test("reviewer PASS with blocking findings is invalid", () => {
-  const result = parseEnvelope("reviewer", { ...validReviewer, blockingFindings: ["Missing tests"] });
+  const result = parseEnvelope("reviewer", {
+    ...validReviewer,
+    blockingFindings: ["Missing tests"],
+  });
   assert.equal(result.ok, false);
   if (!result.ok) assert.ok(result.errors.some((error) => error.startsWith("/blockingFindings")));
 });
@@ -121,7 +125,12 @@ test("nested empty strings are invalid", () => {
   assert.equal(inList.ok, false);
   if (!inList.ok) assert.ok(inList.errors.some((error) => error.includes("/changedFiles/1")));
 
-  const blankSummary = parseEnvelope("reviewer", { ...validReviewer, verdict: "FAIL", blockingFindings: ["x"], correct: ["\n\t"] });
+  const blankSummary = parseEnvelope("reviewer", {
+    ...validReviewer,
+    verdict: "FAIL",
+    blockingFindings: ["x"],
+    correct: ["\n\t"],
+  });
   assert.equal(blankSummary.ok, false);
 });
 
@@ -139,19 +148,33 @@ test("renderPlannerPlan emits the planner Markdown headers", () => {
   assert.equal(parsed.ok, true);
   if (!parsed.ok) return;
   const plan = renderPlannerPlan(parsed.envelope);
-  for (const header of ["## Summary", "## Evidence", "## Changes", "## Verification", "## Risks", "## Decisions Needed"]) {
+  for (const header of [
+    "## Summary",
+    "## Evidence",
+    "## Changes",
+    "## Verification",
+    "## Risks",
+    "## Decisions Needed",
+  ]) {
     assert.ok(plan.includes(header), header);
   }
   assert.ok(plan.includes("- `src/envelope.ts` (add): Validate role envelopes"));
 
-  const blocked: PlannerEnvelope = { ...validPlanner, changes: [], verification: [], decisionsNeeded: ["Need scope decision"] };
+  const blocked: PlannerEnvelope = {
+    ...validPlanner,
+    changes: [],
+    verification: [],
+    decisionsNeeded: ["Need scope decision"],
+  };
   const blockedPlan = renderPlannerPlan(blocked);
   assert.ok(blockedPlan.includes("- None"));
   assert.ok(blockedPlan.includes("- Need scope decision"));
 });
 
 test("envelopeCorrectionPrompt is stable", () => {
-  const prompt = envelopeCorrectionPrompt("planner", ["/changes: at least one change is required when decisionsNeeded is empty"]);
+  const prompt = envelopeCorrectionPrompt("planner", [
+    "/changes: at least one change is required when decisionsNeeded is empty",
+  ]);
   assert.equal(
     prompt,
     [
@@ -168,7 +191,13 @@ test("submit_envelope tool captures the value and terminates the run", async () 
   const tool = createSubmitEnvelopeTool("planner", capture);
   assert.equal(tool.name, "submit_envelope");
 
-  const result = await tool.execute("call-1", validPlanner, undefined, undefined, undefined as unknown as ExtensionContext);
+  const result = await tool.execute(
+    "call-1",
+    validPlanner,
+    undefined,
+    undefined,
+    undefined as unknown as ExtensionContext,
+  );
   assert.equal(capture.calls, 1);
   assert.deepEqual(capture.value, validPlanner);
   assert.equal(result.terminate, true);
@@ -211,13 +240,24 @@ test("envelope mode fails before the model without correction and receipt advert
     assert.equal(completedCalls, 0);
     assert.ok(!existsSync(resolve(artifacts.runDir, "envelope.json")));
 
-    const receipt = JSON.parse(readFileSync(resolve(artifacts.runDir, "receipt.json"), "utf8")) as Record<string, unknown>;
+    const receipt = JSON.parse(
+      readFileSync(resolve(artifacts.runDir, "receipt.json"), "utf8"),
+    ) as Record<string, unknown>;
     assert.equal(receipt.status, "failed");
     assert.equal("envelope" in receipt, false);
-    assert.deepEqual((receipt.agent as { tools: string[] }).tools, ["read", "grep", "find", "ls", "submit_envelope"]);
+    assert.deepEqual((receipt.agent as { tools: string[] }).tools, [
+      "read",
+      "grep",
+      "find",
+      "ls",
+      "submit_envelope",
+    ]);
 
     const events = readFileSync(resolve(artifacts.runDir, "events.jsonl"), "utf8");
-    assert.ok(!events.includes("envelope_invalid"), "no correction attempted on setup/transport failure");
+    assert.ok(
+      !events.includes("envelope_invalid"),
+      "no correction attempted on setup/transport failure",
+    );
     assert.ok(!events.includes("envelope_accepted"));
   } finally {
     rmSync(root, { recursive: true, force: true });

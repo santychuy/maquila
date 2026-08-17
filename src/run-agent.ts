@@ -85,7 +85,11 @@ export interface RunAgentOptions {
   /** When set, the agent must submit a valid role envelope via submit_envelope as its final action. */
   envelopeRole?: EnvelopeRole;
   onTextDelta?: (delta: string) => void;
-  onCompleted?: (finalText: string, artifacts: RunArtifacts, envelope?: Envelope) => string[] | void | Promise<string[] | void>;
+  onCompleted?: (
+    finalText: string,
+    artifacts: RunArtifacts,
+    envelope?: Envelope,
+  ) => string[] | void | Promise<string[] | void>;
 }
 
 export interface AgentRunResult {
@@ -151,7 +155,7 @@ function eventRecord(event: AgentSessionEvent): object | undefined {
 }
 
 function finalAssistantText(session: AgentSession): string {
-  const message = [...session.messages].reverse().find((candidate) => candidate.role === "assistant");
+  const message = session.messages.toReversed().find((candidate) => candidate.role === "assistant");
   if (!message || message.role !== "assistant") return "";
   return message.content
     .filter((part) => part.type === "text")
@@ -197,7 +201,8 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       cliThinking: agent.thinking,
       modelRuntime,
     });
-    if (!resolvedModel.model) throw new Error(resolvedModel.error ?? `Unknown model: ${options.model}`);
+    if (!resolvedModel.model)
+      throw new Error(resolvedModel.error ?? `Unknown model: ${options.model}`);
     const thinkingLevel = resolvedModel.thinkingLevel ?? agent.thinking;
     receipt.agent.thinking = thinkingLevel;
     if (!(await modelRuntime.getAuth(resolvedModel.model))) {
@@ -244,7 +249,9 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       });
     }, options.timeoutSeconds * 1000);
 
-    const captureEnvelope = (): { ok: true; envelope: Envelope } | { ok: false; errors: string[] } =>
+    const captureEnvelope = ():
+      | { ok: true; envelope: Envelope }
+      | { ok: false; errors: string[] } =>
       capture.calls > 0
         ? parseEnvelope(envelopeRole!, capture.value)
         : { ok: false, errors: ["submit_envelope tool was not called"] };
@@ -256,7 +263,12 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         let parsed = captureEnvelope();
         if (!parsed.ok) {
           correctionAttempts = 1;
-          artifacts.appendEvent({ at: new Date().toISOString(), type: "envelope_invalid", role: envelopeRole, errors: parsed.errors });
+          artifacts.appendEvent({
+            at: new Date().toISOString(),
+            type: "envelope_invalid",
+            role: envelopeRole,
+            errors: parsed.errors,
+          });
           await session.prompt(envelopeCorrectionPrompt(envelopeRole, parsed.errors));
           if (!timedOut) parsed = captureEnvelope();
         }
@@ -270,9 +282,21 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
               correctionAttempts,
             });
           } else {
-            artifacts.appendEvent({ at: new Date().toISOString(), type: "envelope_rejected", role: envelopeRole, errors: parsed.errors });
-            receipt.envelope = { role: envelopeRole, valid: false, correctionAttempts, errors: parsed.errors };
-            throw new Error(`${envelopeRole} envelope missing or invalid after one correction attempt`);
+            artifacts.appendEvent({
+              at: new Date().toISOString(),
+              type: "envelope_rejected",
+              role: envelopeRole,
+              errors: parsed.errors,
+            });
+            receipt.envelope = {
+              role: envelopeRole,
+              valid: false,
+              correctionAttempts,
+              errors: parsed.errors,
+            };
+            throw new Error(
+              `${envelopeRole} envelope missing or invalid after one correction attempt`,
+            );
           }
         }
       }
@@ -295,22 +319,31 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       const extraArtifacts = await options.onCompleted?.(finalText, artifacts, envelope);
       if (extraArtifacts) {
         const nameErrors = runArtifactNameErrors(extraArtifacts, artifacts.runDir);
-        if (nameErrors.length) throw new Error(`onCompleted returned invalid artifacts: ${nameErrors.join("; ")}`);
+        if (nameErrors.length)
+          throw new Error(`onCompleted returned invalid artifacts: ${nameErrors.join("; ")}`);
         receipt.artifacts.push(...extraArtifacts);
       }
       artifacts.writeJson("envelope.json", envelope!);
-      receipt.envelope = { role: envelopeRole, valid: true, correctionAttempts, path: "envelope.json" };
+      receipt.envelope = {
+        role: envelopeRole,
+        valid: true,
+        correctionAttempts,
+        path: "envelope.json",
+      };
       receipt.artifacts.push("envelope.json");
       receipt.status = "completed";
     } else {
       finalText = finalAssistantText(session);
       if (!finalText) {
-        throw new Error(`${agent.name.charAt(0).toUpperCase()}${agent.name.slice(1)} returned no text`);
+        throw new Error(
+          `${agent.name.charAt(0).toUpperCase()}${agent.name.slice(1)} returned no text`,
+        );
       }
       const extraArtifacts = await options.onCompleted?.(finalText, artifacts);
       if (extraArtifacts) {
         const nameErrors = runArtifactNameErrors(extraArtifacts, artifacts.runDir);
-        if (nameErrors.length) throw new Error(`onCompleted returned invalid artifacts: ${nameErrors.join("; ")}`);
+        if (nameErrors.length)
+          throw new Error(`onCompleted returned invalid artifacts: ${nameErrors.join("; ")}`);
         receipt.artifacts.push(...extraArtifacts);
       }
       receipt.status = "completed";

@@ -9,6 +9,10 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "ma
 
 export type AgentThinking = (typeof THINKING_LEVELS)[number];
 
+function isAgentThinking(value: string): value is AgentThinking {
+  return THINKING_LEVELS.some((level) => level === value);
+}
+
 export interface AgentDefinition {
   name: string;
   description: string;
@@ -42,7 +46,8 @@ function parseTools(value: unknown, filePath: string): string[] {
   const values = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : [];
   const tools = values.map((tool) => nonEmptyString(tool, "tools entry", filePath));
   if (!tools.length) throw new Error(`${filePath}: tools must be a non-empty list`);
-  if (new Set(tools).size !== tools.length) throw new Error(`${filePath}: tools must not contain duplicates`);
+  if (new Set(tools).size !== tools.length)
+    throw new Error(`${filePath}: tools must not contain duplicates`);
   const unknown = tools.filter((tool) => !ALLOWED_TOOLS.has(tool));
   if (unknown.length) throw new Error(`${filePath}: unsupported tools: ${unknown.join(", ")}`);
   return tools;
@@ -51,16 +56,22 @@ function parseTools(value: unknown, filePath: string): string[] {
 export function loadAgentFile(filePath: string): AgentDefinition {
   const { frontmatter, body } = parseFrontmatter<AgentFrontmatter>(readFileSync(filePath, "utf8"));
   const unknownFields = Object.keys(frontmatter).filter((field) => !ALLOWED_FIELDS.has(field));
-  if (unknownFields.length) throw new Error(`${filePath}: unknown fields: ${unknownFields.join(", ")}`);
+  if (unknownFields.length)
+    throw new Error(`${filePath}: unknown fields: ${unknownFields.join(", ")}`);
 
   const name = nonEmptyString(frontmatter.name, "name", filePath);
-  if (!/^[a-z][a-z0-9-]*$/.test(name)) throw new Error(`${filePath}: name must be lowercase kebab-case`);
-  if (basename(filePath, ".md") !== name) throw new Error(`${filePath}: filename must match agent name '${name}'`);
+  if (!/^[a-z][a-z0-9-]*$/.test(name))
+    throw new Error(`${filePath}: name must be lowercase kebab-case`);
+  if (basename(filePath, ".md") !== name)
+    throw new Error(`${filePath}: filename must match agent name '${name}'`);
 
   const description = nonEmptyString(frontmatter.description, "description", filePath);
   const tools = parseTools(frontmatter.tools, filePath);
-  const thinking = frontmatter.thinking === undefined ? "medium" : nonEmptyString(frontmatter.thinking, "thinking", filePath);
-  if (!THINKING_LEVELS.includes(thinking as AgentThinking)) {
+  const thinking =
+    frontmatter.thinking === undefined
+      ? "medium"
+      : nonEmptyString(frontmatter.thinking, "thinking", filePath);
+  if (!isAgentThinking(thinking)) {
     throw new Error(`${filePath}: unsupported thinking level '${thinking}'`);
   }
   const access = nonEmptyString(frontmatter.access, "access", filePath);
@@ -80,7 +91,7 @@ export function loadAgentFile(filePath: string): AgentDefinition {
     name,
     description,
     tools,
-    thinking: thinking as AgentThinking,
+    thinking,
     access,
     systemPrompt: body.trim(),
     filePath,
@@ -91,16 +102,20 @@ export function listAgents(agentsDir = defaultAgentsDir()): AgentDefinition[] {
   if (!existsSync(agentsDir)) throw new Error(`Agents directory not found: ${agentsDir}`);
   const agents = readdirSync(agentsDir)
     .filter((name) => name.endsWith(".md"))
-    .sort()
+    .toSorted()
     .map((name) => loadAgentFile(resolve(agentsDir, name)));
   const names = agents.map((agent) => agent.name);
-  if (new Set(names).size !== names.length) throw new Error(`Duplicate agent names in ${agentsDir}`);
+  if (new Set(names).size !== names.length)
+    throw new Error(`Duplicate agent names in ${agentsDir}`);
   return agents;
 }
 
 export function loadAgent(name: string, agentsDir = defaultAgentsDir()): AgentDefinition {
   const agents = listAgents(agentsDir);
   const agent = agents.find((candidate) => candidate.name === name);
-  if (!agent) throw new Error(`Unknown agent '${name}'. Available: ${agents.map((item) => item.name).join(", ")}`);
+  if (!agent)
+    throw new Error(
+      `Unknown agent '${name}'. Available: ${agents.map((item) => item.name).join(", ")}`,
+    );
   return agent;
 }

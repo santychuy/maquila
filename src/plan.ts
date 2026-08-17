@@ -41,7 +41,11 @@ function validateRepo(path: string): void {
 }
 
 export async function runPlan(options: PlanOptions): Promise<PlanResult> {
-  if (!Number.isInteger(options.timeoutSeconds) || options.timeoutSeconds < 1 || options.timeoutSeconds > MAX_TIMEOUT_SECONDS) {
+  if (
+    !Number.isInteger(options.timeoutSeconds) ||
+    options.timeoutSeconds < 1 ||
+    options.timeoutSeconds > MAX_TIMEOUT_SECONDS
+  ) {
     throw new Error(`timeoutSeconds must be an integer from 1 to ${MAX_TIMEOUT_SECONDS}`);
   }
 
@@ -70,7 +74,8 @@ export async function runPlan(options: PlanOptions): Promise<PlanResult> {
     },
     onTextDelta: (delta) => process.stdout.write(delta),
     onCompleted: (_finalText, target, envelope) => {
-      if (!envelope || !("changes" in envelope)) throw new Error("Planner completed without a valid planner envelope");
+      if (!envelope || !("changes" in envelope))
+        throw new Error("Planner completed without a valid planner envelope");
       target.write("plan.md", `${renderPlannerPlan(envelope)}\n`);
       return ["plan.md"];
     },

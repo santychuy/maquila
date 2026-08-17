@@ -56,7 +56,9 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     }
     if (options === "list-agents") {
       for (const agent of listAgents()) {
-        process.stdout.write(`${agent.name}\t${agent.access}\t${agent.description}\t[${agent.tools.join(", ")}]\n`);
+        process.stdout.write(
+          `${agent.name}\t${agent.access}\t${agent.description}\t[${agent.tools.join(", ")}]\n`,
+        );
       }
       return 0;
     }

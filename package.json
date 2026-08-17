@@ -3,14 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": {
-    "node": ">=22.19.0"
-  },
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node --test dist/test/*.test.js",
-    "check": "tsc --noEmit && npm test",
-    "factory": "node dist/src/cli.js"
+    "lint": "oxlint --type-aware --deny-warnings .",
+    "lint:fix": "oxlint --type-aware --fix .",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "test": "pnpm run build && node --test dist/test/*.test.js",
+    "check": "pnpm run lint && pnpm run format:check && tsc --noEmit && pnpm run test",
+    "factory": "node dist/src/cli.js",
+    "prepare": "husky"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.84.2",
@@ -18,6 +20,15 @@
   },
   "devDependencies": {
     "@types/node": "24.12.4",
+    "husky": "9.1.7",
+    "lint-staged": "16.4.0",
+    "oxfmt": "0.63.0",
+    "oxlint": "1.78.0",
+    "oxlint-tsgolint": "7.0.2001",
     "typescript": "5.9.3"
-  }
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "packageManager": "pnpm@11.22.0"
 }

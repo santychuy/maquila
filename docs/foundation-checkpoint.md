@@ -23,9 +23,19 @@ All three role schemas exist. Planner remains the only executable role. Worker a
 
 Local live run `4340fb3b-eb0b-4039-b014-f0343b05cb04` completed with a valid planner envelope, zero correction attempts, and `envelope_accepted`. Generated `.factory/` evidence is ignored by Git and is not linked from committed docs. Its receipt records the planner, `submit_envelope`, `plan.md`, and `envelope.json`. The run used a dirty checkout, so it is execution evidence, not clean-baseline proof. Older run notes remain historical and may use older receipt shapes.
 
+## Local tooling
+
+This repository uses pnpm `11.22.0`, pinned by `package.json` and recorded in `pnpm-lock.yaml`. Use `corepack enable` followed by `pnpm install --frozen-lockfile`; Node 25 and newer do not include Corepack, so install Corepack separately first. Do not restore an npm lockfile.
+
+`pnpm check` is the full local gate: type-aware Oxlint, Oxfmt verification, TypeScript checking, build, and compiled tests. Oxlint enables correctness and suspicious rules with TypeScript, Oxc, Unicorn, import, Node, and Promise plugins. Tests turn off only `typescript/no-floating-promises` and `typescript/no-unsafe-type-assertion`; this keeps the type-aware policy balanced for test code without disabling the broader checks. Oxfmt uses its defaults; `pnpm format` writes them and `pnpm format:check` verifies them.
+
+Husky is local only: pre-commit runs `pnpm exec lint-staged`, and pre-push runs `pnpm run check`. lint-staged runs `oxlint --fix` then Oxfmt on staged TypeScript and JavaScript files, and Oxfmt on staged JSON, Markdown, and YAML files. It preserves unstaged work while handling partial staging, and only its staged-file results enter the commit. Run the full gate before relying on these hooks.
+
+`pnpm-workspace.yaml` keeps lifecycle builds disabled for `@google/genai` and `protobufjs` (`allowBuilds: false`); no package-specific build approval is granted. There is no hosted CI workflow: checks run locally through these commands and hooks.
+
 ## Tests
 
-`npm test` passes 19 tests. `npm run check` also passes TypeScript checking and the test suite. Coverage includes role boundaries, schema and access failures, envelope structure and semantics, submit flow, correction prompt, timeout/setup failure, and artifact-name safety.
+`pnpm test` passes 19 tests. Coverage includes role boundaries, schema and access failures, envelope structure and semantics, submit flow, correction prompt, timeout/setup failure, and artifact-name safety.
 
 ## Failure and security limits
 

@@ -69,19 +69,24 @@ Generated `dist/`, `node_modules/`, and `.factory/` content is ignored. Do not e
 Requires Node.js `>=22.19.0`.
 
 ```bash
-npm ci
-npm run build
-npm test
-npm run check
+corepack enable
+pnpm install --frozen-lockfile
+pnpm run build
+pnpm test
+pnpm lint
+pnpm format:check
+pnpm check
 ```
 
-`npm run check` is the required full local gate. It type-checks, builds, and runs compiled tests.
+The repository pins pnpm through `packageManager`. Node 25+ does not bundle Corepack; install Corepack separately there before running `corepack enable`.
+
+`pnpm check` is the required full local gate. It runs type-aware Oxlint, verifies Oxfmt output, type-checks, builds, and runs compiled tests.
 
 Useful CLI checks after building:
 
 ```bash
-npm run factory -- agents list
-npm run factory -- pi plan \
+pnpm run factory -- agents list
+pnpm run factory -- pi plan \
   --repo /absolute/path/to/repository \
   --issue ./examples/issue.md \
   --model provider/model \
@@ -93,6 +98,8 @@ Planner execution requires Pi authentication for the selected model. It writes e
 ## Code Conventions
 
 - TypeScript, ESM, `NodeNext`, strict mode, and `noUncheckedIndexedAccess` are mandatory.
+- Oxfmt defaults are canonical. Run `pnpm format`; verify with `pnpm format:check`.
+- Oxlint enforces correctness and suspicious rules with type-aware TypeScript, Oxc, Unicorn, import, Node, and Promise plugins. Fix only safe findings with `pnpm lint:fix`.
 - Use `.js` extensions in relative TypeScript imports so compiled ESM resolves correctly.
 - Prefer Node standard library and existing dependencies over new abstractions or packages.
 - Keep changes focused on the next proven slice; do not prebuild later architecture milestones.
@@ -101,7 +108,8 @@ Planner execution requires Pi authentication for the selected model. It writes e
 - Preserve evidence on every terminal path, including setup failure and timeout.
 - Keep public artifact names as safe basenames that exist inside run directory.
 - Write JSON evidence atomically where current helpers provide that behavior.
-- Update `package-lock.json` only when dependency metadata changes.
+- Use pnpm only. Update `pnpm-lock.yaml` whenever dependency metadata changes; never add an npm lockfile.
+- Keep dependency lifecycle-script decisions explicit in `pnpm-workspace.yaml`. Do not broaden `allowBuilds` without reviewing the exact package scripts.
 
 ## Agent Definition Contract
 
@@ -142,6 +150,10 @@ Each run lives at `.factory/runs/<run-id>/` and may contain:
 
 Failed or timed-out runs must not expose a successful envelope. Keep receipts honest: skipped, failed, or unavailable checks must never be reported as passing.
 
+## Git Hooks
+
+Husky installs through the `prepare` script. Pre-commit runs lint-staged, which applies safe Oxlint fixes and Oxfmt only to staged supported files. Pre-push runs `pnpm check`. Hooks are local safeguards, not permission to skip the full gate. Bypass only for recovery, then run the missed command manually.
+
 ## Testing Expectations
 
 Use `node:test` and `node:assert/strict`, matching existing tests. Add the smallest test that proves changed behavior or protects an invariant. For filesystem tests, use temporary directories and clean them in `finally` blocks.
@@ -149,7 +161,7 @@ Use `node:test` and `node:assert/strict`, matching existing tests. Add the small
 Before finishing:
 
 1. Run focused tests while developing.
-2. Run `npm run check`.
+2. Run `pnpm check`.
 3. Confirm generated files remain untracked.
 4. Reconcile documentation with implemented code, especially when a milestone moves from planned to current.
 
