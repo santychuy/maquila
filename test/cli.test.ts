@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { test } from "node:test";
 import { listAgents, loadAgentFile } from "../src/agents.js";
-import { parseCli } from "../src/cli.js";
+import { HELP, parseCli } from "../src/cli.js";
 import { MAX_TIMEOUT_SECONDS } from "../src/plan.js";
 
 test("planner command accepts required inputs and safe timeout", () => {
@@ -28,6 +28,38 @@ test("planner command accepts required inputs and safe timeout", () => {
       timeoutSeconds: 60,
     },
   );
+});
+
+test("worker lifecycle command parses immutable inputs", () => {
+  assert.deepEqual(
+    parseCli([
+      "pi",
+      "worker",
+      "--repo",
+      "/tmp/repo",
+      "--issue",
+      "/tmp/issue.md",
+      "--planner",
+      "/tmp/planner.json",
+      "--base-sha",
+      "a".repeat(40),
+      "--model",
+      "anthropic/example",
+      "--timeout-seconds",
+      "60",
+    ]),
+    {
+      repo: "/tmp/repo",
+      issue: "/tmp/issue.md",
+      plannerEnvelope: "/tmp/planner.json",
+      baseSha: "a".repeat(40),
+      model: "anthropic/example",
+      timeoutSeconds: 60,
+    },
+  );
+  assert.match(HELP, /factory pi worker/);
+  assert.throws(() => parseCli(["pi", "worker"]), /--planner/);
+  assert.throws(() => parseCli(["unknown"]), /pi worker/);
 });
 
 test("planner rejects missing input and timeouts beyond run ceiling", () => {
