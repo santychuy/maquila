@@ -51,7 +51,7 @@ queued -> planning -> awaiting_approval? -> implementing -> verifying
 
 ## Current slice
 
-Milestones 3A, 3B, deterministic verification, and the local worker/reviewer lifecycle are complete. `factory pi plan` executes planner, and `factory pi worker` runs the sole writer, verification, and a fresh reviewer. Linear `Todo` issue and GitHub base-ref clients produce immutable input snapshots. Atomic PoC state and an injectable exe.dev SSH/SCP adapter now establish controller seams, but no command composes them. Restart recovery, live VM agent execution, cleanup reconciliation, and GitHub publication remain absent.
+Milestones through remote controller composition are proven. `factory run` snapshots a Linear `Todo` issue and GitHub base SHA, holds a single-host lock, reconciles abandoned VMs, bootstraps pinned runtimes in a fresh exe.dev VM, runs planner then sole-writer/verification/fresh-reviewer sessions, harvests evidence and a binary patch, and destroys the VM before `ready_for_publication`. RIFF-39 completed this path live with all three session transcripts, deterministic verification, reviewer `PASS`, credential scan, and zero remaining VMs. GitHub publication, fix pass, in-flight session resume, and controller-owned external-only delivery remain absent.
 
 ## Non-goals for v1
 

@@ -26,13 +26,13 @@ Implemented now:
 - Executable local worker/reviewer lifecycle: `factory pi worker` with fresh reviewer session and deterministic verification.
 - Deterministic verification: `factory.verify.json` argv commands plus exact Git diff gate (`src/verify.ts`).
 - Controller-side Linear `Todo` issue and GitHub base-SHA snapshot primitives with credential-free hashes.
-- Atomic controller-state, idempotency, orphan lookup, and injectable exe.dev OpenSSH adapter primitives.
+- Executable `factory run`: single-host lock, restart cleanup, pinned Node/Bun bootstrap, remote planner/worker/verification/reviewer, evidence and patch harvest, and VM destruction before `ready_for_publication`.
 
 Not implemented yet:
 
-- Executable controller orchestration and restart recovery.
-- Live exe.dev agent lifecycle and hard wall-clock termination.
-- GitHub pull-request publication.
+- GitHub pull-request publication, fix pass, and in-flight session resume.
+- Planning outcomes delivered only to controller-owned external surfaces; current success still requires a non-empty repository diff.
+- Guaranteed hard termination when exe.dev cleanup itself is unavailable.
 
 See `ARCHITECTURE.md` for target design and build order. See `docs/foundation-checkpoint.md` for verified current state.
 
@@ -60,7 +60,8 @@ Current execution is not a security sandbox. Read-only tools stop mutation but d
 - `src/verify.ts` — fail-closed `factory.verify.json` parsing, command execution, exact Git gate.
 - `src/linear.ts`, `src/github.ts`, and `src/intake.ts` — immutable external input snapshots and idempotency hash.
 - `src/run-state.ts` and `src/exe.ts` — atomic PoC state plus tested exe.dev SSH/SCP command boundaries.
-- `src/cli.ts` — `agents list`, `pi plan`, and local `pi worker` commands plus exit-code handling.
+- `src/controller-lock.ts` and `src/controller.ts` — serial controller ownership, restart reconciliation, remote execution, harvest, and cleanup.
+- `src/cli.ts` — `agents list`, local Pi commands, and remote `run` command plus exit-code handling.
 - `factory.verify.json` — this repository's argv verification commands.
 - `agents/*.md` — role metadata in YAML frontmatter and role system prompt in Markdown body.
 - `test/*.test.ts` — Node test-runner coverage for CLI, role boundaries, envelopes, failures, and artifact safety.
