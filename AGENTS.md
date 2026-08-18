@@ -23,14 +23,16 @@ Implemented now:
 - Typed planner, worker, and reviewer envelopes with structural and semantic validation.
 - A `submit_envelope` tool and one same-session correction attempt.
 - Executable read-only planner command: `factory pi plan`.
+- Executable local worker/reviewer lifecycle: `factory pi worker` with fresh reviewer session and deterministic verification.
+- Deterministic verification: `factory.verify.json` argv commands plus exact Git diff gate (`src/verify.ts`).
+- Controller-side Linear `Todo` issue and GitHub base-SHA snapshot primitives with credential-free hashes.
+- Atomic controller-state, idempotency, orphan lookup, and injectable exe.dev OpenSSH adapter primitives.
 
 Not implemented yet:
 
-- Worker or reviewer execution paths.
-- Deterministic repository verification and exact Git diff gates.
-- Durable controller state and restart recovery.
-- exe.dev VM lifecycle and hard wall-clock termination.
-- Linear intake or GitHub pull-request publication.
+- Executable controller orchestration and restart recovery.
+- Live exe.dev agent lifecycle and hard wall-clock termination.
+- GitHub pull-request publication.
 
 See `ARCHITECTURE.md` for target design and build order. See `docs/foundation-checkpoint.md` for verified current state.
 
@@ -55,7 +57,11 @@ Current execution is not a security sandbox. Read-only tools stop mutation but d
 - `src/envelope.ts` — TypeBox schemas, semantic validation, correction prompt, submit tool, and planner rendering.
 - `src/plan.ts` — validates planner inputs, snapshots issue context, runs planner, and writes `plan.md`.
 - `src/run-artifacts.ts` — creates `.factory/runs/<run-id>/` and writes evidence.
-- `src/cli.ts` — `agents list` and `pi plan` commands plus exit-code handling.
+- `src/verify.ts` — fail-closed `factory.verify.json` parsing, command execution, exact Git gate.
+- `src/linear.ts`, `src/github.ts`, and `src/intake.ts` — immutable external input snapshots and idempotency hash.
+- `src/run-state.ts` and `src/exe.ts` — atomic PoC state plus tested exe.dev SSH/SCP command boundaries.
+- `src/cli.ts` — `agents list`, `pi plan`, and local `pi worker` commands plus exit-code handling.
+- `factory.verify.json` — this repository's argv verification commands.
 - `agents/*.md` — role metadata in YAML frontmatter and role system prompt in Markdown body.
 - `test/*.test.ts` — Node test-runner coverage for CLI, role boundaries, envelopes, failures, and artifact safety.
 - `docs/envelopes.md` — envelope contract and limitations.

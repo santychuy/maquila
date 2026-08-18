@@ -42,8 +42,8 @@ queued -> planning -> awaiting_approval? -> implementing -> verifying
 
 1. **Agent definitions:** validated Markdown plus YAML frontmatter contracts for planner, worker, and reviewer.
 2. **Pi planner:** one SDK session, explicit model, definition-derived tools/prompt, deadline, durable receipt.
-3. **Pi worker and reviewer:** sole-writer policy, fresh review context, typed outputs.
-4. **Deterministic verification:** repository-defined commands and exact Git diff gate.
+3. **Deterministic verification:** repository-defined commands and exact Git diff gate.
+4. **Pi worker and reviewer:** sole-writer policy, fresh review context, typed outputs.
 5. **Controller state:** SQLite runs and steps, idempotency, restart recovery, total budget.
 6. **exe.dev lifecycle:** create, inspect, execute, harvest, destroy, orphan cleanup.
 7. **Linear intake:** required template, Ready claim, approval and cancellation labels.
@@ -51,7 +51,7 @@ queued -> planning -> awaiting_approval? -> implementing -> verifying
 
 ## Current slice
 
-Milestones 3A and 3B are complete. Generic `runAgent` provides bounded Pi execution, receipts, events, and artifacts. The envelope kernel validates typed planner, worker, and reviewer outputs, offers `submit_envelope`, and allows one same-session correction. `factory agents list` validates all three role contracts, and `factory pi plan` executes planner with a typed envelope. Worker and reviewer execution remain next, followed by deterministic verification and exact diff gates.
+Milestones 3A, 3B, deterministic verification, and the local worker/reviewer lifecycle are complete. `factory pi plan` executes planner, and `factory pi worker` runs the sole writer, verification, and a fresh reviewer. Linear `Todo` issue and GitHub base-ref clients produce immutable input snapshots. Atomic PoC state and an injectable exe.dev SSH/SCP adapter now establish controller seams, but no command composes them. Restart recovery, live VM agent execution, cleanup reconciliation, and GitHub publication remain absent.
 
 ## Non-goals for v1
 

@@ -4,12 +4,13 @@ Verified snapshot recorded 2026-08-17. This page describes current code and evid
 
 ## Current boundary
 
-Milestones 3A and 3B are complete:
+Milestones 3A, 3B, and deterministic verification are complete:
 
 - **3A runner:** generic `runAgent()` owns one bounded Pi session, isolated resources, events, receipts, artifacts, and cooperative timeout handling.
 - **3B envelope kernel:** typed planner, worker, and reviewer schemas; structural and semantic validation; `submit_envelope`; one same-session correction; accepted envelope and receipt evidence.
+- **Verification gate:** `src/verify.ts` fail-closed parses `factory.verify.json`, runs argv commands serially with `execFile` semantics, and applies an exact Git diff gate. Agent claims cannot override the structured result.
 
-All three role schemas exist. Planner remains the only executable role. Worker and reviewer definitions and shapes exist, but no code runs them. No deterministic verification gate, controller, VM, intake, or publication flow exists.
+All three role schemas exist. Planner, worker, and reviewer lifecycle execution now runs locally with deterministic baseline, verification, Git, and independent review gates. Linear and GitHub clients can snapshot a `Todo` issue and exact base SHA without retaining credentials. Milestone 4 adds durable controller state and an injectable exe.dev OpenSSH adapter; it does not run agents in VMs or publish pull requests.
 
 ## Implemented primitives
 
@@ -18,10 +19,19 @@ All three role schemas exist. Planner remains the only executable role. Worker a
 - `src/envelope.ts` defines role schemas, `parseEnvelope()`, correction prompt, submit tool, and planner rendering.
 - `src/plan.ts` exposes the executable planner path and writes `plan.md` from its accepted planner envelope.
 - `src/run-artifacts.ts` creates `.factory/runs/<run-id>/`, snapshots input, appends JSONL events, and writes JSON artifacts.
+- `src/verify.ts` loads `factory.verify.json`, executes repository checks, and evaluates the exact Git diff gate.
+- `src/worker.ts` runs the sole writer, deterministic verification, and a separate reviewer with aggregate lifecycle evidence.
+- `src/linear.ts`, `src/github.ts`, and `src/intake.ts` validate and hash immutable external inputs without returning credentials.
+- `src/run-state.ts` atomically stores fail-closed controller state with transition validation, idempotency checks, and orphan VM lookup.
+- `src/exe.ts` provides tested command construction for exe.dev SSH, SCP, and retryable deletion without retaining credentials.
 
 ## Evidence
 
 Local live run `4340fb3b-eb0b-4039-b014-f0343b05cb04` completed with a valid planner envelope, zero correction attempts, and `envelope_accepted`. Generated `.factory/` evidence is ignored by Git and is not linked from committed docs. Its receipt records the planner, `submit_envelope`, `plan.md`, and `envelope.json`. The run used a dirty checkout, so it is execution evidence, not clean-baseline proof. Older run notes remain historical and may use older receipt shapes.
+
+## Milestone 4 limitations
+
+State writes have no concurrent multi-process lock or restart/recovery engine. SSH timeouts and disconnects prove only local command failure, not that a remote process stopped. Live VM smoke testing remains a reviewed manual step; agents and publication are intentionally excluded.
 
 ## Local tooling
 
@@ -35,7 +45,7 @@ Husky is local only: pre-commit runs `pnpm exec lint-staged`, and pre-push runs 
 
 ## Tests
 
-`pnpm test` passes 19 tests. Coverage includes role boundaries, schema and access failures, envelope structure and semantics, submit flow, correction prompt, timeout/setup failure, and artifact-name safety.
+`pnpm test` covers role boundaries, envelopes, local worker/reviewer lifecycle failures, artifact safety, verification and Git gates, Linear/GitHub input validation, credential redaction, and deterministic intake hashes.
 
 ## Failure and security limits
 
@@ -43,4 +53,4 @@ Timeout is cooperative: the runner calls `session.abort()` and records `deadline
 
 ## Next
 
-Build deterministic verification and exact diff gates, then wire worker and reviewer execution with their write and review gates. Controller state, VM lifecycle, Linear intake, and GitHub publication follow later.
+Compose intake, state, exe.dev creation/bootstrap, local agent lifecycle, harvest, and unconditional cleanup in one controller command. Add restart reconciliation before GitHub publication.
