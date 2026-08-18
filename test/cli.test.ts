@@ -30,6 +30,75 @@ test("planner command accepts required inputs and safe timeout", () => {
   );
 });
 
+test("controller command accepts bounded immutable inputs", () => {
+  assert.deepEqual(
+    parseCli([
+      "run",
+      "--issue",
+      "RIFF-39",
+      "--owner",
+      "santychuy",
+      "--repo",
+      "bookbounce",
+      "--base-ref",
+      "main",
+      "--tag",
+      "santychuy-bookbounce",
+      "--identity",
+      "/tmp/exe",
+      "--timeout-seconds",
+      "60",
+    ]),
+    {
+      issue: "RIFF-39",
+      owner: "santychuy",
+      repo: "bookbounce",
+      baseRef: "main",
+      tag: "santychuy-bookbounce",
+      identity: "/tmp/exe",
+      timeoutSeconds: 60,
+    },
+  );
+  assert.match(HELP, /factory run/);
+  const defaultTimeout = parseCli([
+    "run",
+    "--issue",
+    "RIFF-39",
+    "--owner",
+    "santychuy",
+    "--repo",
+    "bookbounce",
+    "--base-ref",
+    "main",
+    "--tag",
+    "santychuy-bookbounce",
+    "--identity",
+    "/tmp/exe",
+  ]);
+  assert.equal(typeof defaultTimeout === "object" ? defaultTimeout.timeoutSeconds : 0, 900);
+  assert.equal(parseCli(["--", "agents", "list"]), "list-agents");
+  assert.throws(() => parseCli(["run"]), /--issue/);
+  assert.throws(
+    () =>
+      parseCli([
+        "run",
+        "--issue",
+        "RIFF-39",
+        "--owner",
+        "santychuy",
+        "--repo",
+        "bookbounce",
+        "--base-ref",
+        "main",
+        "--tag",
+        "santychuy-bookbounce",
+        "--identity",
+        "relative-key",
+      ]),
+    /absolute path/,
+  );
+});
+
 test("worker lifecycle command parses immutable inputs", () => {
   assert.deepEqual(
     parseCli([
