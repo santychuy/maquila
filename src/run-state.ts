@@ -18,6 +18,7 @@ export const controllerStates = [
   "verifying",
   "reviewing",
   "fixing",
+  "ready_for_publication",
   "publishing",
   "completed",
   "failed",
@@ -71,8 +72,9 @@ const transitions: Record<ControllerStateName, ControllerStateName[]> = {
   planning: ["implementing", "failed", "cancelled"],
   implementing: ["verifying", "failed", "cancelled"],
   verifying: ["reviewing", "fixing", "failed", "cancelled"],
-  reviewing: ["fixing", "publishing", "failed", "cancelled"],
+  reviewing: ["fixing", "ready_for_publication", "failed", "cancelled"],
   fixing: ["verifying", "failed", "cancelled"],
+  ready_for_publication: ["publishing"],
   publishing: ["completed", "failed", "cancelled"],
   completed: [],
   failed: [],
@@ -154,7 +156,10 @@ function isControllerState(value: unknown): value is ControllerState {
   }
   if (value.vm === undefined && value.cleanup !== "not-needed") return false;
   if (value.vm !== undefined && value.cleanup === "not-needed") return false;
-  if (value.state === "completed" && !["complete", "not-needed"].includes(String(value.cleanup))) {
+  if (
+    (value.state === "completed" || value.state === "ready_for_publication") &&
+    !["complete", "not-needed"].includes(String(value.cleanup))
+  ) {
     return false;
   }
   return true;
@@ -191,7 +196,12 @@ function listStates(runsDir: string): ControllerState[] {
   if (!existsSync(runsDir)) return [];
   return readdirSync(runsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && entry.name !== ".idempotency")
-    .map((entry) => readControllerState(resolve(runsDir, entry.name)));
+    .map((entry) => {
+      const state = readControllerState(resolve(runsDir, entry.name));
+      if (state.runId !== entry.name)
+        throw new Error("controller state directory does not match runId");
+      return state;
+    });
 }
 
 function claimPath(runsDir: string, idempotencyKey: string): string {
@@ -301,6 +311,40 @@ export function recordControllerCleanup(runDir: string, cleanup: CleanupState): 
   const state: ControllerState = { ...current, cleanup, updatedAt: new Date().toISOString() };
   writeControllerState(runDir, state);
   return state;
+}
+
+export function recoverStaleControllerClaims(runsDir: string): void {
+  const claimsDir = resolve(runsDir, ".idempotency");
+  if (!existsSync(claimsDir)) return;
+  for (const entry of readdirSync(claimsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) throw new Error("invalid idempotency claim");
+    const path = resolve(claimsDir, entry.name);
+    const ownerPath = resolve(path, "run-id");
+    if (!existsSync(ownerPath)) {
+      rmSync(path, { recursive: true, force: true });
+      continue;
+    }
+    const owner = readFileSync(ownerPath, "utf8").trim();
+    if (!owner || basename(owner) !== owner) throw new Error("invalid idempotency claim owner");
+    const ownerDir = resolve(runsDir, owner);
+    if (!existsSync(statePath(ownerDir))) {
+      rmSync(path, { recursive: true, force: true });
+      continue;
+    }
+    const state = readControllerState(ownerDir);
+    if (state.runId !== owner || state.idempotencyKey !== entry.name) {
+      throw new Error("idempotency claim does not match controller state");
+    }
+    if (state.state === "failed" || state.state === "cancelled") {
+      rmSync(path, { recursive: true, force: true });
+    }
+  }
+}
+
+export function scanRecoverableControllerStates(runsDir: string): ControllerState[] {
+  return listStates(runsDir).filter(
+    (state) => !terminal.has(state.state) && state.state !== "ready_for_publication",
+  );
 }
 
 export function findOrphanVms(

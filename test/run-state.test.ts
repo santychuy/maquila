@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -8,7 +16,9 @@ import {
   findOrphanVms,
   readControllerState,
   recordControllerCleanup,
+  recoverStaleControllerClaims,
   recordControllerVm,
+  scanRecoverableControllerStates,
   transitionControllerState,
   type ControllerStateInput,
 } from "../src/run-state.js";
@@ -120,6 +130,7 @@ test("duplicate active and completed inputs are rejected; failed input may retry
         "implementing",
         "verifying",
         "reviewing",
+        "ready_for_publication",
         "publishing",
         "completed",
       ] as const) {
@@ -132,6 +143,45 @@ test("duplicate active and completed inputs are rejected; failed input may retry
     } finally {
       rmSync(completeRoot, { recursive: true, force: true });
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("controller recovery removes claims left before state creation", () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-state-"));
+  const runs = join(root, ".factory", "controllers");
+  const claims = join(runs, ".idempotency");
+  try {
+    const empty = join(claims, "a".repeat(64));
+    const owned = join(claims, "b".repeat(64));
+    mkdirSync(empty, { recursive: true });
+    mkdirSync(owned, { recursive: true });
+    writeFileSync(join(owned, "run-id"), "missing-run\n");
+    recoverStaleControllerClaims(runs);
+    assert.equal(existsSync(empty), false);
+    assert.equal(existsSync(owned), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ready state requires cleanup and is excluded from recovery", () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-state-"));
+  const dir = runDir(root, "run-1");
+  try {
+    createControllerState(dir, input("run-1"));
+    for (const next of [
+      "creating_vm",
+      "bootstrapping",
+      "planning",
+      "implementing",
+      "verifying",
+      "reviewing",
+      "ready_for_publication",
+    ] as const)
+      transitionControllerState(dir, next);
+    assert.deepEqual(scanRecoverableControllerStates(join(root, ".factory", "runs")), []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
