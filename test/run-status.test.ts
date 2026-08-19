@@ -89,6 +89,36 @@ test("status folds safe live activity and terminal evidence", () => {
   }
 });
 
+test("status preserves the primary failure when evidence collection also fails", () => {
+  const root = temporary();
+  try {
+    const telemetry = createTelemetryWriter(root, runId);
+    telemetry.append({ type: "run_created", actor: "controller", payload: { status: "created" } });
+    telemetry.append({
+      type: "failure",
+      actor: "controller",
+      payload: { stage: "planner", message: "controller stage failed" },
+    });
+    telemetry.append({
+      type: "failure",
+      actor: "controller",
+      payload: { stage: "failure_evidence", message: "failure evidence unavailable" },
+    });
+    telemetry.append({
+      type: "run_finished",
+      actor: "controller",
+      payload: { status: "failed", cleanup: "complete" },
+    });
+
+    assert.deepEqual(foldRunStatus({ root, runId }).failure, {
+      code: "planner",
+      message: "controller stage failed",
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("status distinguishes stale, unknown, legacy, and malformed telemetry", () => {
   const root = temporary();
   try {

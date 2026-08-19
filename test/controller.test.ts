@@ -838,6 +838,52 @@ test("controller planner failure destroys VM and records failed state", async ()
   }
 });
 
+test("controller exposes fixed bootstrap checkpoints without leaking raw errors", async () => {
+  const cases = [
+    {
+      name: "repository clone",
+      matches: (argv: string[]) => argv[0] === "git" && argv[1] === "clone",
+      expected: "repository clone failed",
+    },
+    {
+      name: "Factory build",
+      matches: (argv: string[]) => argv.includes("pnpm") && argv.at(-1) === "build",
+      expected: "Factory build failed",
+    },
+  ];
+  for (const item of cases) {
+    const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
+    class BootstrapFailingExe extends FakeExe {
+      override async exec(destination: string, argv: string[], timeoutMs?: number) {
+        if (item.matches(argv))
+          throw new Error("linear-secret-value\nprivate stderr and command arguments");
+        return super.exec(destination, argv, timeoutMs);
+      }
+    }
+    const exe = new BootstrapFailingExe();
+    try {
+      const result = await runController(controllerOptions(root, exe));
+      assert.equal(result.status, "failed", item.name);
+      const state = readControllerState(result.runDir);
+      const events = readTelemetry(telemetryPath(root, state.runId));
+      const primary = events.find(
+        (event) => event.type === "failure" && event.payload.stage === "bootstrapping",
+      );
+      assert.ok(primary && primary.type === "failure", item.name);
+      assert.equal(primary.payload.message, item.expected, item.name);
+      assert.doesNotMatch(
+        JSON.stringify(events),
+        /linear-secret-value|private stderr|command arguments/,
+        item.name,
+      );
+      assert.equal(state.cleanup, "complete", item.name);
+      assert.equal(exe.calls.filter((call) => call.operation === "destroy").length, 1, item.name);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test("failure evidence unavailability is explicit in telemetry", async () => {
   const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
   const exe = new FakeExe(

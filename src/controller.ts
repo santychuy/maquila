@@ -563,6 +563,7 @@ export async function runController(options: ControllerOptions): Promise<Control
   let cleanupFailed = false;
   let cleanupOutcome: CleanupState = "not-needed";
   let stage = "recovery";
+  let publicFailureMessage = "controller stage failed";
   const emit = (input: TelemetryInput): void => {
     if (telemetryBroken) throw new Error("telemetry unavailable");
     try {
@@ -642,6 +643,7 @@ export async function runController(options: ControllerOptions): Promise<Control
     )
       openHostPhase = next;
     stage = next;
+    publicFailureMessage = "controller stage failed";
     return nextState;
   };
   try {
@@ -702,12 +704,14 @@ export async function runController(options: ControllerOptions): Promise<Control
       }
     }
     advance(runDir, "bootstrapping");
+    publicFailureMessage = "repository clone failed";
     await remote(
       exe,
       vm.sshDest,
       ["git", "clone", `https://github.int.exe.xyz/${state.repositoryFullName}.git`, REMOTE_WORK],
       120_000,
     );
+    publicFailureMessage = "repository checkout failed";
     await remote(
       exe,
       vm.sshDest,
@@ -720,6 +724,7 @@ export async function runController(options: ControllerOptions): Promise<Control
       ).trim() !== state.baseSha
     )
       throw new Error("remote checkout SHA mismatch");
+    publicFailureMessage = "runtime archive creation failed";
     archive = archiveFactory(factoryRoot);
     writeJson(resolve(runDir, "runtime.json"), {
       factorySha: archive.sha,
@@ -748,11 +753,13 @@ export async function runController(options: ControllerOptions): Promise<Control
       },
     });
     try {
+      publicFailureMessage = "bootstrap architecture detection failed";
       const machine = (await remote(exe, vm.sshDest, ["uname", "-m"], 30_000)).trim();
       const nodeArch = machine === "x86_64" ? "x64" : machine === "aarch64" ? "arm64" : "";
       const checksum = NODE_CHECKSUMS[nodeArch];
       if (!checksum) throw new Error("unsupported exe.dev architecture");
       const nodeArchive = `/home/exedev/node-v${NODE_VERSION}-linux-${nodeArch}.tar.xz`;
+      publicFailureMessage = "bootstrap directory initialization failed";
       await remote(
         exe,
         vm.sshDest,
@@ -766,6 +773,7 @@ export async function runController(options: ControllerOptions): Promise<Control
         ],
         30_000,
       );
+      publicFailureMessage = "Node.js download failed";
       await remote(
         exe,
         vm.sshDest,
@@ -777,16 +785,19 @@ export async function runController(options: ControllerOptions): Promise<Control
         ],
         120_000,
       );
+      publicFailureMessage = "Node.js verification failed";
       const actualChecksum = (await remote(exe, vm.sshDest, ["sha256sum", nodeArchive], 30_000))
         .trim()
         .split(/\s+/, 1)[0];
       if (actualChecksum !== checksum) throw new Error("Node.js archive checksum mismatch");
+      publicFailureMessage = "Node.js installation failed";
       await remote(
         exe,
         vm.sshDest,
         ["tar", "-xJf", nodeArchive, "-C", "/home/exedev/.local/node", "--strip-components=1"],
         60_000,
       );
+      publicFailureMessage = "Bun installation failed";
       await remote(
         exe,
         vm.sshDest,
@@ -802,6 +813,7 @@ export async function runController(options: ControllerOptions): Promise<Control
         ],
         180_000,
       );
+      publicFailureMessage = "Bun verification failed";
       const bunVersion = (await remote(exe, vm.sshDest, [REMOTE_BUN, "--version"], 30_000)).trim();
       if (bunVersion !== BUN_VERSION) throw new Error("unexpected Bun version");
       writeJson(resolve(runDir, "bootstrap.json"), {
@@ -810,8 +822,10 @@ export async function runController(options: ControllerOptions): Promise<Control
         nodeSha256: checksum,
         bunVersion,
       });
+      publicFailureMessage = "runtime upload failed";
       await exe.copyTo(vm.sshDest, archive.path, "/home/exedev/runtime.tar");
       await exe.copyTo(vm.sshDest, models, "/home/exedev/.pi/agent/models.json");
+      publicFailureMessage = "runtime installation failed";
       await remote(
         exe,
         vm.sshDest,
@@ -819,6 +833,7 @@ export async function runController(options: ControllerOptions): Promise<Control
         60_000,
       );
       await remote(exe, vm.sshDest, [REMOTE_NODE, "--version"], 30_000);
+      publicFailureMessage = "Factory dependency installation failed";
       await remote(
         exe,
         vm.sshDest,
@@ -835,6 +850,7 @@ export async function runController(options: ControllerOptions): Promise<Control
         ],
         300_000,
       );
+      publicFailureMessage = "Factory build failed";
       await remote(
         exe,
         vm.sshDest,
@@ -850,6 +866,7 @@ export async function runController(options: ControllerOptions): Promise<Control
         ],
         120_000,
       );
+      publicFailureMessage = "target dependency installation failed";
       await remote(
         exe,
         vm.sshDest,
@@ -866,6 +883,7 @@ export async function runController(options: ControllerOptions): Promise<Control
         ],
         600_000,
       );
+      publicFailureMessage = "model endpoint readiness check failed";
       await remote(
         exe,
         vm.sshDest,
@@ -1197,7 +1215,7 @@ export async function runController(options: ControllerOptions): Promise<Control
     bestEffortEmit({
       type: "failure",
       actor: "controller",
-      payload: { stage, message: "controller stage failed" },
+      payload: { stage, message: publicFailureMessage },
     });
   }
   if (failure && state?.vm) {

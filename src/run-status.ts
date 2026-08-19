@@ -120,7 +120,7 @@ export function foldRunStatus(options: FoldRunStatusOptions): RunStatusSummary {
         summary.currentTool = [...openTools.values()].at(-1) ?? null;
         break;
       case "failure":
-        summary.failure = { code: record.payload.stage, message: record.payload.message };
+        summary.failure ??= { code: record.payload.stage, message: record.payload.message };
         break;
       case "artifact_available":
         if (summary.artifacts.length < 100) summary.artifacts.push(record.payload);
