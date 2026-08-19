@@ -579,6 +579,14 @@ class OverflowExe extends FakeExe {
   }
 }
 
+const publishedPullRequest = {
+  number: 42,
+  url: "https://github.com/santychuy/bookbounce/pull/42",
+  branch: `factory/riff-39-${"d".repeat(12)}`,
+  commitSha: "c".repeat(40),
+};
+const publish = async () => publishedPullRequest;
+
 const snapshot = {
   issue: {
     uuid: "issue-uuid",
@@ -618,6 +626,7 @@ function controllerOptions(root: string, exe: ControllerExe) {
     factoryRoot: process.cwd(),
     exe,
     intake: async () => snapshot,
+    publish,
     sleep: async () => {},
   };
 }
@@ -651,6 +660,7 @@ test("controller reaches ready only after remote evidence and VM cleanup", async
       factoryRoot: process.cwd(),
       exe,
       intake: async () => snapshot,
+      publish,
       sleep: async () => {},
       onAccepted: () => {
         accepted = true;
@@ -658,12 +668,14 @@ test("controller reaches ready only after remote evidence and VM cleanup", async
       },
     });
     assert.equal(accepted, true);
-    assert.equal(result.status, "ready_for_publication", result.error);
+    assert.equal(result.status, "completed", result.error);
+    assert.deepEqual(result.pullRequest, publishedPullRequest);
     const state = readControllerState(result.runDir);
-    assert.equal(state.state, "ready_for_publication");
+    assert.equal(state.state, "completed");
     assert.equal(state.cleanup, "complete");
     assert.ok(statSync(join(result.runDir, "change.patch")).isFile());
     assert.ok(statSync(join(result.runDir, "evidence-manifest.json")).isFile());
+    assert.ok(statSync(join(result.runDir, "publication.json")).isFile());
     assert.equal(statSync(result.runDir).mode & 0o777, 0o700);
     assert.equal(statSync(join(result.runDir, "remote-evidence")).mode & 0o777, 0o700);
     for (const name of ["receipt.json", "change.patch", "evidence.tar"])
@@ -688,6 +700,8 @@ test("controller reaches ready only after remote evidence and VM cleanup", async
         "verifying",
         "reviewing",
         "ready_for_publication",
+        "publishing",
+        "completed",
       ],
     );
     const hostClosures = events.filter(
@@ -708,6 +722,33 @@ test("controller reaches ready only after remote evidence and VM cleanup", async
     assert.equal(publicTool?.payload.toolCallId, "tool-1");
     assert.equal(publicTool?.sourceAt, "1970-01-01T00:00:00.000Z");
     assert.doesNotMatch(JSON.stringify(events), /remote-private-path-content/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("publication failure preserves evidence and fails after VM cleanup", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
+  const exe = new FakeExe();
+  try {
+    const result = await runController({
+      ...controllerOptions(root, exe),
+      publish: async () => {
+        throw new Error("GitHub publication failed (403)");
+      },
+    });
+    assert.equal(result.status, "failed");
+    assert.match(result.error ?? "", /publication failed \(403\)/);
+    const state = readControllerState(result.runDir);
+    assert.equal(state.state, "failed");
+    assert.equal(state.cleanup, "complete");
+    assert.ok(statSync(join(result.runDir, "change.patch")).isFile());
+    const events = readTelemetry(telemetryPath(root, state.runId));
+    assert.equal(
+      events.some((event) => event.type === "publication_completed"),
+      false,
+    );
+    assert.equal(events.at(-1)?.type, "run_finished");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -743,6 +784,7 @@ test("controller emits periodic phase heartbeat and stops it before terminal", a
       factoryRoot: process.cwd(),
       exe: new SlowFakeExe(),
       intake: async () => snapshot,
+      publish,
       sleep: async () => {},
       heartbeatMilliseconds: 1,
       runId: heartbeatRunId,

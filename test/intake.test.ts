@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fetchGitHubSnapshot } from "../src/github.js";
+import { fetchGitHubSnapshot, publishGitHubPullRequest } from "../src/github.js";
 import { createIntake } from "../src/intake.js";
 import { fetchLinearIssue } from "../src/linear.js";
 
@@ -250,6 +250,118 @@ test("GitHub transport failures never expose token", async () => {
       error.message === "GitHub request failed" &&
       !error.message.includes(token),
   );
+});
+
+test("GitHub publication pushes one deterministic branch and opens a ready PR", async () => {
+  const baseSha = "a".repeat(40);
+  const commitSha = "c".repeat(40);
+  const idempotencyKey = "d".repeat(64);
+  const token = "github-publication-secret";
+  const commands: Array<{ args: string[]; env: NodeJS.ProcessEnv }> = [];
+  let revision = 0;
+  const fake = sequence([
+    { body: {}, status: 404 },
+    { body: [] },
+    {
+      body: {
+        number: 42,
+        html_url: "https://github.com/santychuy/bookbounce/pull/42",
+        state: "open",
+        draft: false,
+        head: { sha: commitSha },
+      },
+      status: 201,
+    },
+  ]);
+  const result = await publishGitHubPullRequest({
+    fetch: fake.fetch,
+    runGit: async (args, _cwd, env) => {
+      commands.push({ args, env });
+      if (args.includes("rev-parse")) return `${revision++ === 0 ? baseSha : commitSha}\n`;
+      if (args.includes("show")) return "2026-01-01T00:00:00Z\n";
+      return "";
+    },
+    token,
+    owner: "santychuy",
+    repo: "bookbounce",
+    baseRef: "main",
+    baseSha,
+    runId: "11111111-1111-4111-8111-111111111111",
+    idempotencyKey,
+    issueIdentifier: "RIFF-40",
+    issueTitle: "Remove previous tab",
+    issueUrl: "https://linear.app/example/issue/RIFF-40/remove-previous-tab",
+    patchPath: "/tmp/change.patch",
+    patchSha256: "e".repeat(64),
+  });
+
+  assert.deepEqual(result, {
+    number: 42,
+    url: "https://github.com/santychuy/bookbounce/pull/42",
+    branch: `factory/riff-40-${idempotencyKey.slice(0, 12)}`,
+    commitSha,
+  });
+  assert.equal(commands.filter((call) => call.args.includes("push")).length, 1);
+  assert.equal(commands.filter((call) => call.args.includes("commit")).length, 1);
+  assert.doesNotMatch(JSON.stringify(commands.map((call) => call.args)), new RegExp(token));
+  assert.ok(commands.every((call) => call.env.FACTORY_GITHUB_TOKEN === token));
+  const create = fake.calls.at(-1);
+  assert.equal(create?.init?.method, "POST");
+  const requestBody = create?.init?.body;
+  if (typeof requestBody !== "string") assert.fail("expected pull request JSON body");
+  const body = JSON.parse(requestBody) as Record<string, unknown>;
+  assert.equal(body.draft, false);
+  assert.equal(body.head, result.branch);
+});
+
+test("GitHub publication reuses matching branch and PR without pushing", async () => {
+  const baseSha = "a".repeat(40);
+  const commitSha = "c".repeat(40);
+  const idempotencyKey = "d".repeat(64);
+  const branch = `factory/riff-40-${idempotencyKey.slice(0, 12)}`;
+  const fake = sequence([
+    { body: { ref: `refs/heads/${branch}`, object: { sha: commitSha } } },
+    {
+      body: [
+        {
+          number: 42,
+          html_url: "https://github.com/santychuy/bookbounce/pull/42",
+          state: "open",
+          draft: false,
+          head: { sha: commitSha },
+        },
+      ],
+    },
+  ]);
+  const commands: string[][] = [];
+  let revision = 0;
+  const result = await publishGitHubPullRequest({
+    fetch: fake.fetch,
+    runGit: async (args) => {
+      commands.push(args);
+      if (args.includes("rev-parse")) return `${revision++ === 0 ? baseSha : commitSha}\n`;
+      if (args.includes("show")) return "2026-01-01T00:00:00Z\n";
+      return "";
+    },
+    token: "secret",
+    owner: "santychuy",
+    repo: "bookbounce",
+    baseRef: "main",
+    baseSha,
+    runId: "11111111-1111-4111-8111-111111111111",
+    idempotencyKey,
+    issueIdentifier: "RIFF-40",
+    issueTitle: "Remove previous tab",
+    issueUrl: "https://linear.app/example/issue/RIFF-40/remove-previous-tab",
+    patchPath: "/tmp/change.patch",
+    patchSha256: "e".repeat(64),
+  });
+  assert.equal(result.number, 42);
+  assert.equal(
+    commands.some((args) => args.includes("push")),
+    false,
+  );
+  assert.equal(fake.calls.length, 2);
 });
 
 test("intake composition is deterministic and contains no credentials", async () => {

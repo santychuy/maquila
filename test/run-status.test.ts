@@ -62,17 +62,28 @@ test("status folds safe live activity and terminal evidence", () => {
       payload: { cleanup: "complete" },
     });
     telemetry.append({
+      type: "publication_completed",
+      actor: "controller",
+      payload: {
+        number: 42,
+        url: "https://github.com/santychuy/bookbounce/pull/42",
+        branch: "factory/riff-40-aaaaaaaaaaaa",
+        commitSha: "b".repeat(40),
+      },
+    });
+    telemetry.append({
       type: "run_finished",
       actor: "controller",
-      payload: { status: "ready_for_publication", cleanup: "complete" },
+      payload: { status: "completed", cleanup: "complete" },
     });
     const done = foldRunStatus({ root, runId });
-    assert.equal(done.status, "ready_for_publication");
+    assert.equal(done.status, "completed");
     assert.equal(done.currentTool, null);
     assert.equal(done.cleanup, "complete");
     assert.ok(done.runtimeMilliseconds !== null);
     assert.equal(done.phaseRuntimeMilliseconds, null);
     assert.equal(done.artifacts[0]?.name, "change.patch");
+    assert.equal(done.pullRequest?.url, "https://github.com/santychuy/bookbounce/pull/42");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

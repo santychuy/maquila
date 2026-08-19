@@ -65,6 +65,11 @@ export type ControllerStateInput = Pick<
 >;
 
 const terminal = new Set<ControllerStateName>(["completed", "failed", "cancelled"]);
+const retryableClaim = new Set<ControllerStateName>([
+  "failed",
+  "cancelled",
+  "ready_for_publication",
+]);
 const transitions: Record<ControllerStateName, ControllerStateName[]> = {
   intake: ["creating_vm", "failed", "cancelled"],
   creating_vm: ["bootstrapping", "failed", "cancelled"],
@@ -232,7 +237,7 @@ function acquireClaim(runsDir: string, state: ControllerState): void {
     const owner = readFileSync(ownerPath, "utf8").trim();
     const ownerDir = resolve(runsDir, owner);
     const previous = readControllerState(ownerDir);
-    if (!terminal.has(previous.state) || previous.state === "completed") {
+    if (!retryableClaim.has(previous.state)) {
       throw new Error("duplicate active or completed idempotency key", { cause: error });
     }
     releaseClaim(runsDir, previous);
@@ -261,10 +266,7 @@ export function createControllerState(
   acquireClaim(runsDir, state);
   try {
     for (const previous of listStates(runsDir)) {
-      if (
-        previous.idempotencyKey === input.idempotencyKey &&
-        (previous.state === "completed" || !terminal.has(previous.state))
-      ) {
+      if (previous.idempotencyKey === input.idempotencyKey && !retryableClaim.has(previous.state)) {
         throw new Error("duplicate active or completed idempotency key");
       }
     }

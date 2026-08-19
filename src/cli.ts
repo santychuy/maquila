@@ -436,7 +436,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         onAccepted: () => writeLaunchHandshake(root, options.runId, instanceId),
       });
       process.stdout.write(`Controller evidence: ${result.runDir}\n`);
-      return result.status === "ready_for_publication" ? 0 : 1;
+      return result.status === "completed" ? 0 : 1;
     }
     if ("identity" in options) {
       const { linearToken, githubToken } = takeControllerEnvironment();
@@ -444,7 +444,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         throw new Error("LINEAR_API_TOKEN and GITHUB_TOKEN are required");
       const result = await runController({ ...options, linearToken, githubToken });
       process.stdout.write(`\nController evidence: ${result.runDir}\n`);
-      return result.status === "ready_for_publication" ? 0 : 1;
+      return result.status === "completed" ? 0 : 1;
     }
     const protocol = options.machine
       ? createRemoteProtocolWriter((line) => process.stdout.write(line))

@@ -43,13 +43,14 @@ Use run ID returned by start:
 pnpm run factory -- run status --run-id "<run-id>" --json
 ```
 
-Report status, phase, current safe tool name, last activity, cleanup, failure, and safe artifact metadata exactly as command returns. A later controller failure is run outcome, not skill execution failure.
+Report status, phase, current safe tool name, last activity, cleanup, failure, pull-request metadata, and safe artifact metadata exactly as command returns. A later controller failure is run outcome, not skill execution failure. A completed run must include the ready-for-review pull-request URL.
 
 ## Safe failures
 
 Explain only actionable public errors:
 
 - missing `LINEAR_API_TOKEN` or `GITHUB_TOKEN`: configure required controller credentials
+- GitHub publication `403`: use a fine-grained token for the target repository with Contents and Pull requests write permissions
 - missing or invalid `FACTORY_EXE_IDENTITY`: configure absolute exe.dev identity path
 - target ambiguity: provide supported GitHub origin and resolvable remote default branch, or explicit safe overrides
 - factory busy: wait for active serial controller run
@@ -63,6 +64,6 @@ Never print environment values.
 - Never build SSH commands or call exe.dev directly.
 - Never read credentials, telemetry files, controller state, session transcripts, or VM files.
 - Never parse logs or inspect VM directly.
-- Never launch, retry, cancel, approve, publish, merge, or clean up through web UI.
+- Never launch, retry, cancel, approve, publish, merge, or clean up outside the checked-in controller commands.
 - Never decide whether agent output is accepted.
 - Never commit, push, publish, or merge.

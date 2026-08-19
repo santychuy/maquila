@@ -248,6 +248,8 @@ test("observer UI preserves focus and truthful partial telemetry state", () => {
   assert.match(script, /el\.textContent!==next/);
   assert.match(script, /Telemetry events unavailable/);
   assert.match(script, /Latest actor or open tool/);
+  assert.match(script, /detail\.pullRequest/);
+  assert.match(script, /noopener noreferrer/);
   assert.match(OBSERVER_CSS, /\.event-actor,\.event-detail\{grid-column:2/);
 });
 

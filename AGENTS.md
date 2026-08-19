@@ -26,13 +26,13 @@ Implemented now:
 - Executable local worker/reviewer lifecycle: `factory pi worker` with fresh reviewer session and deterministic verification.
 - Deterministic verification: `factory.verify.json` argv commands plus exact Git diff gate (`src/verify.ts`).
 - Controller-side Linear `Todo` issue and GitHub base-SHA snapshot primitives with credential-free hashes.
-- Executable `factory run`: single-host lock, restart cleanup, pinned Node/Bun bootstrap, remote planner/worker/verification/reviewer, evidence and patch harvest, and VM destruction before `ready_for_publication`.
+- Executable `factory run`: single-host lock, restart cleanup, pinned Node/Bun bootstrap, remote planner/worker/verification/reviewer, evidence and patch harvest, VM destruction, then controller-side bot branch and ready-for-review pull-request publication.
 - Strict host telemetry with streaming remote phase/activity frames, accepted detached `run start`, and read-only `run status`.
 - Managed loopback observer server/UI with replay/cursor polling and factory-owned `.pi/skills/software-factory` command routing.
 
 Not implemented yet:
 
-- GitHub pull-request publication, fix pass, and in-flight session resume.
+- Fix pass and in-flight session resume.
 - Planning outcomes delivered only to controller-owned external surfaces; current success still requires a non-empty repository diff.
 - Guaranteed hard termination when exe.dev cleanup itself is unavailable.
 
@@ -60,7 +60,7 @@ Current execution is not a security sandbox. Read-only tools stop mutation but d
 - `src/plan.ts` — validates planner inputs, snapshots issue context, runs planner, and writes `plan.md`.
 - `src/run-artifacts.ts` — creates `.factory/runs/<run-id>/` and writes evidence.
 - `src/verify.ts` — fail-closed `factory.verify.json` parsing, command execution, exact Git gate.
-- `src/linear.ts`, `src/github.ts`, and `src/intake.ts` — immutable external input snapshots and idempotency hash.
+- `src/linear.ts`, `src/github.ts`, and `src/intake.ts` — immutable external input snapshots, idempotency hash, and controller-side GitHub publication.
 - `src/run-state.ts` and `src/exe.ts` — atomic PoC state plus tested exe.dev SSH/SCP command boundaries.
 - `src/controller-lock.ts` and `src/controller.ts` — serial controller ownership, restart reconciliation, remote execution, harvest, and cleanup.
 - `src/telemetry.ts`, `src/remote-protocol.ts`, `src/run-launcher.ts`, and `src/run-status.ts` — bounded live event contract, detached accepted start, and safe status replay.

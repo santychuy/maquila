@@ -8,6 +8,7 @@ export type RunStatusName =
   | "running"
   | "activity_unknown"
   | "ready_for_publication"
+  | "completed"
   | "failed";
 
 export interface RunStatusSummary {
@@ -22,6 +23,7 @@ export interface RunStatusSummary {
   runtimeMilliseconds: number | null;
   phaseRuntimeMilliseconds: number | null;
   failure: { code: string; message: string } | null;
+  pullRequest: { number: number; url: string; branch: string; commitSha: string } | null;
   artifacts: Array<{ name: string; size: number; sha256?: string }>;
 }
 
@@ -46,6 +48,7 @@ function base(runId: string, status: RunStatusName): RunStatusSummary {
     runtimeMilliseconds: null,
     phaseRuntimeMilliseconds: null,
     failure: null,
+    pullRequest: null,
     artifacts: [],
   };
 }
@@ -121,6 +124,9 @@ export function foldRunStatus(options: FoldRunStatusOptions): RunStatusSummary {
         break;
       case "artifact_available":
         if (summary.artifacts.length < 100) summary.artifacts.push(record.payload);
+        break;
+      case "publication_completed":
+        summary.pullRequest = record.payload;
         break;
       case "cleanup_updated":
         summary.cleanup = record.payload.cleanup;

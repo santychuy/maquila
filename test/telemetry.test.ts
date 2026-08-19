@@ -138,16 +138,46 @@ test("replay rejects a complete sequence gap", () => {
   }
 });
 
-test("ready telemetry requires cleanup and artifact names are safe", () => {
+test("successful telemetry requires cleanup and publication metadata is strict", () => {
+  for (const status of ["ready_for_publication", "completed"]) {
+    assert.throws(
+      () =>
+        parseTelemetryRecord(
+          record({
+            type: "run_finished",
+            payload: { status, cleanup: "failed" },
+          }),
+        ),
+      /requires cleanup/,
+    );
+  }
+  assert.doesNotThrow(() =>
+    parseTelemetryRecord(
+      record({
+        type: "publication_completed",
+        payload: {
+          number: 42,
+          url: "https://github.com/santychuy/bookbounce/pull/42",
+          branch: "factory/riff-40-aaaaaaaaaaaa",
+          commitSha: "b".repeat(40),
+        },
+      }),
+    ),
+  );
   assert.throws(
     () =>
       parseTelemetryRecord(
         record({
-          type: "run_finished",
-          payload: { status: "ready_for_publication", cleanup: "failed" },
+          type: "publication_completed",
+          payload: {
+            number: 42,
+            url: "https://evil.example/pull/42",
+            branch: "factory/riff-40-aaaaaaaaaaaa",
+            commitSha: "b".repeat(40),
+          },
         }),
       ),
-    /requires cleanup/,
+    /invalid telemetry/,
   );
   for (const name of [".", "..", "bad/path", "bad\\path", "bad\0name"])
     assert.throws(

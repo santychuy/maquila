@@ -121,7 +121,7 @@ test("controller rejects invalid transitions and records VM before bootstrap", (
   }
 });
 
-test("duplicate active and completed inputs are rejected; failed input may retry", () => {
+test("duplicate active and completed inputs are rejected; failed and legacy ready inputs may retry", () => {
   const root = mkdtempSync(join(tmpdir(), "factory-state-"));
   try {
     const first = runDir(root, "run-1");
@@ -132,6 +132,25 @@ test("duplicate active and completed inputs are rejected; failed input may retry
     );
     transitionControllerState(first, "failed");
     createControllerState(runDir(root, "run-2"), input("run-2"));
+
+    const readyRoot = mkdtempSync(join(tmpdir(), "factory-state-ready-"));
+    try {
+      const readyDir = runDir(readyRoot, "run-1");
+      createControllerState(readyDir, input("run-1"));
+      for (const next of [
+        "creating_vm",
+        "bootstrapping",
+        "planning",
+        "implementing",
+        "verifying",
+        "reviewing",
+        "ready_for_publication",
+      ] as const)
+        transitionControllerState(readyDir, next);
+      createControllerState(runDir(readyRoot, "run-2"), input("run-2"));
+    } finally {
+      rmSync(readyRoot, { recursive: true, force: true });
+    }
 
     const completeRoot = mkdtempSync(join(tmpdir(), "factory-state-complete-"));
     try {

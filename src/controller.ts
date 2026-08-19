@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { basename, isAbsolute, resolve } from "node:path";
 import { loadAgent } from "./agents.js";
 import { createIntake } from "./intake.js";
+import { publishGitHubPullRequest, type GitHubPublication } from "./github.js";
 import { parseEnvelope } from "./envelope.js";
 import { assertSafeRepoPath } from "./verify.js";
 import { ExeClient } from "./exe.js";
@@ -94,6 +95,7 @@ export interface ControllerOptions {
   sleep?: (milliseconds: number) => Promise<void>;
   runId?: string;
   telemetry?: typeof createTelemetryWriter;
+  publish?: typeof publishGitHubPullRequest;
   onAccepted?: () => void;
   heartbeatMilliseconds?: number;
 }
@@ -119,8 +121,9 @@ export interface ControllerExe {
   copyFrom(destination: string, remotePath: string, localPath: string): Promise<unknown>;
 }
 export interface ControllerResult {
-  status: "ready_for_publication" | "failed";
+  status: "completed" | "failed";
   runDir: string;
+  pullRequest?: GitHubPublication;
   error?: string;
 }
 
@@ -555,6 +558,8 @@ export async function runController(options: ControllerOptions): Promise<Control
   let evidenceDir = provisional;
   let state: ControllerState | undefined;
   let archive: ReturnType<typeof archiveFactory> | undefined;
+  let intakeSnapshot: Awaited<ReturnType<typeof createIntake>> | undefined;
+  let reviewedPatchSha256: string | undefined;
   let cleanupFailed = false;
   let cleanupOutcome: CleanupState = "not-needed";
   let stage = "recovery";
@@ -597,7 +602,12 @@ export async function runController(options: ControllerOptions): Promise<Control
     heartbeatStopped = true;
     clearInterval(heartbeat);
   };
-  let openHostPhase: "creating_vm" | "bootstrapping" | undefined;
+  let openHostPhase:
+    | "creating_vm"
+    | "bootstrapping"
+    | "ready_for_publication"
+    | "publishing"
+    | undefined;
   const closeHostPhase = (status: "completed" | "failed" = "completed"): void => {
     if (!openHostPhase) return;
     emit({
@@ -624,7 +634,13 @@ export async function runController(options: ControllerOptions): Promise<Control
       ...(sourceAt ? { sourceAt } : {}),
       payload: {},
     });
-    if (next === "creating_vm" || next === "bootstrapping") openHostPhase = next;
+    if (
+      next === "creating_vm" ||
+      next === "bootstrapping" ||
+      next === "ready_for_publication" ||
+      next === "publishing"
+    )
+      openHostPhase = next;
     stage = next;
     return nextState;
   };
@@ -640,6 +656,7 @@ export async function runController(options: ControllerOptions): Promise<Control
         baseRef: options.baseRef,
       },
     );
+    intakeSnapshot = intake;
     const runDir = resolve(root, ".factory", "controllers", runId);
     writeFileSync(
       resolve(provisional, "issue.md"),
@@ -1128,6 +1145,7 @@ export async function runController(options: ControllerOptions): Promise<Control
         throw new Error("change patch missing or exceeds limit");
       writeFileSync(resolve(runDir, "change.patch"), patch, { mode: 0o600 });
       const patchSha256 = createHash("sha256").update(patch).digest("hex");
+      reviewedPatchSha256 = patchSha256;
       emit({
         type: "artifact_available",
         actor: "controller",
@@ -1265,6 +1283,11 @@ export async function runController(options: ControllerOptions): Promise<Control
     const runDir = state ? resolve(root, ".factory", "controllers", state.runId) : evidenceDir;
     const failedResult = (message: string): ControllerResult => {
       stopHeartbeat();
+      try {
+        closeHostPhase("failed");
+      } catch {
+        telemetryBroken = true;
+      }
       const error = sanitizeTelemetryText(message, [options.linearToken, options.githubToken]);
       if (state && !cleanupFailed && state.state !== "failed") {
         state = transitionControllerState(runDir, "failed");
@@ -1300,23 +1323,58 @@ export async function runController(options: ControllerOptions): Promise<Control
       result = failedResult(failure ?? "intake failed");
     } else {
       try {
+        if (!intakeSnapshot || !reviewedPatchSha256)
+          throw new Error("publication evidence is incomplete");
         advance(runDir, "ready_for_publication");
+        advance(runDir, "publishing");
+        const pullRequest = await (options.publish ?? publishGitHubPullRequest)({
+          token: options.githubToken,
+          owner: options.owner,
+          repo: options.repo,
+          baseRef: state.baseRef,
+          baseSha: state.baseSha,
+          runId: state.runId,
+          idempotencyKey: state.idempotencyKey,
+          issueIdentifier: intakeSnapshot.issue.identifier,
+          issueTitle: intakeSnapshot.issue.title,
+          issueUrl: intakeSnapshot.issue.url,
+          patchPath: resolve(runDir, "change.patch"),
+          patchSha256: reviewedPatchSha256,
+        });
+        const publicationPath = resolve(runDir, "publication.json");
+        writeJson(publicationPath, pullRequest);
+        emit({
+          type: "artifact_available",
+          actor: "controller",
+          payload: {
+            name: "publication.json",
+            size: statSync(publicationPath).size,
+            sha256: hash(publicationPath),
+          },
+        });
+        emit({
+          type: "publication_completed",
+          actor: "controller",
+          payload: pullRequest,
+        });
+        advance(runDir, "completed");
         stopHeartbeat();
         writeJson(resolve(runDir, "receipt.json"), {
           kind: "controller",
-          status: "ready_for_publication",
-          stage: "ready_for_publication",
+          status: "completed",
+          stage: "completed",
           startedAt,
           finishedAt: new Date().toISOString(),
           cleanup: "complete",
           artifacts: readdirArtifacts(runDir),
+          pullRequest,
         });
         emit({
           type: "run_finished",
           actor: "controller",
-          payload: { status: "ready_for_publication", cleanup: "complete" },
+          payload: { status: "completed", cleanup: "complete" },
         });
-        result = { status: "ready_for_publication", runDir };
+        result = { status: "completed", runDir, pullRequest };
       } catch (error) {
         result = failedResult(error instanceof Error ? error.message : String(error));
       }

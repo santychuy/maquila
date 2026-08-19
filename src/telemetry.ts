@@ -17,6 +17,7 @@ export const MAX_TELEMETRY_LINE_BYTES = 64 * 1024;
 export const MAX_TELEMETRY_FILE_BYTES = 32 * 1024 * 1024;
 const RUN_ID = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
 const HASH = "^[0-9a-f]{64}$";
+const COMMIT_SHA = "^[0-9a-f]{40}$";
 
 const ActorSchema = Type.Union([
   Type.Literal("controller"),
@@ -150,6 +151,24 @@ export const TelemetryRecordSchema = Type.Union([
     ),
   ),
   eventSchema(
+    "publication_completed",
+    Type.Object(
+      {
+        number: Type.Integer({ minimum: 1 }),
+        url: Type.String({
+          pattern: "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*$",
+          maxLength: 500,
+        }),
+        branch: Type.String({
+          pattern: "^factory/[a-z0-9][a-z0-9-]*-[0-9a-f]{12}$",
+          maxLength: 255,
+        }),
+        commitSha: Type.String({ pattern: COMMIT_SHA }),
+      },
+      { additionalProperties: false },
+    ),
+  ),
+  eventSchema(
     "failure",
     Type.Object(
       {
@@ -177,7 +196,11 @@ export const TelemetryRecordSchema = Type.Union([
     "run_finished",
     Type.Object(
       {
-        status: Type.Union([Type.Literal("ready_for_publication"), Type.Literal("failed")]),
+        status: Type.Union([
+          Type.Literal("ready_for_publication"),
+          Type.Literal("completed"),
+          Type.Literal("failed"),
+        ]),
         cleanup: Type.Union([
           Type.Literal("pending"),
           Type.Literal("complete"),
@@ -230,10 +253,10 @@ export function parseTelemetryRecord(value: unknown): TelemetryRecord {
   }
   if (
     record.type === "run_finished" &&
-    record.payload.status === "ready_for_publication" &&
+    (record.payload.status === "ready_for_publication" || record.payload.status === "completed") &&
     !["complete", "not-needed"].includes(record.payload.cleanup)
   )
-    throw new Error("ready telemetry requires cleanup");
+    throw new Error("successful telemetry requires cleanup");
   return record;
 }
 

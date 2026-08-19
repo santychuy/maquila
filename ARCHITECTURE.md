@@ -6,8 +6,8 @@ A validated Linear feature issue triggers a local controller. Controller runs bo
 
 ## Authority boundaries
 
-- Controller owns workflow state, deadlines, budgets, approvals, cancellation, VM lifecycle, and publication.
-- VM owns source checkout, Pi sessions, edits, verification, review, local commits, and raw evidence.
+- Controller owns workflow state, deadlines, budgets, approvals, cancellation, VM lifecycle, publication commits, and pull requests.
+- VM owns source checkout, Pi sessions, edits, verification, review, and raw evidence.
 - Planner and reviewer are read-only. Worker is sole writer.
 - Linear credentials and GitHub write credentials stay outside VM.
 - Agent output is a proposal. Deterministic code decides acceptance.
@@ -25,8 +25,8 @@ Linear Ready
   -> independent review
   -> one fix pass when needed
   -> final verify and review
-  -> harvest commit bundle and evidence
-  -> controller bot opens PR
+  -> harvest reviewed patch and evidence
+  -> controller creates publication commit and opens PR
   -> human decision
 ```
 
@@ -51,11 +51,11 @@ queued -> planning -> awaiting_approval? -> implementing -> verifying
 
 ## Current slice
 
-Remote controller composition plus local observation are implemented. `factory run` snapshots a Linear `Todo` issue and GitHub base SHA, holds a single-host lock, reconciles abandoned VMs, bootstraps pinned runtimes in a fresh exe.dev VM, streams safe telemetry through deterministic phase boundaries, runs planner then sole-writer/verification/fresh-reviewer sessions, binds harvested evidence to reviewed patch, and destroys VM before `ready_for_publication`.
+Remote controller composition, local observation, and GitHub publication are implemented. `factory run` snapshots a Linear `Todo` issue and GitHub base SHA, holds a single-host lock, reconciles abandoned VMs, bootstraps pinned runtimes in a fresh exe.dev VM, streams safe telemetry through deterministic phase boundaries, runs planner then sole-writer/verification/fresh-reviewer sessions, binds harvested evidence to the reviewed patch, and destroys the VM. The trusted controller then checks the pinned base, applies the patch in a temporary clone, creates a deterministic bot branch and commit, opens a ready-for-review pull request, and records publication metadata before completion.
 
-`factory run start` returns accepted run identity before completion. Persistent on-demand observer binds loopback, replays canonical host JSONL, and serves read-only run list/detail/event views. Factory-owned Pi skill routes start/status requests through these commands. Observer and skill hold no workflow authority.
+`factory run start` returns accepted run identity before completion. Persistent on-demand observer binds loopback, replays canonical host JSONL, serves read-only run list/detail/event views, and links the completed pull request. Factory-owned Pi skill routes start/status requests through these commands. Observer and skill hold no workflow authority.
 
-RIFF-39 proved pre-observer remote composition live. New telemetry/observer path has deterministic local coverage but no credentialed exe.dev smoke proof yet. GitHub publication, fix pass, in-flight session resume, and controller-owned external-only delivery remain absent.
+RIFF-39 proved pre-publication remote composition live. Publication and observer paths have deterministic local coverage; a credentialed end-to-end publication smoke proof remains pending. Fix pass, in-flight session resume, and controller-owned external-only delivery remain absent.
 
 ## Non-goals for v1
 
