@@ -74,7 +74,7 @@ const transitions: Record<ControllerStateName, ControllerStateName[]> = {
   verifying: ["reviewing", "fixing", "failed", "cancelled"],
   reviewing: ["fixing", "ready_for_publication", "failed", "cancelled"],
   fixing: ["verifying", "failed", "cancelled"],
-  ready_for_publication: ["publishing"],
+  ready_for_publication: ["publishing", "failed"],
   publishing: ["completed", "failed", "cancelled"],
   completed: [],
   failed: [],
@@ -154,7 +154,8 @@ function isControllerState(value: unknown): value is ControllerState {
   ) {
     return false;
   }
-  if (value.vm === undefined && value.cleanup !== "not-needed") return false;
+  if (value.vm === undefined && !["not-needed", "complete"].includes(String(value.cleanup)))
+    return false;
   if (value.vm !== undefined && value.cleanup === "not-needed") return false;
   if (
     (value.state === "completed" || value.state === "ready_for_publication") &&
@@ -185,7 +186,7 @@ export function readControllerState(runDir: string): ControllerState {
 
 function writeControllerState(runDir: string, state: ControllerState): void {
   if (!isControllerState(state)) throw new Error("invalid controller state");
-  mkdirSync(runDir, { recursive: true });
+  mkdirSync(runDir, { recursive: true, mode: 0o700 });
   const target = statePath(runDir);
   const temporary = `${target}.${process.pid}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
@@ -219,7 +220,7 @@ function releaseClaim(runsDir: string, state: ControllerState): void {
 function acquireClaim(runsDir: string, state: ControllerState): void {
   const claimsDir = resolve(runsDir, ".idempotency");
   const path = claimPath(runsDir, state.idempotencyKey);
-  mkdirSync(claimsDir, { recursive: true });
+  mkdirSync(claimsDir, { recursive: true, mode: 0o700 });
   try {
     mkdirSync(path, { mode: 0o700 });
   } catch (error) {
@@ -306,7 +307,8 @@ export function recordControllerVm(runDir: string, vm: ControllerVm): Controller
 
 export function recordControllerCleanup(runDir: string, cleanup: CleanupState): ControllerState {
   const current = readControllerState(runDir);
-  if (!current.vm && cleanup !== "not-needed") throw new Error("cleanup requires a recorded VM");
+  if (!current.vm && cleanup !== "not-needed" && cleanup !== "complete")
+    throw new Error("pending or failed cleanup requires a recorded VM");
   if (current.vm && cleanup === "not-needed") throw new Error("recorded VM requires cleanup");
   const state: ControllerState = { ...current, cleanup, updatedAt: new Date().toISOString() };
   writeControllerState(runDir, state);

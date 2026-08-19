@@ -5,6 +5,7 @@ import {
   ExeCommandError,
   quoteRemoteArg,
   type ExeRunner,
+  type ExeStreamRunner,
   type ExecResult,
 } from "../src/exe.js";
 
@@ -12,6 +13,7 @@ interface Call {
   file: string;
   args: string[];
   timeout: number;
+  env: NodeJS.ProcessEnv;
 }
 
 function runner(replies: Array<ExecResult | Error | Record<string, unknown>>): {
@@ -22,7 +24,7 @@ function runner(replies: Array<ExecResult | Error | Record<string, unknown>>): {
   return {
     calls,
     run: async (file, args, options) => {
-      calls.push({ file, args, timeout: options.timeout });
+      calls.push({ file, args, timeout: options.timeout, env: options.env });
       const reply = replies.shift();
       if (!reply) throw new Error("unexpected exe.dev call");
       if (
@@ -36,6 +38,12 @@ function runner(replies: Array<ExecResult | Error | Record<string, unknown>>): {
     },
   };
 }
+
+const stream: ExeStreamRunner = async (_file, _args, _options, onStdout) => {
+  onStdout(Buffer.from("one"));
+  onStdout(Buffer.from("two"));
+  return { stderr: "" };
+};
 
 const vm = {
   vm_name: "factory-run-1",
@@ -74,6 +82,23 @@ test("dedicated SSH identity supports unattended commands", async () => {
   assert.throws(() => new ExeClient(fake.run, 30_000, "relative-key"), /local path/);
 });
 
+test("external commands receive only operational environment", async () => {
+  const fake = runner([{ stdout: JSON.stringify({ vms: [] }), stderr: "" }]);
+  await new ExeClient(fake.run, 30_000, "/tmp/factory-key", stream, {
+    PATH: "/usr/bin:/bin",
+    HOME: "/tmp/home",
+    LANG: "C.UTF-8",
+    LINEAR_API_TOKEN: "linear-secret",
+    GITHUB_TOKEN: "github-secret",
+    UNRELATED_SECRET: "other-secret",
+  }).listVms();
+  assert.deepEqual(fake.calls[0]?.env, {
+    PATH: "/usr/bin:/bin",
+    HOME: "/tmp/home",
+    LANG: "C.UTF-8",
+  });
+});
+
 test("create and list reject malformed JSON and VM identity", async () => {
   await assert.rejects(
     () =>
@@ -106,6 +131,13 @@ test("remote argv is shell-quoted as data", async () => {
   assert.equal(fake.calls[0]?.args.at(-2), "vm+factory@vm.exe.xyz");
   assert.equal(quoteRemoteArg(""), "''");
   assert.throws(() => quoteRemoteArg("bad\0arg"), /NUL/);
+});
+
+test("remote streaming forwards chunks without buffering stdout", async () => {
+  const chunks: string[] = [];
+  const client = new ExeClient(runner([]).run, 30_000, undefined, stream);
+  await client.execStream("vm.exe.xyz", ["echo", "ok"], (chunk) => chunks.push(chunk.toString()));
+  assert.deepEqual(chunks, ["one", "two"]);
 });
 
 test("copy operations require safe absolute paths", async () => {

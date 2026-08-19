@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import type { Envelope } from "../src/envelope.js";
 import type { AgentRunResult, RunAgentOptions, RunReceipt } from "../src/run-agent.js";
 import type { VerificationResult, VerifyOptions } from "../src/verify.js";
 import { runWorkerLifecycle } from "../src/worker.js";
+import type { RemoteEvent } from "../src/remote-protocol.js";
 
 const planner = {
   summary: "Implement one file",
@@ -220,6 +222,7 @@ test("successful worker invokes separate reviewer with untracked patch", async (
   const f = await fixture();
   const calls: RunAgentOptions[] = [];
   let verifyOptions: VerifyOptions | undefined;
+  const events: RemoteEvent[] = [];
   try {
     const run = agentStub(
       [
@@ -240,6 +243,7 @@ test("successful worker invokes separate reviewer with untracked patch", async (
         verifyOptions = received;
         return verification(true);
       },
+      onEvent: (event) => events.push(event),
     });
     assert.equal(result.status, "completed");
     assert.equal(verifyOptions?.commandTimeoutMs, 60_000);
@@ -250,7 +254,66 @@ test("successful worker invokes separate reviewer with untracked patch", async (
     const lifecycle = await json(join(result.runDir, "lifecycle.json"));
     assert.equal(lifecycle.reviewerRunDir, result.reviewerRunDir);
     assert.ok(result.reviewerRunDir);
+    assert.deepEqual(
+      events.filter((event) => event.type === "phase_started").map((event) => event.phase),
+      ["implementing", "verifying", "reviewing"],
+    );
+    assert.ok(events.some((event) => event.type === "gate_finished" && event.passed));
+    assert.ok(events.some((event) => event.type === "review_finished" && event.verdict === "PASS"));
     await readFile(join(result.reviewerRunDir, "lifecycle.json"));
+  } finally {
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("review digest matches one staged diff for mixed tracked and untracked changes", async () => {
+  const f = await fixture();
+  const calls: RunAgentOptions[] = [];
+  try {
+    await mkdir(join(f.repo, "src"), { recursive: true });
+    await writeFile(join(f.repo, "src", "z.ts"), "export const z = 0;\n");
+    git(f.repo, "add", ".");
+    git(f.repo, "commit", "-qm", "tracked source");
+    f.baseSha = git(f.repo, "rev-parse", "HEAD");
+    await writeFile(
+      f.envelope,
+      JSON.stringify({
+        ...planner,
+        changes: [
+          { path: "src/z.ts", action: "modify", rationale: "Update tracked source" },
+          { path: "src/a.ts", action: "add", rationale: "Add source" },
+        ],
+      }),
+    );
+    const result = await runWorkerLifecycle({
+      ...options(f),
+      runAgent: agentStub(
+        [
+          {
+            status: "completed",
+            envelope: {
+              ...workerEnvelope,
+              changedFiles: ["src/z.ts", "src/a.ts"],
+            },
+            mutate: async () => {
+              await writeFile(join(f.repo, "src", "z.ts"), "export const z = 1;\n");
+              await writeFile(join(f.repo, "src", "a.ts"), "export const a = 1;\n");
+            },
+          },
+          { status: "completed", envelope: reviewerPass },
+        ],
+        calls,
+      ),
+      verifyRepository: async () => verification(true, { changedPaths: ["src/a.ts", "src/z.ts"] }),
+    });
+    assert.equal(result.status, "completed");
+    const reviewed = (await readFile(join(result.runDir, "review-diff.sha256"), "utf8")).trim();
+    const staged = execFileSync("git", ["diff", "--cached", "--binary", "--no-ext-diff", "HEAD"], {
+      cwd: f.repo,
+    });
+    assert.equal(reviewed, createHash("sha256").update(staged).digest("hex"));
+    const prompt = calls[1]?.prompt ?? "";
+    assert.ok(prompt.indexOf("a/src/a.ts") < prompt.indexOf("a/src/z.ts"));
   } finally {
     await rm(f.root, { recursive: true, force: true });
   }
@@ -287,13 +350,20 @@ test("worker and reviewer timeouts remain timed out", async () => {
   const workerFixture = await fixture();
   const reviewerFixture = await fixture();
   try {
+    const workerEvents: RemoteEvent[] = [];
     const workerTimeout = await runWorkerLifecycle({
       ...options(workerFixture),
       runAgent: agentStub([{ status: "timed_out" }], []),
+      onEvent: (event) => workerEvents.push(event),
     });
     assert.equal(workerTimeout.status, "timed_out");
+    assert.deepEqual(
+      workerEvents.filter((event) => event.type === "phase_finished").map((event) => event.phase),
+      ["implementing"],
+    );
 
     await mkdir(join(reviewerFixture.repo, "src"), { recursive: true });
+    const reviewerEvents: RemoteEvent[] = [];
     const reviewerTimeout = await runWorkerLifecycle({
       ...options(reviewerFixture),
       runAgent: agentStub(
@@ -308,11 +378,89 @@ test("worker and reviewer timeouts remain timed out", async () => {
         [],
       ),
       verifyRepository: async () => verification(true),
+      onEvent: (event) => reviewerEvents.push(event),
     });
     assert.equal(reviewerTimeout.status, "timed_out");
+    assert.deepEqual(
+      reviewerEvents
+        .filter((event) => event.type === "phase_finished")
+        .map((event) => [event.phase, event.status]),
+      [
+        ["implementing", "completed"],
+        ["verifying", "completed"],
+        ["reviewing", "timed_out"],
+      ],
+    );
   } finally {
     await rm(workerFixture.root, { recursive: true, force: true });
     await rm(reviewerFixture.root, { recursive: true, force: true });
+  }
+});
+
+test("reviewer exception closes the phase once", async () => {
+  const f = await fixture();
+  const events: RemoteEvent[] = [];
+  const calls: RunAgentOptions[] = [];
+  const workerRun = agentStub(
+    [
+      {
+        status: "completed",
+        envelope: workerEnvelope,
+        mutate: () => writeFile(join(f.repo, "src-x.ts"), "x\n"),
+      },
+    ],
+    calls,
+  );
+  try {
+    const result = await runWorkerLifecycle({
+      ...options(f),
+      runAgent: async (runOptions) => {
+        if (calls.length > 0) throw new Error("reviewer unavailable");
+        return workerRun(runOptions);
+      },
+      verifyRepository: async () => verification(true),
+      onEvent: (event) => events.push(event),
+    });
+    assert.equal(result.status, "failed");
+    assert.deepEqual(
+      events
+        .filter((event) => event.type === "phase_finished")
+        .map((event) => [event.phase, event.status]),
+      [
+        ["implementing", "completed"],
+        ["verifying", "completed"],
+        ["reviewing", "failed"],
+      ],
+    );
+  } finally {
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("verification exception closes the phase once", async () => {
+  const f = await fixture();
+  const events: RemoteEvent[] = [];
+  try {
+    const result = await runWorkerLifecycle({
+      ...options(f),
+      runAgent: agentStub([{ status: "completed", envelope: workerEnvelope }], []),
+      verifyRepository: async () => {
+        throw new Error("verification unavailable");
+      },
+      onEvent: (event) => events.push(event),
+    });
+    assert.equal(result.status, "failed");
+    assert.deepEqual(
+      events
+        .filter((event) => event.type === "phase_finished")
+        .map((event) => [event.phase, event.status]),
+      [
+        ["implementing", "completed"],
+        ["verifying", "failed"],
+      ],
+    );
+  } finally {
+    await rm(f.root, { recursive: true, force: true });
   }
 });
 

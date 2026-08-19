@@ -67,8 +67,8 @@ Reviewer gives an independent verdict:
 }
 ```
 
-All three schemas exist. Only planner execution is wired today. Worker and reviewer shapes prepare later execution; they do not create write or review authority.
+All three schemas execute locally and through the remote controller. Worker is sole writer; reviewer runs in a fresh read-only session. Envelope shape never creates write, review, or acceptance authority.
 
 ## Still needed
 
-Envelopes control output shape, not product truth. Remaining deterministic gates must check repository-defined commands, exact Git diff and ownership rules, artifact safety, and independent worker/reviewer results before publication. Controller state, hard VM deadlines, credential boundaries, and publication gates also remain future work. See [foundation checkpoint](foundation-checkpoint.md) and [architecture](../ARCHITECTURE.md).
+Envelopes control output shape, not product truth. Controller independently requires repository-defined commands, exact Git diff/ownership checks, artifact safety, distinct linked role evidence, reviewed-patch binding, and reviewer `PASS`. GitHub publication and guaranteed cleanup while exe.dev deletion is unavailable remain future work. See [foundation checkpoint](foundation-checkpoint.md), [observer](observer.md), and [architecture](../ARCHITECTURE.md).

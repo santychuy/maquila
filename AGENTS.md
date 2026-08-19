@@ -27,6 +27,8 @@ Implemented now:
 - Deterministic verification: `factory.verify.json` argv commands plus exact Git diff gate (`src/verify.ts`).
 - Controller-side Linear `Todo` issue and GitHub base-SHA snapshot primitives with credential-free hashes.
 - Executable `factory run`: single-host lock, restart cleanup, pinned Node/Bun bootstrap, remote planner/worker/verification/reviewer, evidence and patch harvest, and VM destruction before `ready_for_publication`.
+- Strict host telemetry with streaming remote phase/activity frames, accepted detached `run start`, and read-only `run status`.
+- Managed loopback observer server/UI with replay/cursor polling and factory-owned `.pi/skills/software-factory` command routing.
 
 Not implemented yet:
 
@@ -61,7 +63,9 @@ Current execution is not a security sandbox. Read-only tools stop mutation but d
 - `src/linear.ts`, `src/github.ts`, and `src/intake.ts` — immutable external input snapshots and idempotency hash.
 - `src/run-state.ts` and `src/exe.ts` — atomic PoC state plus tested exe.dev SSH/SCP command boundaries.
 - `src/controller-lock.ts` and `src/controller.ts` — serial controller ownership, restart reconciliation, remote execution, harvest, and cleanup.
-- `src/cli.ts` — `agents list`, local Pi commands, and remote `run` command plus exit-code handling.
+- `src/telemetry.ts`, `src/remote-protocol.ts`, `src/run-launcher.ts`, and `src/run-status.ts` — bounded live event contract, detached accepted start, and safe status replay.
+- `src/observer.ts` and `src/observer-ui.ts` — loopback-only read API, managed server ownership, and accessible polling dashboard.
+- `src/cli.ts` — `agents list`, local Pi commands, remote run commands, observer commands, and exit-code handling.
 - `factory.verify.json` — this repository's argv verification commands.
 - `agents/*.md` — role metadata in YAML frontmatter and role system prompt in Markdown body.
 - `test/*.test.ts` — Node test-runner coverage for CLI, role boundaries, envelopes, failures, and artifact safety.
@@ -98,6 +102,8 @@ pnpm run factory -- pi plan \
   --issue ./examples/issue.md \
   --model provider/model \
   --timeout-seconds 300
+pnpm run factory -- observer ensure --json
+pnpm run factory -- run start --target /absolute/path/to/repository --issue RIFF-52 --json
 ```
 
 Planner execution requires Pi authentication for the selected model. It writes evidence under `.factory/` relative to the directory where the command runs. Exit codes are `0` for completion, `1` for failure, and `124` for timeout.
@@ -174,4 +180,4 @@ Before finishing:
 
 ## Scope Discipline
 
-v1 intentionally excludes generic workflow DSLs, dynamic swarms, multiple writers, automatic merge, deployment, visualizers, Temporal, and a self-hosted sandbox fleet. Do not add them without an explicit architecture decision. Build in `ARCHITECTURE.md` order and keep current-state docs precise.
+v1 intentionally excludes generic workflow DSLs, dynamic swarms, multiple writers, automatic merge, deployment, Temporal, and a self-hosted sandbox fleet. Local read-only observer is the approved exception now implemented. Do not add other excluded scope without an explicit architecture decision. Build in `ARCHITECTURE.md` order and keep current-state docs precise.

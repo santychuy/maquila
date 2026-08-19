@@ -8,9 +8,9 @@ Milestones through remote controller composition are complete:
 
 - **3A runner:** generic `runAgent()` owns one bounded Pi session, isolated resources, events, receipts, artifacts, and cooperative timeout handling.
 - **3B envelope kernel:** typed planner, worker, and reviewer schemas; structural and semantic validation; `submit_envelope`; one same-session correction; accepted envelope and receipt evidence.
-- **Verification gate:** `src/verify.ts` fail-closed parses `factory.verify.json`, runs argv commands serially with `execFile` semantics, and applies an exact Git diff gate. Agent claims cannot override the structured result.
+- **Verification gate:** `src/verify.ts` fail-closed parses `factory.verify.json`, runs argv commands serially with `execFile` semantics, and applies an exact Git diff gate. Structured results provide consistency evidence, not authenticity against a process with VM OS access.
 
-All three role schemas run locally and through `factory run` in a fresh exe.dev VM. The controller snapshots immutable intake, serializes execution with a local lock, reconciles abandoned controller VMs, bootstraps pinned Node and target runtimes, invokes planner/worker/reviewer sessions, validates deterministic and review evidence, harvests a binary patch, and destroys the VM before reporting `ready_for_publication`. It does not publish pull requests.
+All three role schemas run locally and through `factory run` in a fresh exe.dev VM. The controller snapshots immutable intake, serializes execution with a local lock, reconciles abandoned controller VMs, bootstraps pinned Node and target runtimes, invokes planner/worker/reviewer sessions, checks structural links among deterministic and review evidence, binds the reviewed diff to the harvested patch, and destroys the VM before reporting `ready_for_publication`. These checks detect inconsistency but are not cryptographic authenticity because VM agents retain OS-level access. It does not publish pull requests.
 
 ## Implemented primitives
 
@@ -25,10 +25,17 @@ All three role schemas run locally and through `factory run` in a fresh exe.dev 
 - `src/run-state.ts` atomically stores fail-closed controller state with transition validation, idempotency checks, and orphan VM lookup.
 - `src/exe.ts` provides tested command construction for exe.dev SSH, SCP, and retryable deletion without retaining credentials.
 - `src/controller-lock.ts` and `src/controller.ts` provide single-host ownership, restart cleanup, remote bootstrap/lifecycle, fail-closed evidence harvest, and unconditional cleanup.
+- `src/telemetry.ts` adds a strict append-only host event ledger with gap-free sequencing, safe replay, bounded public fields, and terminal cleanup reconciliation.
+- `src/remote-protocol.ts` plus streaming exe.dev SSH expose deterministic live phase, agent/tool, gate, and review activity without prompts, tool arguments/results, or raw output. Controller code still owns state transitions and acceptance.
+- `src/target.ts`, `src/run-launcher.ts`, and `src/run-status.ts` add target-repository inference, accepted detached controller startup with a preallocated run ID, and read-only telemetry status folding.
+- `src/observer.ts` and `src/observer-ui.ts` add a managed loopback-only GET/HEAD server, ownership-checked process lifecycle, replay/cursor API, and accessible polling UI.
+- `.pi/skills/software-factory/SKILL.md` provides a thin factory-owned Pi command router for observed start and status flows.
 
 ## Evidence
 
 Live controller run `fa7b5de1-8125-469f-b723-5db21243d783` completed RIFF-39 against Bookbounce SHA `04c6e9a5efa53727f2f0959e0e6ca4a3639b38c7`. Planner, worker, and fresh reviewer receipts and transcripts were harvested; `bun run validate` passed with 130 tests passed, one integration test skipped, and zero failures; the exact Git gate allowed only the planned assessment artifact; reviewer verdict was `PASS`; cleanup was recorded complete; exe.dev listed zero VMs; controller evidence contained neither controller token. No Bookbounce commit, branch, push, or PR was created. Generated `.factory/` evidence remains ignored by Git.
+
+Telemetry/streaming, detached launcher, local observer server/UI, and factory-owned Pi skill are implemented and covered by deterministic local tests. They have not yet completed a credentialed exe.dev observer smoke run, so the RIFF-39 evidence above proves the earlier controller path only.
 
 ## Controller limitations
 
@@ -46,7 +53,7 @@ Husky is local only: pre-commit runs `pnpm exec lint-staged`, and pre-push runs 
 
 ## Tests
 
-`pnpm test` covers role boundaries, envelopes, local worker/reviewer lifecycle failures, controller lock/recovery and fake remote lifecycle paths, tar and patch trust boundaries, artifact safety, verification and Git gates, Linear/GitHub input validation, credential redaction, and deterministic intake hashes.
+`pnpm test` covers role boundaries, envelopes, local worker/reviewer lifecycle failures, controller lock/recovery and fake remote lifecycle paths, tar and patch trust boundaries, artifact safety, verification and Git gates, Linear/GitHub input validation, credential redaction, deterministic intake hashes, detached startup, telemetry replay, observer ownership, read-only HTTP boundaries, UI routes, and skill wiring.
 
 ## Failure and security limits
 

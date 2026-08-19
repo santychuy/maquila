@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -13,8 +14,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, resolve } from "node:path";
+import { loadAgent } from "./agents.js";
 import { createIntake } from "./intake.js";
 import { parseEnvelope } from "./envelope.js";
+import { assertSafeRepoPath } from "./verify.js";
 import { ExeClient } from "./exe.js";
 import {
   createControllerState,
@@ -23,9 +26,23 @@ import {
   recoverStaleControllerClaims,
   scanRecoverableControllerStates,
   transitionControllerState,
+  type CleanupState,
   type ControllerState,
 } from "./run-state.js";
-import { acquireControllerLock } from "./controller-lock.js";
+import { acquireControllerLock, linuxProcessIdentity } from "./controller-lock.js";
+import {
+  RemoteProtocolParser,
+  type RemoteEvent,
+  type RemoteResultFrame,
+} from "./remote-protocol.js";
+import {
+  createTelemetryWriter,
+  readTelemetry,
+  sanitizeTelemetryText,
+  telemetryPath,
+  type TelemetryInput,
+  type TelemetryWriter,
+} from "./telemetry.js";
 
 const MODEL = "exe/claude-sonnet-4-6";
 const REMOTE_FACTORY = "/home/exedev/factory";
@@ -45,6 +62,20 @@ const NODE_CHECKSUMS: Record<string, string> = {
 const MAX_PATCH = 1_000_000;
 const REMOTE_RUN = `${REMOTE_FACTORY}/.factory/runs/`;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+type RemotePhase = RemoteEvent["phase"];
+type RemoteActor = RemoteEvent["actor"];
+const PHASE_OWNER: Record<RemotePhase, RemoteActor> = {
+  planning: "planner",
+  implementing: "worker",
+  verifying: "verifier",
+  reviewing: "reviewer",
+};
+function telemetryPhase(phase: RemotePhase): { id: string; name: RemotePhase; attempt: 1 } {
+  return { id: `${phase}:1`, name: phase, attempt: 1 };
+}
+function roleTools(role: "planner" | "worker" | "reviewer"): Set<string> {
+  return new Set([...loadAgent(role).tools, "submit_envelope"]);
+}
 
 export interface ControllerOptions {
   issue: string;
@@ -61,6 +92,10 @@ export interface ControllerOptions {
   exe?: ControllerExe;
   intake?: typeof createIntake;
   sleep?: (milliseconds: number) => Promise<void>;
+  runId?: string;
+  telemetry?: typeof createTelemetryWriter;
+  onAccepted?: () => void;
+  heartbeatMilliseconds?: number;
 }
 export interface ControllerExe {
   createVm(options: {
@@ -74,6 +109,12 @@ export interface ControllerExe {
     argv: string[],
     timeoutMs?: number,
   ): Promise<{ stdout: string; stderr: string }>;
+  execStream(
+    destination: string,
+    argv: string[],
+    onStdout: (chunk: Buffer) => void,
+    timeoutMs?: number,
+  ): Promise<{ stderr: string }>;
   copyTo(destination: string, localPath: string, remotePath: string): Promise<unknown>;
   copyFrom(destination: string, remotePath: string, localPath: string): Promise<unknown>;
 }
@@ -93,12 +134,7 @@ function requireAbsolute(path: string): string {
 function vmName(runId: string): string {
   return `factory-${runId.replaceAll("-", "").slice(0, 24)}`;
 }
-function outputPath(output: string, label: string): string {
-  const line = output
-    .split("\n")
-    .toReversed()
-    .find((value) => value.startsWith(`${label}: `));
-  const path = line?.slice(label.length + 2).trim();
+function outputPath(path: string | undefined, label: string): string {
   if (!path?.startsWith(REMOTE_RUN) || !UUID.test(path.slice(REMOTE_RUN.length))) {
     throw new Error(`remote ${label.toLowerCase()} missing`);
   }
@@ -115,18 +151,32 @@ function safeRepo(owner: string, repo: string): string {
     throw new Error("invalid repository");
   return `${owner}/${repo}`;
 }
-function redact(value: string, secrets: string[]): string {
-  return secrets.reduce((result, secret) => result.replaceAll(secret, "[REDACTED]"), value);
-}
 function writeJson(path: string, value: object): void {
   const temporary = `${path}.${process.pid}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   renameSync(temporary, path);
 }
+function privatizeTree(path: string): void {
+  const metadata = statSync(path);
+  chmodSync(path, metadata.isDirectory() ? 0o700 : 0o600);
+  if (metadata.isDirectory())
+    for (const name of readdirSync(path)) privatizeTree(resolve(path, name));
+}
 function readdirArtifacts(runDir: string): string[] {
   return readdirSync(runDir);
 }
-export function harvest(archive: string, runDir: string, runs: string[]): void {
+export interface HarvestExpectations {
+  baseSha: string;
+  allowedPaths: string[];
+  patchSha256: string;
+}
+
+export function harvest(
+  archive: string,
+  runDir: string,
+  runs: string[],
+  expected: HarvestExpectations,
+): void {
   const names = execFileSync("tar", ["-tf", archive], { encoding: "utf8" })
     .split("\n")
     .filter(Boolean);
@@ -141,11 +191,13 @@ export function harvest(archive: string, runDir: string, runs: string[]): void {
   if (verbose.split("\n").some((line) => /^[lhbcps]/.test(line)))
     throw new Error("unsafe evidence archive member");
   const target = resolve(runDir, "remote-evidence");
-  mkdirSync(target, { recursive: true });
+  mkdirSync(target, { recursive: true, mode: 0o700 });
   execFileSync("tar", ["-xf", archive, "-C", target]);
+  privatizeTree(target);
   for (const run of runs) {
     if (!UUID.test(run)) throw new Error("unsafe remote run id");
   }
+  if (new Set(runs).size !== runs.length) throw new Error("remote run ids must be distinct");
   const required = [
     [runs[0], "receipt.json"],
     [runs[0], "envelope.json"],
@@ -153,29 +205,138 @@ export function harvest(archive: string, runDir: string, runs: string[]): void {
     [runs[1], "receipt.json"],
     [runs[1], "lifecycle.json"],
     [runs[1], "verification.json"],
+    [runs[1], "review-diff.sha256"],
     [runs[2], "receipt.json"],
     [runs[2], "envelope.json"],
   ];
   for (const [run, file] of required)
     if (!existsSync(resolve(target, ".factory", "runs", run!, file!)))
       throw new Error("required remote evidence missing");
+  const receipt = (
+    run: string,
+    role: "planner" | "worker" | "reviewer",
+    requiredArtifacts: string[],
+  ): Record<string, unknown> | undefined => {
+    const value = json(resolve(target, ".factory", "runs", run, "receipt.json"));
+    if (
+      !isRecord(value) ||
+      value.runId !== run ||
+      value.status !== "completed" ||
+      value.baseSha !== expected.baseSha ||
+      !isRecord(value.agent) ||
+      value.agent.name !== role ||
+      !Array.isArray(value.artifacts)
+    )
+      return undefined;
+    const artifacts: unknown[] = value.artifacts;
+    if (
+      !requiredArtifacts.every(
+        (name) =>
+          artifacts.includes(name) && existsSync(resolve(target, ".factory", "runs", run, name)),
+      )
+    )
+      return undefined;
+    return value;
+  };
+  const plannerReceipt = receipt(runs[0]!, "planner", ["envelope.json", "plan.md"]);
+  const workerReceipt = receipt(runs[1]!, "worker", [
+    "envelope.json",
+    "lifecycle.json",
+    "verification.json",
+    "review-diff.sha256",
+  ]);
+  const reviewerReceipt = receipt(runs[2]!, "reviewer", ["envelope.json", "lifecycle.json"]);
   const planner = parseEnvelope(
     "planner",
     json(resolve(target, ".factory", "runs", runs[0]!, "envelope.json")),
   );
   const worker = json(resolve(target, ".factory", "runs", runs[1]!, "lifecycle.json"));
   const verification = json(resolve(target, ".factory", "runs", runs[1]!, "verification.json"));
+  const reviewerLifecycle = json(resolve(target, ".factory", "runs", runs[2]!, "lifecycle.json"));
   const reviewer = parseEnvelope(
     "reviewer",
     json(resolve(target, ".factory", "runs", runs[2]!, "envelope.json")),
   );
+  const allowed = new Set(expected.allowedPaths.map(assertSafeRepoPath));
+  const pathAllowed = (path: unknown): path is string =>
+    typeof path === "string" &&
+    (() => {
+      const safe = assertSafeRepoPath(path);
+      return [...allowed].some((prefix) => safe === prefix || safe.startsWith(`${prefix}/`));
+    })();
+  const verificationConfig =
+    isRecord(verification) && isRecord(verification.config) ? verification.config : undefined;
+  const configuredCommands =
+    verificationConfig && Array.isArray(verificationConfig.commands)
+      ? verificationConfig.commands
+      : undefined;
+  const commandsPass =
+    isRecord(verification) &&
+    configuredCommands !== undefined &&
+    Array.isArray(verification.commands) &&
+    verification.commands.length > 0 &&
+    configuredCommands.length === verification.commands.length &&
+    verification.commands.every(
+      (command, index) =>
+        isRecord(command) &&
+        Array.isArray(command.argv) &&
+        command.argv.length > 0 &&
+        command.argv.every((part) => typeof part === "string" && part.length > 0) &&
+        JSON.stringify(configuredCommands[index]) === JSON.stringify(command.argv) &&
+        command.exitCode === 0 &&
+        command.timedOut === false,
+    );
+  const reviewedDigest = readFileSync(
+    resolve(target, ".factory", "runs", runs[1]!, "review-diff.sha256"),
+    "utf8",
+  ).trim();
+  const plannerPaths = planner.ok
+    ? planner.envelope.changes.map((change) => assertSafeRepoPath(change.path))
+    : [];
   if (
+    !plannerReceipt ||
+    !workerReceipt ||
+    !reviewerReceipt ||
+    reviewerReceipt.workerRunId !== runs[1] ||
     !planner.ok ||
     planner.envelope.decisionsNeeded.length > 0 ||
+    plannerPaths.length !== allowed.size ||
+    !plannerPaths.every((path) => allowed.has(path)) ||
     !isRecord(worker) ||
     worker.status !== "completed" ||
+    worker.stage !== "reviewer" ||
+    worker.baseSha !== expected.baseSha ||
+    worker.workerRunId !== runs[1] ||
+    worker.reviewerRunId !== runs[2] ||
+    typeof worker.reviewerRunDir !== "string" ||
+    basename(worker.reviewerRunDir) !== runs[2] ||
+    worker.reviewPatchSha256 !== expected.patchSha256 ||
+    reviewedDigest !== expected.patchSha256 ||
+    !isRecord(reviewerLifecycle) ||
+    reviewerLifecycle.status !== "completed" ||
+    reviewerLifecycle.stage !== "reviewer" ||
+    reviewerLifecycle.baseSha !== expected.baseSha ||
+    reviewerLifecycle.workerRunId !== runs[1] ||
+    reviewerLifecycle.reviewerRunId !== runs[2] ||
+    reviewerLifecycle.reviewPatchSha256 !== expected.patchSha256 ||
+    !Array.isArray(worker.allowedPaths) ||
+    worker.allowedPaths.length !== allowed.size ||
+    !worker.allowedPaths.every((path) => typeof path === "string" && allowed.has(path)) ||
     !isRecord(verification) ||
     verification.passed !== true ||
+    !commandsPass ||
+    !isRecord(verification.git) ||
+    verification.git.passed !== true ||
+    verification.git.baseSha !== expected.baseSha ||
+    verification.git.headSha !== expected.baseSha ||
+    !Array.isArray(verification.git.changedPaths) ||
+    verification.git.changedPaths.length === 0 ||
+    !verification.git.changedPaths.every(pathAllowed) ||
+    !Array.isArray(verification.git.unexpectedPaths) ||
+    verification.git.unexpectedPaths.length !== 0 ||
+    verification.git.reason !== null ||
+    JSON.stringify(worker.verification) !== JSON.stringify(verification) ||
+    JSON.stringify(reviewerLifecycle.verification) !== JSON.stringify(verification) ||
     !reviewer.ok ||
     reviewer.envelope.verdict !== "PASS"
   ) {
@@ -188,13 +349,6 @@ export function harvest(archive: string, runDir: string, runs: string[]): void {
   }
   writeJson(resolve(runDir, "evidence-manifest.json"), manifest);
 }
-function transition(
-  runDir: string,
-  next: Parameters<typeof transitionControllerState>[1],
-): ControllerState {
-  return transitionControllerState(runDir, next);
-}
-
 function archiveFactory(factoryRoot: string): { path: string; sha: string; cleanup(): void } {
   const directory = mkdtempSync(resolve(tmpdir(), "factory-runtime-"));
   const path = resolve(directory, "runtime.tar");
@@ -215,31 +369,90 @@ async function remote(
 ): Promise<string> {
   return (await exe.exec(destination, argv, timeout)).stdout;
 }
-const CAPTURE = `import{spawn}from'node:child_process';const a=JSON.parse(process.argv[2]);let o='',e='',done=false;const add=(s,x)=>(s+String(x)).slice(-1048576);const finish=(code,signal)=>{if(done)return;done=true;process.stdout.write(JSON.stringify({code,signal,stdout:o,stderr:e}))};const p=spawn(a[0],a.slice(1),{stdio:['ignore','pipe','pipe']});p.stdout.on('data',x=>o=add(o,x));p.stderr.on('data',x=>e=add(e,x));p.on('error',x=>{e=add(e,x);finish(1,null)});p.on('close',(code,signal)=>finish(code??1,signal));`;
-async function captured(
+async function streamed(
   exe: ControllerExe,
   destination: string,
   argv: string[],
   timeout: number,
-): Promise<{ code: number; stdout: string; stderr: string }> {
-  const result = await remote(
-    exe,
-    destination,
-    [REMOTE_NODE, "/home/exedev/capture.mjs", JSON.stringify(argv)],
-    timeout,
-  );
-  const value: unknown = JSON.parse(result);
-  if (
-    !isRecord(value) ||
-    typeof value.code !== "number" ||
-    typeof value.stdout !== "string" ||
-    typeof value.stderr !== "string"
-  )
-    throw new Error("invalid remote capture result");
-  return { code: value.code, stdout: value.stdout, stderr: value.stderr };
+  onEvent: (event: RemoteEvent) => void,
+): Promise<RemoteResultFrame> {
+  const parser = new RemoteProtocolParser(onEvent);
+  await exe.execStream(destination, argv, (chunk) => parser.push(chunk), timeout);
+  return parser.finish();
+}
+
+interface AttemptRecoveryRecord {
+  version: 1;
+  runId: string;
+  pid: number;
+  processIdentity: string;
+  startedAt: string;
+}
+function readAttemptRecovery(path: string): AttemptRecoveryRecord | undefined {
+  try {
+    const value: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (
+      isRecord(value) &&
+      value.version === 1 &&
+      typeof value.runId === "string" &&
+      UUID.test(value.runId) &&
+      typeof value.pid === "number" &&
+      Number.isSafeInteger(value.pid) &&
+      value.pid > 0 &&
+      typeof value.processIdentity === "string" &&
+      value.processIdentity.length > 0 &&
+      typeof value.startedAt === "string" &&
+      Number.isFinite(Date.parse(value.startedAt))
+    )
+      return {
+        version: 1,
+        runId: value.runId,
+        pid: value.pid,
+        processIdentity: value.processIdentity,
+        startedAt: value.startedAt,
+      };
+  } catch {}
+  return undefined;
+}
+/** Reconciles accepted children that died before strict intake state existed. */
+export function recoverAbandonedAttempts(root: string): void {
+  const attempts = resolve(root, ".factory", "attempts");
+  if (!existsSync(attempts)) return;
+  for (const entry of readdirSync(attempts, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !UUID.test(entry.name)) continue;
+    const directory = resolve(attempts, entry.name);
+    const attempt = readAttemptRecovery(resolve(directory, "recovery.json"));
+    if (!attempt || attempt.runId !== entry.name) continue; // corrupt records stay conservative.
+    let alive = false;
+    try {
+      process.kill(attempt.pid, 0);
+      alive = linuxProcessIdentity(attempt.pid) === attempt.processIdentity;
+    } catch {}
+    if (alive) continue;
+    try {
+      const telemetry = createTelemetryWriter(root, attempt.runId);
+      const terminal = readTelemetry(telemetry.path).some((event) => event.type === "run_finished");
+      if (!terminal) {
+        telemetry.append({
+          type: "failure",
+          actor: "controller",
+          payload: { stage: "recovery", message: "abandoned accepted run" },
+        });
+        telemetry.append({
+          type: "run_finished",
+          actor: "controller",
+          payload: { status: "failed", cleanup: "not-needed" },
+        });
+      }
+      rmSync(directory, { recursive: true, force: true });
+    } catch {
+      // Keep record for later recovery when telemetry storage becomes available.
+    }
+  }
 }
 
 async function recover(root: string, exe: ControllerExe): Promise<void> {
+  recoverAbandonedAttempts(root);
   const controllers = resolve(root, ".factory", "controllers");
   if (!existsSync(controllers)) return;
   recoverStaleControllerClaims(controllers);
@@ -247,15 +460,49 @@ async function recover(root: string, exe: ControllerExe): Promise<void> {
     const runDir = resolve(controllers, state.runId);
     const name =
       state.vm?.name ?? (state.state === "creating_vm" ? vmName(state.runId) : undefined);
-    if (!name) {
-      transition(runDir, "failed");
-      continue;
+    let cleanup = state.cleanup;
+    if (name) {
+      const result = await exe.destroyVm(name);
+      if (!result.destroyed && !result.notFound)
+        throw new Error("controller recovery cleanup failed");
+      cleanup = "complete";
+      recordControllerCleanup(runDir, "complete");
     }
-    const result = await exe.destroyVm(name);
-    if (!result.destroyed && !result.notFound)
-      throw new Error("controller recovery cleanup failed");
-    if (state.vm) recordControllerCleanup(runDir, "complete");
-    transition(runDir, "failed");
+    transitionControllerState(runDir, "failed");
+
+    // Cleanup authority wins over observability: corrupt or unavailable telemetry
+    // must never strand a VM during recovery.
+    try {
+      const path = telemetryPath(root, state.runId);
+      if (!existsSync(path)) continue;
+      const terminal = readTelemetry(path).some((event) => event.type === "run_finished");
+      const telemetry = createTelemetryWriter(root, state.runId);
+      if (terminal) {
+        if (cleanup === "complete" && state.cleanup !== "complete")
+          telemetry.append({
+            type: "cleanup_updated",
+            actor: "controller",
+            payload: { cleanup: "complete" },
+          });
+        continue;
+      }
+      if (cleanup === "complete" && state.cleanup !== "complete")
+        telemetry.append({
+          type: "cleanup_updated",
+          actor: "controller",
+          payload: { cleanup: "complete" },
+        });
+      telemetry.append({
+        type: "failure",
+        actor: "controller",
+        payload: { stage: "recovery", message: "abandoned controller run" },
+      });
+      telemetry.append({
+        type: "run_finished",
+        actor: "controller",
+        payload: { status: "failed", cleanup },
+      });
+    } catch {}
   }
 }
 
@@ -274,17 +521,33 @@ export async function runController(options: ControllerOptions): Promise<Control
   const factoryRoot = resolve(options.factoryRoot ?? process.cwd());
   const exe = options.exe ?? new ExeClient(undefined, 30_000, options.identity);
   const lock = acquireControllerLock(root);
-  const runId = randomUUID();
+  const runId = options.runId ?? randomUUID();
   const provisional = resolve(root, ".factory", "attempts", runId);
   const startedAt = new Date().toISOString();
+  let telemetry: TelemetryWriter;
+  let telemetryBroken = false;
+  let failure: string | undefined;
   try {
-    mkdirSync(provisional, { recursive: true });
+    telemetry = (options.telemetry ?? createTelemetryWriter)(root, runId);
+    telemetry.append({ type: "run_created", actor: "controller", payload: { status: "created" } });
+    telemetry.append({ type: "run_started", actor: "controller", payload: { status: "running" } });
+    mkdirSync(provisional, { recursive: true, mode: 0o700 });
+    const processIdentity = linuxProcessIdentity(process.pid);
+    if (!processIdentity) throw new Error("controller process identity unavailable");
+    writeJson(resolve(provisional, "recovery.json"), {
+      version: 1,
+      runId,
+      pid: process.pid,
+      processIdentity,
+      startedAt,
+    } satisfies AttemptRecoveryRecord);
     writeJson(resolve(provisional, "receipt.json"), {
       kind: "controller",
       status: "failed",
       startedAt,
       artifacts: ["receipt.json"],
     });
+    options.onAccepted?.();
   } catch (error) {
     lock.release();
     throw error;
@@ -292,9 +555,79 @@ export async function runController(options: ControllerOptions): Promise<Control
   let evidenceDir = provisional;
   let state: ControllerState | undefined;
   let archive: ReturnType<typeof archiveFactory> | undefined;
-  let failure: string | undefined;
   let cleanupFailed = false;
+  let cleanupOutcome: CleanupState = "not-needed";
   let stage = "recovery";
+  const emit = (input: TelemetryInput): void => {
+    if (telemetryBroken) throw new Error("telemetry unavailable");
+    try {
+      telemetry.append(input);
+    } catch (error) {
+      telemetryBroken = true;
+      throw new Error("telemetry append failed", { cause: error });
+    }
+  };
+  const bestEffortEmit = (input: TelemetryInput): void => {
+    if (telemetryBroken) return;
+    try {
+      telemetry.append(input);
+    } catch {
+      telemetryBroken = true;
+    }
+  };
+  const heartbeatMilliseconds = options.heartbeatMilliseconds ?? 10_000;
+  if (!Number.isInteger(heartbeatMilliseconds) || heartbeatMilliseconds < 1) {
+    lock.release();
+    throw new Error("heartbeatMilliseconds must be a positive integer");
+  }
+  let heartbeatStopped = false;
+  const heartbeat = setInterval(() => {
+    bestEffortEmit({
+      type: "heartbeat",
+      actor: "controller",
+      ...(state
+        ? { phase: { id: `${state.state}:1`, name: state.state, attempt: 1 as const } }
+        : {}),
+      payload: {},
+    });
+  }, heartbeatMilliseconds);
+  heartbeat.unref();
+  const stopHeartbeat = (): void => {
+    if (heartbeatStopped) return;
+    heartbeatStopped = true;
+    clearInterval(heartbeat);
+  };
+  let openHostPhase: "creating_vm" | "bootstrapping" | undefined;
+  const closeHostPhase = (status: "completed" | "failed" = "completed"): void => {
+    if (!openHostPhase) return;
+    emit({
+      type: "phase_finished",
+      actor: "controller",
+      phase: { id: `${openHostPhase}:1`, name: openHostPhase, attempt: 1 },
+      payload: { status },
+    });
+    openHostPhase = undefined;
+  };
+  const advance = (
+    runDir: string,
+    next: Parameters<typeof transitionControllerState>[1],
+    actor: TelemetryInput["actor"] = "controller",
+    sourceAt?: string,
+  ): ControllerState => {
+    closeHostPhase();
+    const nextState = transitionControllerState(runDir, next);
+    state = nextState;
+    emit({
+      type: "phase_started",
+      actor,
+      phase: { id: `${next}:1`, name: next, attempt: 1 },
+      ...(sourceAt ? { sourceAt } : {}),
+      payload: {},
+    });
+    if (next === "creating_vm" || next === "bootstrapping") openHostPhase = next;
+    stage = next;
+    return nextState;
+  };
   try {
     await recover(root, exe);
     stage = "intake";
@@ -335,10 +668,11 @@ export async function runController(options: ControllerOptions): Promise<Control
     }
     rmSync(provisional, { recursive: true, force: true });
     evidenceDir = runDir;
-    transition(runDir, "creating_vm");
-    stage = "creating_vm";
+    advance(runDir, "creating_vm");
     const vm = await exe.createVm({ name: vmName(state.runId), tag: options.tag });
     state = recordControllerVm(runDir, { name: vm.vmName, sshDest: vm.sshDest, status: vm.status });
+    cleanupOutcome = "pending";
+    emit({ type: "cleanup_updated", actor: "controller", payload: { cleanup: "pending" } });
     for (let attempt = 0; attempt < 12; attempt += 1) {
       try {
         await remote(exe, vm.sshDest, ["true"], 30_000);
@@ -350,8 +684,7 @@ export async function runController(options: ControllerOptions): Promise<Control
         )(5_000);
       }
     }
-    transition(runDir, "bootstrapping");
-    stage = "bootstrapping";
+    advance(runDir, "bootstrapping");
     await remote(
       exe,
       vm.sshDest,
@@ -377,8 +710,6 @@ export async function runController(options: ControllerOptions): Promise<Control
     });
     const configDir = mkdtempSync(resolve(tmpdir(), "factory-pi-"));
     const models = resolve(configDir, "models.json");
-    const capture = resolve(configDir, "capture.mjs");
-    writeFileSync(capture, CAPTURE, { mode: 0o600 });
     writeJson(models, {
       providers: {
         exe: {
@@ -464,7 +795,6 @@ export async function runController(options: ControllerOptions): Promise<Control
       });
       await exe.copyTo(vm.sshDest, archive.path, "/home/exedev/runtime.tar");
       await exe.copyTo(vm.sshDest, models, "/home/exedev/.pi/agent/models.json");
-      await exe.copyTo(vm.sshDest, capture, "/home/exedev/capture.mjs");
       await remote(
         exe,
         vm.sshDest,
@@ -525,77 +855,261 @@ export async function runController(options: ControllerOptions): Promise<Control
         ["curl", "-fsS", "-o", "/dev/null", "https://llm.int.exe.xyz/v1/models"],
         30_000,
       );
-      transition(runDir, "planning");
-      stage = "planning";
+      let nextPublicToolId = 1;
+      const remoteSequence = (
+        expected: Array<"planning" | "implementing" | "verifying" | "reviewing">,
+      ) => {
+        let index = 0;
+        let open: (typeof expected)[number] | undefined;
+        let terminated = false;
+        let negative = false;
+        let pendingNegativeClosure: "failed" | "timed_out" | undefined;
+        let gateSeen = false;
+        let reviewSeen = false;
+        const tools = new Map<string, { publicId: string; name: string }>();
+        const allowedTools: Record<RemoteEvent["actor"], Set<string>> = {
+          planner: roleTools("planner"),
+          worker: roleTools("worker"),
+          verifier: new Set(),
+          reviewer: roleTools("reviewer"),
+        };
+        const closeOpen = (status: "failed" | "timed_out" = "failed"): void => {
+          if (!open) return;
+          const actor = PHASE_OWNER[open];
+          emit({
+            type: "phase_finished",
+            actor,
+            phase: telemetryPhase(open),
+            sourceAt: new Date().toISOString(),
+            payload: { status },
+          });
+          tools.clear();
+          open = undefined;
+          negative = true;
+          terminated = true;
+        };
+        const onEvent = (event: RemoteEvent): void => {
+          if (terminated) throw new Error("remote phase sequence continued after failure");
+          if (pendingNegativeClosure && event.type !== "phase_finished")
+            throw new Error("remote negative result requires phase closure");
+          const sourceAt = new Date(event.sourceAt).toISOString();
+          const owner = PHASE_OWNER[event.phase];
+          if (event.actor !== owner) throw new Error("invalid remote phase owner");
+          if (event.type === "phase_started") {
+            if (open || event.phase !== expected[index])
+              throw new Error("invalid remote phase sequence");
+            open = event.phase;
+            advance(runDir, event.phase, event.actor, sourceAt);
+            return;
+          }
+          if (!open || event.phase !== open) throw new Error("remote event outside active phase");
+          const phase = telemetryPhase(event.phase);
+          switch (event.type) {
+            case "phase_finished":
+              if (tools.size) throw new Error("remote phase finished with active tool calls");
+              if (pendingNegativeClosure && event.status !== pendingNegativeClosure)
+                throw new Error("remote phase closure contradicts negative result");
+              emit({
+                type: "phase_finished",
+                actor: event.actor,
+                phase,
+                sourceAt,
+                payload: { status: event.status },
+              });
+              if (event.status !== "completed") {
+                negative = true;
+                terminated = true;
+              }
+              pendingNegativeClosure = undefined;
+              open = undefined;
+              index += 1;
+              break;
+            case "agent_started":
+              emit({ type: "agent_started", actor: event.actor, phase, sourceAt, payload: {} });
+              break;
+            case "agent_finished":
+              emit({
+                type: "agent_finished",
+                actor: event.actor,
+                phase,
+                sourceAt,
+                payload: { status: event.status },
+              });
+              break;
+            case "tool_started": {
+              if (!allowedTools[event.actor].has(event.toolName) || tools.has(event.toolCallId))
+                throw new Error("invalid remote tool activity");
+              const publicId = `tool-${nextPublicToolId}`;
+              nextPublicToolId += 1;
+              tools.set(event.toolCallId, { publicId, name: event.toolName });
+              emit({
+                type: "tool_started",
+                actor: event.actor,
+                phase,
+                sourceAt,
+                payload: { toolName: event.toolName, toolCallId: publicId },
+              });
+              break;
+            }
+            case "tool_finished": {
+              const tool = tools.get(event.toolCallId);
+              if (!tool || tool.name !== event.toolName)
+                throw new Error("invalid remote tool activity");
+              tools.delete(event.toolCallId);
+              emit({
+                type: "tool_finished",
+                actor: event.actor,
+                phase,
+                sourceAt,
+                payload: {
+                  toolName: event.toolName,
+                  toolCallId: tool.publicId,
+                  isError: event.isError,
+                },
+              });
+              break;
+            }
+            case "gate_finished":
+              if (gateSeen) throw new Error("duplicate remote gate result");
+              gateSeen = true;
+              emit({
+                type: "gate_finished",
+                actor: "verifier",
+                phase,
+                sourceAt,
+                payload: {
+                  passed: event.passed,
+                  commandCount: event.commandCount,
+                  changedPathCount: event.changedPathCount,
+                  timedOut: event.timedOut,
+                },
+              });
+              if (!event.passed) {
+                negative = true;
+                pendingNegativeClosure = event.timedOut ? "timed_out" : "failed";
+              }
+              break;
+            case "review_finished":
+              if (reviewSeen) throw new Error("duplicate remote review result");
+              reviewSeen = true;
+              emit({
+                type: "review_finished",
+                actor: "reviewer",
+                phase,
+                sourceAt,
+                payload: { verdict: event.verdict, blockerCount: event.blockerCount },
+              });
+              if (event.verdict !== "PASS" || event.blockerCount > 0) {
+                negative = true;
+                pendingNegativeClosure = "failed";
+              }
+              break;
+          }
+        };
+        return {
+          onEvent,
+          closeOpen,
+          finish(result: RemoteResultFrame) {
+            if (open || pendingNegativeClosure) throw new Error("remote phase did not finish");
+            if (negative && result.status === "completed")
+              throw new Error("remote completed result contradicts negative phase evidence");
+            if (terminated && !["failed", "timed_out"].includes(result.status))
+              throw new Error("remote terminal result contradicts failed phase");
+            if (
+              result.status === "completed" &&
+              (index !== expected.length ||
+                negative ||
+                terminated ||
+                (expected.includes("verifying") && !gateSeen) ||
+                (expected.includes("reviewing") && !reviewSeen))
+            )
+              throw new Error("remote completed result contradicts phase evidence");
+          },
+        };
+      };
       const issue = "/home/exedev/issue.md";
       await exe.copyTo(vm.sshDest, resolve(runDir, "issue.md"), issue);
-      const plannerResult = await captured(
-        exe,
-        vm.sshDest,
-        [
-          "env",
-          "-C",
-          REMOTE_FACTORY,
-          `PATH=${REMOTE_PATH}`,
-          REMOTE_NODE,
-          "dist/src/cli.js",
-          "pi",
-          "plan",
-          "--repo",
-          REMOTE_WORK,
-          "--issue",
-          issue,
-          "--model",
-          MODEL,
-          "--timeout-seconds",
-          String(options.timeoutSeconds),
-        ],
-        options.timeoutSeconds * 1000 + 60_000,
-      );
-      const plannerOutput = plannerResult.stdout;
-      const plannerRun = outputPath(plannerOutput, "Run evidence");
-      if (plannerResult.code !== 0) throw new Error("remote planner failed");
+      const plannerSequence = remoteSequence(["planning"]);
+      let plannerResult: RemoteResultFrame;
+      try {
+        plannerResult = await streamed(
+          exe,
+          vm.sshDest,
+          [
+            "env",
+            "-C",
+            REMOTE_FACTORY,
+            `PATH=${REMOTE_PATH}`,
+            REMOTE_NODE,
+            "dist/src/cli.js",
+            "pi",
+            "plan",
+            "--repo",
+            REMOTE_WORK,
+            "--issue",
+            issue,
+            "--model",
+            MODEL,
+            "--timeout-seconds",
+            String(options.timeoutSeconds),
+            "--machine",
+          ],
+          options.timeoutSeconds * 1000 + 60_000,
+          plannerSequence.onEvent,
+        );
+        plannerSequence.finish(plannerResult);
+      } catch (error) {
+        plannerSequence.closeOpen();
+        throw error;
+      }
+      const plannerRun = outputPath(plannerResult.runDir, "Run evidence");
+      if (plannerResult.status !== "completed") throw new Error("remote planner failed");
       const plannerEnvelope = JSON.parse(
         await remote(exe, vm.sshDest, ["cat", `${plannerRun}/envelope.json`], 30_000),
       ) as unknown;
       const parsedPlan = parseEnvelope("planner", plannerEnvelope);
       if (!parsedPlan.ok || parsedPlan.envelope.decisionsNeeded.length)
         throw new Error("remote planner envelope is blocked");
-      transition(runDir, "implementing");
-      stage = "implementing";
-      const workerResult = await captured(
-        exe,
-        vm.sshDest,
-        [
-          "env",
-          "-C",
-          REMOTE_FACTORY,
-          `PATH=${REMOTE_PATH}`,
-          REMOTE_NODE,
-          "dist/src/cli.js",
-          "pi",
-          "worker",
-          "--repo",
-          REMOTE_WORK,
-          "--issue",
-          issue,
-          "--planner",
-          `${plannerRun}/envelope.json`,
-          "--base-sha",
-          state.baseSha,
-          "--model",
-          MODEL,
-          "--timeout-seconds",
-          String(options.timeoutSeconds),
-        ],
-        options.timeoutSeconds * 3000 + 120_000,
-      );
-      const workerOutput = workerResult.stdout;
-      const workerRun = outputPath(workerOutput, "Run evidence");
-      if (workerResult.code !== 0) throw new Error("remote worker lifecycle failed");
-      const reviewerRun = outputPath(workerOutput, "Reviewer evidence");
-      transition(runDir, "verifying");
-      transition(runDir, "reviewing");
+      const workerSequence = remoteSequence(["implementing", "verifying", "reviewing"]);
+      let workerResult: RemoteResultFrame;
+      try {
+        workerResult = await streamed(
+          exe,
+          vm.sshDest,
+          [
+            "env",
+            "-C",
+            REMOTE_FACTORY,
+            `PATH=${REMOTE_PATH}`,
+            REMOTE_NODE,
+            "dist/src/cli.js",
+            "pi",
+            "worker",
+            "--repo",
+            REMOTE_WORK,
+            "--issue",
+            issue,
+            "--planner",
+            `${plannerRun}/envelope.json`,
+            "--base-sha",
+            state.baseSha,
+            "--model",
+            MODEL,
+            "--timeout-seconds",
+            String(options.timeoutSeconds),
+            "--machine",
+          ],
+          options.timeoutSeconds * 3000 + 120_000,
+          workerSequence.onEvent,
+        );
+        workerSequence.finish(workerResult);
+      } catch (error) {
+        workerSequence.closeOpen();
+        throw error;
+      }
+      const workerRun = outputPath(workerResult.runDir, "Run evidence");
+      if (workerResult.status !== "completed") throw new Error("remote worker lifecycle failed");
+      const reviewerRun = outputPath(workerResult.reviewerRunDir, "Reviewer evidence");
       stage = "harvesting";
       const patch = await remote(
         exe,
@@ -613,6 +1127,12 @@ export async function runController(options: ControllerOptions): Promise<Control
       if (!patch || Buffer.byteLength(patch) > MAX_PATCH)
         throw new Error("change patch missing or exceeds limit");
       writeFileSync(resolve(runDir, "change.patch"), patch, { mode: 0o600 });
+      const patchSha256 = createHash("sha256").update(patch).digest("hex");
+      emit({
+        type: "artifact_available",
+        actor: "controller",
+        payload: { name: "change.patch", size: Buffer.byteLength(patch), sha256: patchSha256 },
+      });
       await remote(
         exe,
         vm.sshDest,
@@ -620,20 +1140,47 @@ export async function runController(options: ControllerOptions): Promise<Control
         60_000,
       );
       await exe.copyFrom(vm.sshDest, "/home/exedev/evidence.tar", resolve(runDir, "evidence.tar"));
+      chmodSync(resolve(runDir, "evidence.tar"), 0o600);
       if (statSync(resolve(runDir, "evidence.tar")).size > 50 * 1024 * 1024)
         throw new Error("evidence archive exceeds limit");
       const runIds = [plannerRun, workerRun, reviewerRun].map((path) => basename(path));
-      harvest(resolve(runDir, "evidence.tar"), runDir, runIds);
+      harvest(resolve(runDir, "evidence.tar"), runDir, runIds, {
+        baseSha: state.baseSha,
+        allowedPaths: parsedPlan.envelope.changes.map((change) => change.path),
+        patchSha256,
+      });
+      emit({
+        type: "artifact_available",
+        actor: "controller",
+        payload: {
+          name: "evidence.tar",
+          size: statSync(resolve(runDir, "evidence.tar")).size,
+          sha256: hash(resolve(runDir, "evidence.tar")),
+        },
+      });
       writeJson(resolve(runDir, "remote-runs.json"), { plannerRun, workerRun, reviewerRun });
     } finally {
       rmSync(configDir, { recursive: true, force: true });
     }
   } catch (error) {
+    try {
+      closeHostPhase("failed");
+    } catch {
+      telemetryBroken = true;
+    }
     if (!state && evidenceDir !== provisional && existsSync(evidenceDir)) {
       renameSync(evidenceDir, provisional);
       evidenceDir = provisional;
     }
-    failure = error instanceof Error ? error.message : String(error);
+    failure = sanitizeTelemetryText(error instanceof Error ? error.message : String(error), [
+      options.linearToken,
+      options.githubToken,
+    ]);
+    bestEffortEmit({
+      type: "failure",
+      actor: "controller",
+      payload: { stage, message: "controller stage failed" },
+    });
   }
   if (failure && state?.vm) {
     const runDir = resolve(root, ".factory", "controllers", state.runId);
@@ -646,32 +1193,63 @@ export async function runController(options: ControllerOptions): Promise<Control
         60_000,
       );
       await exe.copyFrom(state.vm.sshDest, "/home/exedev/evidence.tar", target);
+      chmodSync(target, 0o600);
       if (statSync(target).size > 50 * 1024 * 1024) {
         rmSync(target, { force: true });
         throw new Error("failure evidence archive exceeds limit");
       }
-    } catch {}
+      bestEffortEmit({
+        type: "artifact_available",
+        actor: "controller",
+        payload: {
+          name: "failure-evidence.tar",
+          size: statSync(target).size,
+          sha256: hash(target),
+        },
+      });
+    } catch {
+      bestEffortEmit({
+        type: "failure",
+        actor: "controller",
+        payload: { stage: "failure_evidence", message: "failure evidence unavailable" },
+      });
+    }
   }
   try {
-    if (state) {
+    const cleanupRequired = state !== undefined && state.state !== "intake";
+    if (state && cleanupRequired) {
       const cleaned = await exe.destroyVm(state.vm?.name ?? vmName(state.runId));
-      if (cleaned.destroyed || cleaned.notFound) {
-        if (state.vm) {
-          recordControllerCleanup(
-            resolve(root, ".factory", "controllers", state.runId),
-            "complete",
-          );
-        }
-      } else {
-        throw new Error("VM cleanup failed");
+      if (!cleaned.destroyed && !cleaned.notFound) throw new Error("VM cleanup failed");
+      cleanupOutcome = "complete";
+      state = recordControllerCleanup(
+        resolve(root, ".factory", "controllers", state.runId),
+        "complete",
+      );
+      try {
+        emit({
+          type: "cleanup_updated",
+          actor: "controller",
+          payload: { cleanup: "complete" },
+        });
+      } catch (error) {
+        failure ??= error instanceof Error ? error.message : String(error);
       }
     }
   } catch (error) {
     cleanupFailed = true;
+    cleanupOutcome = "failed";
     if (!failure) stage = "cleanup";
     if (state?.vm) {
       try {
-        recordControllerCleanup(resolve(root, ".factory", "controllers", state.runId), "failed");
+        state = recordControllerCleanup(
+          resolve(root, ".factory", "controllers", state.runId),
+          "failed",
+        );
+        bestEffortEmit({
+          type: "cleanup_updated",
+          actor: "controller",
+          payload: { cleanup: "failed" },
+        });
       } catch {}
     }
     failure ??= error instanceof Error ? error.message : String(error);
@@ -685,34 +1263,66 @@ export async function runController(options: ControllerOptions): Promise<Control
   let result: ControllerResult;
   try {
     const runDir = state ? resolve(root, ".factory", "controllers", state.runId) : evidenceDir;
-    if (!state || failure) {
-      if (state && !cleanupFailed) transition(runDir, "failed");
-      const error = redact(failure ?? "intake failed", [options.linearToken, options.githubToken]);
+    const failedResult = (message: string): ControllerResult => {
+      stopHeartbeat();
+      const error = sanitizeTelemetryText(message, [options.linearToken, options.githubToken]);
+      if (state && !cleanupFailed && state.state !== "failed") {
+        state = transitionControllerState(runDir, "failed");
+        bestEffortEmit({
+          type: "phase_started",
+          actor: "controller",
+          phase: { id: "failed:1", name: "failed", attempt: 1 },
+          payload: {},
+        });
+      }
       writeJson(resolve(runDir, "receipt.json"), {
         kind: "controller",
         status: "failed",
         stage,
         startedAt,
         finishedAt: new Date().toISOString(),
-        cleanup: state?.vm ? (cleanupFailed ? "failed" : "complete") : "not-needed",
+        cleanup: cleanupOutcome,
         artifacts: readdirArtifacts(runDir),
         error,
       });
-      result = { status: "failed", runDir, error };
-    } else {
-      transition(runDir, "ready_for_publication");
-      writeJson(resolve(runDir, "receipt.json"), {
-        kind: "controller",
-        status: "ready_for_publication",
-        stage: "ready_for_publication",
-        startedAt,
-        finishedAt: new Date().toISOString(),
-        cleanup: "complete",
-        artifacts: readdirArtifacts(runDir),
+      bestEffortEmit({
+        type: "run_finished",
+        actor: "controller",
+        payload: {
+          status: "failed",
+          cleanup: cleanupOutcome,
+        },
       });
-      result = { status: "ready_for_publication", runDir };
+      return { status: "failed", runDir, error };
+    };
+
+    if (!state || failure) {
+      result = failedResult(failure ?? "intake failed");
+    } else {
+      try {
+        advance(runDir, "ready_for_publication");
+        stopHeartbeat();
+        writeJson(resolve(runDir, "receipt.json"), {
+          kind: "controller",
+          status: "ready_for_publication",
+          stage: "ready_for_publication",
+          startedAt,
+          finishedAt: new Date().toISOString(),
+          cleanup: "complete",
+          artifacts: readdirArtifacts(runDir),
+        });
+        emit({
+          type: "run_finished",
+          actor: "controller",
+          payload: { status: "ready_for_publication", cleanup: "complete" },
+        });
+        result = { status: "ready_for_publication", runDir };
+      } catch (error) {
+        result = failedResult(error instanceof Error ? error.message : String(error));
+      }
     }
   } finally {
+    stopHeartbeat();
     lock.release();
   }
   return result;

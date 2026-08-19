@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { test } from "node:test";
@@ -81,6 +81,20 @@ test("runAgent finalizes a failed receipt without completion artifacts when the 
       thinking: "medium",
       access: "read-only",
     });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("run artifacts use private directory and file modes", () => {
+  const root = mkdtempSync(resolve(tmpdir(), "factory-artifact-modes-"));
+  try {
+    const artifacts = createRunArtifacts("issue", root);
+    artifacts.write("note.txt", "private");
+    assert.equal(statSync(artifacts.runDir).mode & 0o777, 0o700);
+    assert.equal(statSync(artifacts.sessionsDir).mode & 0o777, 0o700);
+    for (const name of ["issue.md", "events.jsonl", "note.txt"])
+      assert.equal(statSync(resolve(artifacts.runDir, name)).mode & 0o777, 0o600);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

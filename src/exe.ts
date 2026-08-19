@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { isAbsolute, posix } from "node:path";
 import { promisify } from "node:util";
 
@@ -25,9 +25,37 @@ export interface ExecResult {
 
 export interface RunOptions {
   timeout: number;
+  env: NodeJS.ProcessEnv;
+}
+
+const SAFE_ENV_KEYS = [
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TMPDIR",
+  "TEMP",
+  "TMP",
+] as const;
+
+export function externalCommandEnvironment(
+  source: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    SAFE_ENV_KEYS.flatMap((key) => (source[key] === undefined ? [] : [[key, source[key]]])),
+  );
 }
 
 export type ExeRunner = (file: string, args: string[], options: RunOptions) => Promise<ExecResult>;
+export type ExeStreamRunner = (
+  file: string,
+  args: string[],
+  options: RunOptions,
+  onStdout: (chunk: Buffer) => void,
+) => Promise<{ stderr: string }>;
 
 export interface ExeVm {
   vmName: string;
@@ -130,17 +158,72 @@ const defaultRunner: ExeRunner = async (file, args, options) => {
     timeout: options.timeout,
     maxBuffer: 2_000_000,
     encoding: "utf8",
+    env: options.env,
   });
   return { stdout: result.stdout, stderr: result.stderr };
 };
 
+const defaultStreamRunner: ExeStreamRunner = (file, args, options, onStdout) =>
+  new Promise((resolve, reject) => {
+    const child = spawn(file, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: options.env,
+    });
+    let stderr = "";
+    let timedOut = false;
+    let callbackError: unknown;
+    let killTimer: NodeJS.Timeout | undefined;
+    let settled = false;
+    const clear = () => {
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+    };
+    const terminate = () => {
+      child.kill("SIGTERM");
+      killTimer ??= setTimeout(() => child.kill("SIGKILL"), 1000);
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      terminate();
+    }, options.timeout);
+    child.stdout.on("data", (chunk: Buffer) => {
+      if (callbackError) return;
+      try {
+        onStdout(chunk);
+      } catch (error) {
+        callbackError = error;
+        terminate();
+      }
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr = (stderr + chunk.toString()).slice(-1_000_000);
+    });
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clear();
+      reject(error);
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clear();
+      if (callbackError) reject(callbackError);
+      else if (code === 0 && !timedOut) resolve({ stderr });
+      else reject({ killed: timedOut, code: timedOut ? "ETIMEDOUT" : code, stderr });
+    });
+  });
+
 export class ExeClient {
   private readonly connectionOptions: string[];
+  private readonly commandEnv: NodeJS.ProcessEnv;
 
   constructor(
     private readonly runner: ExeRunner = defaultRunner,
     private readonly timeoutMs = 30_000,
     identityFile?: string,
+    private readonly streamRunner: ExeStreamRunner = defaultStreamRunner,
+    environment: NodeJS.ProcessEnv = process.env,
   ) {
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1) {
       throw new Error("exe.dev timeout must be a positive integer");
@@ -148,6 +231,7 @@ export class ExeClient {
     this.connectionOptions = identityFile
       ? [...SSH_OPTIONS, "-o", "IdentitiesOnly=yes", "-i", safeLocalPath(identityFile)]
       : SSH_OPTIONS;
+    this.commandEnv = externalCommandEnvironment(environment);
   }
 
   private async invoke(
@@ -157,7 +241,7 @@ export class ExeClient {
     timeout = this.timeoutMs,
   ): Promise<ExecResult> {
     try {
-      return await this.runner(file, args, { timeout });
+      return await this.runner(file, args, { timeout, env: this.commandEnv });
     } catch (error) {
       throw commandFailure(error, operation);
     }
@@ -214,6 +298,30 @@ export class ExeClient {
       [...this.connectionOptions, destination, command],
       timeoutMs,
     );
+  }
+
+  async execStream(
+    sshDest: string,
+    argv: string[],
+    onStdout: (chunk: Buffer) => void,
+    timeoutMs = this.timeoutMs,
+  ): Promise<{ stderr: string }> {
+    const destination = safeDestination(sshDest);
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1) {
+      throw new Error("remote command timeout must be a positive integer");
+    }
+    if (!argv.length || !argv[0]?.trim()) throw new Error("empty remote command");
+    const command = argv.map(quoteRemoteArg).join(" ");
+    try {
+      return await this.streamRunner(
+        "ssh",
+        [...this.connectionOptions, destination, command],
+        { timeout: timeoutMs, env: this.commandEnv },
+        onStdout,
+      );
+    } catch (error) {
+      throw commandFailure(error, "remote command");
+    }
   }
 
   async copyTo(sshDest: string, localPath: string, remotePath: string): Promise<ExecResult> {

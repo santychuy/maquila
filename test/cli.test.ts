@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { test } from "node:test";
 import { listAgents, loadAgentFile } from "../src/agents.js";
-import { HELP, parseCli } from "../src/cli.js";
+import { agentExitCode, HELP, main, parseCli } from "../src/cli.js";
 import { MAX_TIMEOUT_SECONDS } from "../src/plan.js";
 
 test("planner command accepts required inputs and safe timeout", () => {
@@ -96,6 +96,128 @@ test("controller command accepts bounded immutable inputs", () => {
         "relative-key",
       ]),
     /absolute path/,
+  );
+});
+
+test("detached run and status commands require explicit JSON contracts", () => {
+  assert.deepEqual(
+    parseCli(["run", "start", "--target", "/tmp/target", "--issue", "RIFF-52", "--json"]),
+    {
+      command: "run-start",
+      target: "/tmp/target",
+      issue: "RIFF-52",
+      timeoutSeconds: 900,
+    },
+  );
+  assert.deepEqual(
+    parseCli(["run", "status", "--run-id", "11111111-1111-4111-8111-111111111111", "--json"]),
+    { command: "run-status", runId: "11111111-1111-4111-8111-111111111111" },
+  );
+  assert.throws(
+    () => parseCli(["run", "start", "--target", "/tmp/target", "--issue", "x"]),
+    /--json/,
+  );
+  assert.throws(() => parseCli(["run", "status", "--run-id", "x"]), /--json/);
+  assert.throws(
+    () =>
+      parseCli([
+        "run",
+        "status",
+        "--run-id",
+        "11111111-1111-4111-8111-111111111111",
+        "--target",
+        "/wrong",
+        "--json",
+      ]),
+    /unsupported option.*--target/,
+  );
+  const execute = parseCli([
+    "run",
+    "execute",
+    "--run-id",
+    "11111111-1111-4111-8111-111111111111",
+    "--issue",
+    "RIFF-52",
+    "--owner",
+    "acme",
+    "--repo",
+    "widget",
+    "--base-ref",
+    "release/2026-q1",
+    "--tag",
+    "acme-widget",
+  ]);
+  assert.equal(typeof execute === "object" && "target" in execute, false);
+  assert.match(HELP, /run start/);
+  assert.match(HELP, /run status/);
+});
+
+test("JSON command errors remain strict and bounded", async () => {
+  let output = "";
+  const write = process.stdout.write.bind(process.stdout);
+  process.stdout.write = (chunk: string | Uint8Array) => {
+    output += String(chunk);
+    return true;
+  };
+  try {
+    assert.equal(await main(["run", "start", "--json"]), 1);
+  } finally {
+    process.stdout.write = write;
+  }
+  assert.deepEqual(JSON.parse(output), {
+    version: 1,
+    ok: false,
+    error: { code: "command_failed", message: "--target and --issue are required" },
+  });
+});
+
+test("observer commands expose explicit server and JSON management contracts", () => {
+  assert.deepEqual(parseCli(["observer", "serve"]), {
+    command: "observer-serve",
+    port: 4600,
+  });
+  assert.deepEqual(parseCli(["observer", "ensure", "--port", "4700", "--json"]), {
+    command: "observer-ensure",
+    port: 4700,
+  });
+  assert.deepEqual(parseCli(["observer", "status", "--json"]), {
+    command: "observer-status",
+  });
+  assert.deepEqual(parseCli(["observer", "stop", "--json"]), {
+    command: "observer-stop",
+  });
+  assert.throws(() => parseCli(["observer", "ensure"]), /requires --json/);
+  assert.throws(() => parseCli(["observer", "serve", "--port", "0"]), /--port/);
+  assert.throws(
+    () => parseCli(["observer", "status", "--json", "--issue", "RIFF-1"]),
+    /unsupported option/,
+  );
+  assert.match(HELP, /observer serve/);
+  assert.match(HELP, /observer ensure/);
+});
+
+test("machine terminal frames own failed and timed-out process outcomes", () => {
+  assert.equal(agentExitCode("failed", true), 0);
+  assert.equal(agentExitCode("timed_out", true), 0);
+  assert.equal(agentExitCode("failed", false), 1);
+  assert.equal(agentExitCode("timed_out", false), 124);
+});
+
+test("machine mode is explicit on internal remote commands", () => {
+  const parsed = parseCli([
+    "pi",
+    "plan",
+    "--repo",
+    "/tmp/repo",
+    "--issue",
+    "/tmp/issue.md",
+    "--model",
+    "anthropic/example",
+    "--machine",
+  ]);
+  assert.equal(
+    typeof parsed === "object" && "machine" in parsed ? parsed.machine : undefined,
+    true,
   );
 });
 
