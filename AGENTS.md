@@ -18,7 +18,7 @@ Do not confuse the blueprint with implemented behavior.
 
 Implemented now:
 
-- Strict loading of `planner`, `worker`, and `reviewer` definitions from `agents/*.md`.
+- Strict loading of `planner`, `worker`, and `reviewer` definitions from `src/agents/*.md`.
 - Generic `runAgent()` Pi session execution with isolated resources, receipts, events, session transcripts, and cooperative timeouts.
 - Typed planner, worker, and reviewer envelopes with structural and semantic validation.
 - A `submit_envelope` tool and one same-session correction attempt.
@@ -58,7 +58,7 @@ Current execution is not a security sandbox. Read-only tools stop mutation but d
 
 ## Repository Map
 
-- `src/agents.ts` — loads and fail-closed validates specialist definitions.
+- `src/agents/index.ts` — loads and fail-closed validates specialist definitions.
 - `src/run-agent.ts` — generic Pi session runner, lifecycle capture, timeout, envelope flow, and receipts.
 - `src/envelope.ts` — TypeBox schemas, semantic validation, correction prompt, submit tool, and planner rendering.
 - `src/plan.ts` — validates planner inputs, snapshots issue context, runs planner, and writes `plan.md`.
@@ -71,7 +71,7 @@ Current execution is not a security sandbox. Read-only tools stop mutation but d
 - `src/observer.ts` and `src/observer-ui.ts` — loopback-only read API, managed server ownership, and accessible polling dashboard.
 - `src/cli.ts` — `agents list`, setup/doctor, local Pi commands, remote run commands, human dashboard alias, observer machine commands, and exit-code handling.
 - `factory.verify.json` — this repository's argv verification commands.
-- `agents/*.md` — role metadata in YAML frontmatter and role system prompt in Markdown body.
+- `src/agents/*.md` — role metadata in YAML frontmatter and role system prompt in Markdown body.
 - `test/*.test.ts` — Node test-runner coverage for CLI, role boundaries, envelopes, failures, and artifact safety.
 - `docs/envelopes.md` — envelope contract and limitations.
 - `docs/foundation-checkpoint.md` — evidence-backed implementation checkpoint.
@@ -132,7 +132,7 @@ Planner execution requires Pi authentication for the selected model. It writes e
 
 ## Agent Definition Contract
 
-Each `agents/<name>.md` file has YAML frontmatter plus a non-empty Markdown system prompt.
+Each `src/agents/<name>.md` file has YAML frontmatter plus a non-empty Markdown system prompt.
 
 Allowed frontmatter fields only:
 

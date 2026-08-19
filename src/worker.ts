@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { loadAgent } from "./agents.js";
+import { loadAgent } from "./agents/index.js";
 import { parseEnvelope, type PlannerEnvelope, type ReviewerEnvelope } from "./envelope.js";
 import { runAgent, type AgentActivity, type AgentRunResult } from "./run-agent.js";
 import { isRemoteToolName, type RemoteEventSink } from "./remote-protocol.js";

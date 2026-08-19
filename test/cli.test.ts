@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { test } from "node:test";
-import { listAgents, loadAgentFile } from "../src/agents.js";
+import { listAgents, loadAgentFile } from "../src/agents/index.js";
 import { agentExitCode, HELP, main, parseCli } from "../src/cli.js";
 import { MAX_TIMEOUT_SECONDS } from "../src/plan.js";
 

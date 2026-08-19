@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { listAgents } from "./agents.js";
+import { listAgents } from "./agents/index.js";
 import { runPlan, type PlanOptions } from "./plan.js";
 import { runWorkerLifecycle, type WorkerLifecycleOptions } from "./worker.js";
 import { runController, type ControllerOptions } from "./controller.js";

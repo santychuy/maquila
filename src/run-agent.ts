@@ -11,7 +11,7 @@ import {
   type AgentSessionEvent,
   type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
-import type { AgentDefinition } from "./agents.js";
+import type { AgentDefinition } from "./agents/index.js";
 import {
   createSubmitEnvelopeTool,
   envelopeCorrectionPrompt,

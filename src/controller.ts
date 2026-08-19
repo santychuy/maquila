@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, resolve } from "node:path";
-import { loadAgent } from "./agents.js";
+import { loadAgent } from "./agents/index.js";
 import { createIntake } from "./intake.js";
 import { publishGitHubPullRequest, type GitHubPublication } from "./github.js";
 import { parseEnvelope } from "./envelope.js";

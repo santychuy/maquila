@@ -1,7 +1,7 @@
 import { StringDecoder } from "node:string_decoder";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
-import { ALLOWED_AGENT_TOOLS } from "./agents.js";
+import { ALLOWED_AGENT_TOOLS } from "./agents/index.js";
 
 export const MAX_REMOTE_FRAME_BYTES = 64 * 1024;
 export const MAX_REMOTE_FRAMES = 20_000;

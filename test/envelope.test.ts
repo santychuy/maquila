@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { test } from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { AgentDefinition } from "../src/agents.js";
+import type { AgentDefinition } from "../src/agents/index.js";
 import {
   createSubmitEnvelopeTool,
   envelopeCorrectionPrompt,

@@ -14,7 +14,7 @@ All three role schemas run locally and through `factory run` in a fresh exe.dev 
 
 ## Implemented primitives
 
-- `src/agents.ts` loads and fail-closed validates Markdown agent definitions.
+- `src/agents/index.ts` loads and fail-closed validates Markdown agent definitions.
 - `src/run-agent.ts` exposes generic `runAgent()` and records session, lifecycle events, receipt, timeout, and envelope results.
 - `src/envelope.ts` defines role schemas, `parseEnvelope()`, correction prompt, submit tool, and planner rendering.
 - `src/plan.ts` exposes the executable planner path and writes `plan.md` from its accepted planner envelope.

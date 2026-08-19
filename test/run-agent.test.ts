@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { test } from "node:test";
-import type { AgentDefinition } from "../src/agents.js";
+import type { AgentDefinition } from "../src/agents/index.js";
 import { runAgent, runArtifactNameErrors } from "../src/run-agent.js";
 import { createRunArtifacts } from "../src/run-artifacts.js";
 
