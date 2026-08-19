@@ -43,7 +43,9 @@ The lock and recovery model is single-host and serial. A timed-out SSH command m
 
 ## Factory DX
 
-Build and link the current-platform standalone executable with `bun run build` then `bun link`. Commands target current working directory by default; `--target PATH` overrides it. Human output is default; `--json` is machine mode. The global command stays linked to the checkout because runtime agent definitions, skill files, and the source archive remain repository-owned.
+Build and link the current-platform standalone executable with `bun run build` then `bun link`. Commands target current working directory by default; `--target PATH` overrides it. Human output is default; `--json` is machine mode. The global command stays linked to the checkout because runtime agent definitions, skill files, and the source archive remain repository-owned. `bun run build:binary` rebuilds only `dist/factory`; check `test -x ./dist/factory` before linking, or run `factory doctor`, which reports a missing binary and its `bun run build` remedy.
+
+`dist/factory` is a Bun-compiled native executable for the OS and CPU where it was built. Do not copy one platform's binary to another. During `factory run`, the controller copies the checkout to the exe.dev VM, runs `bun install --frozen-lockfile`, builds there with Bun, then runs that VM-local `dist/factory` for planning, worker, verification, and review. The host's linked command is not the remote runtime.
 
 `factory setup` writes strict mode-`0600` config under `$XDG_CONFIG_HOME/factory/config.json` or `~/.config/factory/config.json`. It may store only an optional Linear `op://Vault/Item/field` reference and may install user-scope Pi skill with `--install-skill`. `factory doctor` checks config, target, credentials, SSH, built CLI, and skill, and reports remediation.
 
