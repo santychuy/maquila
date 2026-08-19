@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   closeSync,
@@ -67,10 +68,17 @@ function live(pid: number): boolean {
   }
 }
 
-/** Linux-stable process birth identity. Undefined elsewhere fails conservative. */
+/** Stable process birth identity on supported host platforms. */
 export function linuxProcessIdentity(pid: number): string | undefined {
   if (!Number.isSafeInteger(pid) || pid < 1) return undefined;
   try {
+    if (process.platform === "darwin") {
+      const startedAt = execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      return startedAt ? `darwin:${startedAt}` : undefined;
+    }
     const bootId = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
     const close = stat.lastIndexOf(")");
