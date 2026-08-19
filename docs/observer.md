@@ -15,6 +15,15 @@ factory doctor
 
 Run commands use current working directory as target. Use `--target` for another repository; `--json` selects machine output.
 
+Human workflow:
+
+```bash
+factory dashboard
+factory run start --issue RIFF-52
+```
+
+`factory dashboard` starts the detached local dashboard when absent or reuses its healthy process, then prints its URL. Scripts and the Pi skill use the machine-compatible form:
+
 ```bash
 factory observer ensure --json
 factory run start --issue RIFF-52 --json
@@ -29,7 +38,7 @@ Foreground server behaves like development server:
 factory observer serve --port 4600
 ```
 
-`observer ensure --json` starts or reuses detached instance. `observer status --json` checks descriptor-bound health. `observer stop --json` signals only process whose instance, PID, health response, and stable process identity match private descriptor. Default is fixed `127.0.0.1:4600`; override with `--port` or `FACTORY_OBSERVER_PORT`. No automatic alternate port or OS boot service exists.
+`dashboard` and `observer ensure --json` start or reuse the same detached instance. `observer status --json` checks descriptor-bound health. `observer stop --json` signals only process whose instance, PID, health response, and stable process identity match private descriptor. Default is fixed `127.0.0.1:4600`; override with `--port` or `FACTORY_OBSERVER_PORT`. No automatic alternate port or OS boot service exists.
 
 ## Data contract
 

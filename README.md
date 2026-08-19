@@ -1,79 +1,260 @@
 # Software Factory
 
-Small local software factory that runs bounded planner, worker, verification, and independent-review sessions inside a fresh exe.dev VM. Controller keeps Linear/GitHub authority on host, harvests evidence and patch, destroys VM, then stops at `ready_for_publication`. Human owns merge or rejection.
+Software Factory takes a Linear issue, works on it inside a fresh exe.dev VM, verifies the change, runs an independent review, and opens a ready-for-review GitHub pull request. It never merges. A human owns that decision.
 
-## Install
+## What you need
 
-Requires Node.js `>=22.19.0` and pnpm `11.22.0`.
+- Node.js `>=22.19.0`
+- pnpm `11.22.0`
+- An exe.dev account
+- GitHub CLI (`gh`) authenticated to the target repository
+- A Linear personal API key or 1Password secret reference
+
+## Install once
 
 ```bash
+git clone git@github.com:santychuy/software-factory.git
+cd software-factory
+
+# Make Node use the pnpm version pinned by this repository.
 corepack enable
+
+# Install, build, and make `factory` available from any directory.
 pnpm install --frozen-lockfile
 pnpm run build
 pnpm link --global
-factory setup
+```
+
+Corepack is included with Node.js 22–24. With Node.js 25+, install it first:
+
+```bash
+npm install --global corepack@latest
+corepack enable
+```
+
+Confirm installation:
+
+```bash
+factory --help
+```
+
+## Connect GitHub
+
+```bash
+gh auth login
+```
+
+Factory reuses this login. For CI, `GITHUB_TOKEN` or `GH_TOKEN` also works.
+
+## Connect Linear
+
+Choose one option.
+
+### Shell or CI
+
+```bash
+export LINEAR_API_TOKEN=...
+```
+
+### 1Password
+
+```bash
+factory setup --linear-token-reference op://Vault/Linear/token
+```
+
+Factory stores only the `op://` reference, never the Linear key. Config lives at `$XDG_CONFIG_HOME/factory/config.json` or `~/.config/factory/config.json` with mode `0600`.
+
+## Connect exe.dev
+
+Factory uses SSH. If this works, you are ready:
+
+```bash
+ssh exe.dev whoami
+```
+
+Otherwise, create a dedicated key:
+
+```bash
+ssh-keygen \
+  -t ed25519 \
+  -C "software-factory" \
+  -f ~/.ssh/id_ed25519_exe
+```
+
+Add it to `~/.ssh/config`:
+
+```sshconfig
+Host exe.dev *.exe.xyz
+  IdentitiesOnly yes
+  IdentityFile ~/.ssh/id_ed25519_exe
+```
+
+Then connect and follow exe.dev registration:
+
+```bash
+ssh exe.dev
+```
+
+On first connection, verify the official exe.dev fingerprint before accepting it:
+
+```text
+SHA256:JJOP/lwiBGOMilfONPWZCXUrfK154cnJFXcqlsi6lPo
+```
+
+If a different fingerprint appears, stop.
+
+Existing exe.dev users can add the new public key from an authenticated session:
+
+```bash
+cat ~/.ssh/id_ed25519_exe.pub | ssh exe.dev ssh-key add
+```
+
+If the key has a passphrase, load it into your SSH agent:
+
+```bash
+ssh-add ~/.ssh/id_ed25519_exe
+```
+
+Alternative: skip SSH config and provide an absolute key path:
+
+```bash
+export FACTORY_EXE_IDENTITY="$HOME/.ssh/id_ed25519_exe"
+```
+
+Factory keeps the SSH key and agent on your host. It never copies them into the VM and explicitly disables agent forwarding.
+
+See exe.dev's official [SSH key setup](https://exe.dev/docs/faq/ssh-key) and [SSH key management](https://exe.dev/docs/cli-ssh-key) documentation.
+
+## Finish setup
+
+Install the optional Pi skill:
+
+```bash
+factory setup --install-skill
+```
+
+Now enter the repository you want Factory to change:
+
+```bash
+cd /path/to/your-project
 factory doctor
 ```
 
-`factory` uses current working directory as target by default. Pass `--target /absolute/path/to/repository` to override it. Commands print short human output by default; add `--json` for machine-readable output.
+`factory doctor` checks the current repository, GitHub, Linear, exe.dev SSH, the built CLI, and the Pi skill. If something is missing, it prints the command needed to fix it.
 
-`factory setup` writes strict mode-`0600` config at `$XDG_CONFIG_HOME/factory/config.json` (or `~/.config/factory/config.json`). It can store only an optional Linear `op://Vault/Item/field` reference and can install the user-scope Pi skill with `--install-skill`. `factory doctor [--target PATH]` checks config, target, credentials, SSH, built CLI, and skill; it reports remediation for failures and warnings.
+## Start your first run
 
-Credential precedence: GitHub uses `GITHUB_TOKEN`, then `GH_TOKEN`, then `gh auth token`; Linear uses `LINEAR_API_TOKEN`, then configured `op://` reference through `op read`. CI environment credentials remain supported. exe.dev identity is optional (`--identity` or `FACTORY_EXE_IDENTITY`, absolute path). Without it, OpenSSH config and agent are supported. `SSH_AUTH_SOCK` stays host-only and SSH sets `ForwardAgent=no`. Linear and GitHub credentials remain controller-side; target repository and VM receive no credentials.
+From the target repository:
 
-Runtime state currently remains under the Factory checkout in `.factory/`. There are no Linear OAuth, native keychain, or profile stores.
+```bash
+# Start or reuse the local read-only web dashboard.
+factory dashboard
 
-## Daily observed run
+# Start work for this Linear issue.
+factory run start --issue RIFF-52
+```
 
-Start or reuse read-only local observer:
+Expected output:
+
+```text
+Run: <run-id>
+Status: running
+Observer: http://127.0.0.1:4600/runs/<run-id>
+```
+
+Open that URL to watch progress.
+
+Factory will:
+
+1. Read the Linear issue.
+2. Create a fresh exe.dev VM.
+3. Plan and implement the change.
+4. Run deterministic verification.
+5. Run an independent review.
+6. Destroy the VM.
+7. Open a ready-for-review GitHub pull request.
+
+The dashboard is read-only. It shows progress, verification, review, cleanup, failures, and pull-request status. It cannot start, cancel, approve, or merge work.
+
+## Daily use
+
+```bash
+cd /path/to/your-project
+factory dashboard
+factory run start --issue RIFF-52
+```
+
+Run against another repository without changing directory:
+
+```bash
+factory run start \
+  --target /path/to/another-project \
+  --issue RIFF-52
+```
+
+Check a run without the dashboard:
+
+```bash
+factory run status --run-id <run-id>
+```
+
+## Use through Pi
+
+After `factory setup --install-skill`, open Pi from the target repository and run:
+
+```text
+/skill:software-factory Run RIFF-52 in this repository
+```
+
+The skill calls the same deterministic Factory CLI. It does not have a separate workflow or credential store.
+
+## Automation
+
+Human commands use short readable output. Scripts and the Pi skill use JSON:
 
 ```bash
 factory observer ensure --json
-```
-
-Start run against explicit target Git repository and return immediately:
-
-```bash
-cd /absolute/path/to/target-repository
 factory run start --issue RIFF-52 --json
-# Or from another directory:
-factory run start --target /absolute/path/to/target-repository --issue RIFF-52 --json
+factory run status --run-id <run-id> --json
 ```
 
-Use `observer.url` from `observer ensure --json` and `runId` from `run start --json` to open `<observer.url>/runs/<runId>` (normally `http://127.0.0.1:4600/runs/<run-id>`). Dashboard polls canonical host telemetry and shows live phase, safe tool activity, deterministic gates, reviewer result, cleanup, failures, and safe artifact metadata. It has no workflow controls.
+`factory observer ensure --json` is the machine-compatible form of `factory dashboard`: start the local dashboard if absent, otherwise reuse the healthy process.
 
-Check without browser:
+## Troubleshooting
+
+Start here:
 
 ```bash
-factory run status --run-id <run-id> --json
+factory doctor
+```
+
+Useful checks:
+
+```bash
+gh auth status
+ssh exe.dev whoami
 factory observer status --json
 ```
 
-Run observer in foreground, like a development server:
-
-```bash
-factory observer serve --port 4600
-```
-
-Stop only the descriptor- and health-verified observer process:
+Stop the dashboard process:
 
 ```bash
 factory observer stop --json
 ```
 
-Pi users can invoke `/skill:software-factory` from target repository. Skill requires only Linear issue ID and routes through installed `factory` commands.
+## Security and evidence
 
-## Evidence
+Linear and GitHub credentials stay in the host controller. The target repository and exe.dev VM do not receive them. Runtime evidence remains under the Factory checkout:
 
-- `.factory/telemetry/<run-id>.jsonl` — canonical safe live event ledger
-- `.factory/controllers/<run-id>/` — host controller state, patch, and harvested evidence
-- `.factory/runs/<run-id>/` — local/remote role receipts and transcripts
-- `.factory/observer.json` — private observer ownership descriptor
+- `.factory/telemetry/<run-id>.jsonl` — safe live event ledger
+- `.factory/controllers/<run-id>/` — controller state, patch, and harvested evidence
+- `.factory/runs/<run-id>/` — role receipts and transcripts
+- `.factory/observer.json` — private dashboard ownership descriptor
 
-All generated `.factory/` content is ignored by Git. Observer binds only `127.0.0.1`, accepts GET/HEAD only, serves no artifact content, and never exposes prompts, transcripts, reasoning, tool arguments/results, stdout/stderr, credentials, or repository files.
+Generated `.factory/` content is ignored by Git. The dashboard binds only to `127.0.0.1`, accepts read requests only, and does not expose credentials, prompts, transcripts, reasoning, tool arguments, command output, or repository files.
 
-See [docs/observer.md](docs/observer.md), [ARCHITECTURE.md](ARCHITECTURE.md), [docs/envelopes.md](docs/envelopes.md), and [docs/foundation-checkpoint.md](docs/foundation-checkpoint.md).
+## Current limits
 
-## Limits
+Fix passes, in-flight resume, automatic merge, deployment, credential profiles, Linear OAuth/native keychain storage, and guaranteed cleanup while exe.dev deletion is unavailable are not implemented.
 
-GitHub PR publication, fix pass, in-flight resume, automatic merge, deployment, and guaranteed cleanup while exe.dev deletion is unavailable remain absent. No credentialed live observer run has been recorded for this new slice yet; local fake lifecycle and deterministic tests are required before that smoke proof.
+For implementation details, see [docs/observer.md](docs/observer.md), [ARCHITECTURE.md](ARCHITECTURE.md), [docs/envelopes.md](docs/envelopes.md), and [docs/foundation-checkpoint.md](docs/foundation-checkpoint.md).

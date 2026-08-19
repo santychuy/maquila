@@ -28,7 +28,7 @@ Implemented now:
 - Controller-side Linear `Todo` issue and GitHub base-SHA snapshot primitives with credential-free hashes.
 - Executable `factory run`: single-host lock, restart cleanup, pinned Node/Bun bootstrap, remote planner/worker/verification/reviewer, evidence and patch harvest, VM destruction, then controller-side bot branch and ready-for-review pull-request publication.
 - Strict host telemetry with streaming remote phase/activity frames, accepted detached `run start`, and read-only `run status`.
-- Managed loopback observer server/UI with replay/cursor polling and factory-owned `.pi/skills/software-factory` command routing.
+- Managed loopback observer server/UI with replay/cursor polling, human `factory dashboard` startup alias, and factory-owned `.pi/skills/software-factory` command routing.
 - Global `factory` executable through `pnpm link --global`, with cwd target inference, `--target` override, human output, and explicit `--json` mode.
 - `factory setup` and `factory doctor` for strict XDG config, optional Linear `op://` reference, optional user-scope Pi skill, credential checks, and remediation.
 - Controller-side credential precedence for GitHub (`GITHUB_TOKEN`, `GH_TOKEN`, `gh auth token`) and Linear (`LINEAR_API_TOKEN`, then `op read`); optional exe.dev identity with OpenSSH config/agent support and no agent forwarding.
@@ -69,7 +69,7 @@ Current execution is not a security sandbox. Read-only tools stop mutation but d
 - `src/controller-lock.ts` and `src/controller.ts` — serial controller ownership, restart reconciliation, remote execution, harvest, and cleanup.
 - `src/telemetry.ts`, `src/remote-protocol.ts`, `src/run-launcher.ts`, and `src/run-status.ts` — bounded live event contract, detached accepted start, and safe status replay.
 - `src/observer.ts` and `src/observer-ui.ts` — loopback-only read API, managed server ownership, and accessible polling dashboard.
-- `src/cli.ts` — `agents list`, local Pi commands, remote run commands, observer commands, and exit-code handling.
+- `src/cli.ts` — `agents list`, setup/doctor, local Pi commands, remote run commands, human dashboard alias, observer machine commands, and exit-code handling.
 - `factory.verify.json` — this repository's argv verification commands.
 - `agents/*.md` — role metadata in YAML frontmatter and role system prompt in Markdown body.
 - `test/*.test.ts` — Node test-runner coverage for CLI, role boundaries, envelopes, failures, and artifact safety.
@@ -109,8 +109,8 @@ pnpm run factory -- pi plan \
 factory setup
 factory doctor
 cd /absolute/path/to/repository
-factory observer ensure --json
-factory run start --issue RIFF-52 --json
+factory dashboard
+factory run start --issue RIFF-52
 ```
 
 Planner execution requires Pi authentication for the selected model. It writes evidence under `.factory/` relative to the directory where the command runs. Exit codes are `0` for completion, `1` for failure, and `124` for timeout.
