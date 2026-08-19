@@ -1,1 +1,1 @@
-{"commands":[["node","-e","process.stdout.write('ok')"]]}
+{"commands":[["node","-e","process.exit(7)"]]}
