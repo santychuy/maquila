@@ -41,6 +41,14 @@ Telemetry/streaming, detached launcher, local observer server/UI, factory-owned 
 
 The lock and recovery model is single-host and serial. A timed-out SSH command may continue remotely until VM destruction succeeds; cleanup cannot be guaranteed while exe.dev control-plane deletion is unavailable. The controller restarts failed runs rather than resuming in-flight agent sessions. Publication fails closed if the target base branch moves after intake or if a deterministic factory branch already contains different content. Success currently requires a non-empty repository diff, so a planning outcome delivered only to Linear or another controller-owned external surface needs a later delivery contract. Agents still have OS-level access inside the VM; use trusted, non-sensitive repositories.
 
+## Factory DX
+
+Build and link global executable with `pnpm run build` then `pnpm link --global`. Commands target current working directory by default; `--target PATH` overrides it. Human output is default; `--json` is machine mode.
+
+`factory setup` writes strict mode-`0600` config under `$XDG_CONFIG_HOME/factory/config.json` or `~/.config/factory/config.json`. It may store only an optional Linear `op://Vault/Item/field` reference and may install user-scope Pi skill with `--install-skill`. `factory doctor` checks config, target, credentials, SSH, built CLI, and skill, and reports remediation.
+
+GitHub credential precedence: `GITHUB_TOKEN`, `GH_TOKEN`, `gh auth token`. Linear precedence: `LINEAR_API_TOKEN`, configured `op read` reference. exe.dev identity is optional through `--identity` or `FACTORY_EXE_IDENTITY`; OpenSSH config and agent are supported, `SSH_AUTH_SOCK` is host-only, and SSH uses `ForwardAgent=no`. Credentials remain controller-side; target repository and VM stay secret-free. Runtime state remains under Factory checkout. No Linear OAuth, native keychain, or profiles exist.
+
 ## Local tooling
 
 This repository uses pnpm `11.22.0`, pinned by `package.json` and recorded in `pnpm-lock.yaml`. Use `corepack enable` followed by `pnpm install --frozen-lockfile`; Node 25 and newer do not include Corepack, so install Corepack separately first. Do not restore an npm lockfile.
@@ -52,6 +60,8 @@ Husky is local only: pre-commit runs `pnpm exec lint-staged`, and pre-push runs 
 `pnpm-workspace.yaml` keeps lifecycle builds disabled for `@google/genai` and `protobufjs` (`allowBuilds: false`); no package-specific build approval is granted. There is no hosted CI workflow: checks run locally through these commands and hooks.
 
 ## Tests
+
+The verified DX checkpoint passes 158 tests (`pnpm test`), with zero failures and zero skips. This count records this checkpoint; it is not an evergreen promise.
 
 `pnpm test` covers role boundaries, envelopes, local worker/reviewer lifecycle failures, controller lock/recovery and fake remote lifecycle paths, tar and patch trust boundaries, artifact safety, verification and Git gates, Linear/GitHub input validation and publication, credential redaction, deterministic intake and publication identities, detached startup, telemetry replay, observer ownership, read-only HTTP boundaries, UI routes, and skill wiring.
 

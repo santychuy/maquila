@@ -15,9 +15,10 @@ test("factory skill is valid, thin, and routes only through public commands", ()
   assert.ok(body.trim().length > 0);
   assert.ok(body.split("\n").length < 500);
   assert.match(body, /observer ensure --json/);
-  assert.match(body, /run start --target/);
+  assert.match(body, /factory run start --issue/);
   assert.match(body, /run status --run-id/);
-  assert.match(body, /absolute target Git repository path/);
+  assert.doesNotMatch(body, /pnpm run factory/);
+  assert.doesNotMatch(body, /absolute target Git repository path/);
   assert.doesNotMatch(body, /ssh exe\.dev|curl .*exe\.dev|readFile|telemetryPath|destroyVm/);
   assert.match(body, /Never print environment values/);
 });

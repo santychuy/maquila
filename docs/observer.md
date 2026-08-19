@@ -4,21 +4,29 @@ Observer is read-only local view over controller-owned telemetry. It does not la
 
 ## Daily workflow
 
+Build and link global executable once, then configure host tools:
+
 ```bash
 pnpm run build
-pnpm run factory -- observer ensure --json
-pnpm run factory -- run start \
-  --target /absolute/path/to/target-repository \
-  --issue RIFF-52 \
-  --json
+pnpm link --global
+factory setup
+factory doctor
 ```
 
-`run start` returns accepted run ID before workflow completion. Open `<observer-url>/runs/<run-id>`. Pi users operating from trusted factory checkout may use `/skill:software-factory` with same issue ID and explicit target path.
+Run commands use current working directory as target. Use `--target` for another repository; `--json` selects machine output.
+
+```bash
+factory observer ensure --json
+factory run start --issue RIFF-52 --json
+factory run start --target /absolute/path/to/target-repository --issue RIFF-52 --json
+```
+
+`run start` returns accepted run ID before workflow completion. Open `<observer-url>/runs/<run-id>`. Pi users may use `/skill:software-factory` from target repository with only issue ID.
 
 Foreground server behaves like development server:
 
 ```bash
-pnpm run factory -- observer serve --port 4600
+factory observer serve --port 4600
 ```
 
 `observer ensure --json` starts or reuses detached instance. `observer status --json` checks descriptor-bound health. `observer stop --json` signals only process whose instance, PID, health response, and stable process identity match private descriptor. Default is fixed `127.0.0.1:4600`; override with `--port` or `FACTORY_OBSERVER_PORT`. No automatic alternate port or OS boot service exists.
@@ -53,6 +61,12 @@ Run summaries include `runtimeMilliseconds` and `phaseRuntimeMilliseconds`, calc
 ## Failure semantics
 
 Observer or browser outage never changes controller result. If canonical telemetry cannot be written, controller fails run safely and still attempts VM cleanup. Stale heartbeat displays `activity unknown`, not success or failure. Success appears only after validated evidence and completed cleanup.
+
+## Host credentials
+
+`factory setup` stores strict XDG config at `$XDG_CONFIG_HOME/factory/config.json` or `~/.config/factory/config.json`. It stores only an optional Linear `op://Vault/Item/field` reference; `--install-skill` optionally links the Factory Pi skill into the user scope. `factory doctor` checks config, target, GitHub and Linear credentials, SSH, built CLI, and skill, then prints remediation.
+
+GitHub precedence is `GITHUB_TOKEN`, `GH_TOKEN`, then `gh auth token`. Linear precedence is `LINEAR_API_TOKEN`, then `op read` of configured reference. exe.dev identity is optional through `--identity` or `FACTORY_EXE_IDENTITY`; OpenSSH config and agent work without it. `SSH_AUTH_SOCK` stays on host, and SSH uses `ForwardAgent=no`. Credentials remain controller-side; target repository and VM stay secret-free. Runtime state remains under Factory checkout. No Linear OAuth, native keychain, or profiles exist.
 
 ## Limits
 

@@ -1,7 +1,7 @@
 ---
 name: software-factory
-description: Start and observe this repository's deterministic software-factory workflow for a Linear issue against an explicit target Git repository. Use whenever the user asks to run the factory, build a Linear issue in a sandbox, start an observed factory run, or check a factory run's live status.
-compatibility: Requires this software-factory checkout, built CLI, Node.js, pnpm, exe.dev identity, and controller credentials.
+description: Start and observe this repository's deterministic software-factory workflow for a Linear issue against the current Git repository. Use whenever the user asks to run the factory, build a Linear issue in a sandbox, start an observed factory run, or check a factory run's live status.
+compatibility: Requires the factory CLI on PATH, Node.js, and controller credentials.
 ---
 
 # Software Factory
@@ -10,19 +10,11 @@ Route user intent through checked-in deterministic commands. Controller owns wor
 
 ## Start a run
 
-Require both:
-
-- Linear issue identifier, such as `RIFF-52`
-- absolute target Git repository path
-
-Do not infer target from factory repository. If either value is missing, ask for it.
-
-From factory repository root:
+Require a Linear issue identifier, such as `RIFF-52`. Infer the target from the current working directory. If the issue is missing, ask for it.
 
 ```bash
-pnpm run build
-pnpm run factory -- observer ensure --json
-pnpm run factory -- run start --target "<absolute-target-path>" --issue "<issue-id>" --json
+factory observer ensure --json
+factory run start --issue "<issue-id>" --json
 ```
 
 Read command JSON only. Return accepted run ID and observer URL:
@@ -40,7 +32,7 @@ Do not wait for completion after accepted startup.
 Use run ID returned by start:
 
 ```bash
-pnpm run factory -- run status --run-id "<run-id>" --json
+factory run status --run-id "<run-id>" --json
 ```
 
 Report status, phase, current safe tool name, last activity, cleanup, failure, pull-request metadata, and safe artifact metadata exactly as command returns. A later controller failure is run outcome, not skill execution failure. A completed run must include the ready-for-review pull-request URL.
@@ -49,9 +41,9 @@ Report status, phase, current safe tool name, last activity, cleanup, failure, p
 
 Explain only actionable public errors:
 
-- missing `LINEAR_API_TOKEN` or `GITHUB_TOKEN`: configure required controller credentials
+- missing Linear or GitHub credentials: run `factory doctor` and configure `LINEAR_API_TOKEN` or `GITHUB_TOKEN`
 - GitHub publication `403`: use a fine-grained token for the target repository with Contents and Pull requests write permissions
-- missing or invalid `FACTORY_EXE_IDENTITY`: configure absolute exe.dev identity path
+- invalid `FACTORY_EXE_IDENTITY`: configure an absolute exe.dev identity path only when OpenSSH defaults are insufficient
 - target ambiguity: provide supported GitHub origin and resolvable remote default branch, or explicit safe overrides
 - factory busy: wait for active serial controller run
 - observer port conflict/unhealthy process: inspect `observer status --json`; do not kill unrelated process

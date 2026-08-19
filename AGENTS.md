@@ -29,12 +29,16 @@ Implemented now:
 - Executable `factory run`: single-host lock, restart cleanup, pinned Node/Bun bootstrap, remote planner/worker/verification/reviewer, evidence and patch harvest, VM destruction, then controller-side bot branch and ready-for-review pull-request publication.
 - Strict host telemetry with streaming remote phase/activity frames, accepted detached `run start`, and read-only `run status`.
 - Managed loopback observer server/UI with replay/cursor polling and factory-owned `.pi/skills/software-factory` command routing.
+- Global `factory` executable through `pnpm link --global`, with cwd target inference, `--target` override, human output, and explicit `--json` mode.
+- `factory setup` and `factory doctor` for strict XDG config, optional Linear `op://` reference, optional user-scope Pi skill, credential checks, and remediation.
+- Controller-side credential precedence for GitHub (`GITHUB_TOKEN`, `GH_TOKEN`, `gh auth token`) and Linear (`LINEAR_API_TOKEN`, then `op read`); optional exe.dev identity with OpenSSH config/agent support and no agent forwarding.
 
 Not implemented yet:
 
 - Fix pass and in-flight session resume.
 - Planning outcomes delivered only to controller-owned external surfaces; current success still requires a non-empty repository diff.
 - Guaranteed hard termination when exe.dev cleanup itself is unavailable.
+- Runtime state is still stored under the Factory checkout. Linear OAuth, native keychain storage, and credential profiles are not implemented.
 
 See `ARCHITECTURE.md` for target design and build order. See `docs/foundation-checkpoint.md` for verified current state.
 
@@ -102,8 +106,11 @@ pnpm run factory -- pi plan \
   --issue ./examples/issue.md \
   --model provider/model \
   --timeout-seconds 300
-pnpm run factory -- observer ensure --json
-pnpm run factory -- run start --target /absolute/path/to/repository --issue RIFF-52 --json
+factory setup
+factory doctor
+cd /absolute/path/to/repository
+factory observer ensure --json
+factory run start --issue RIFF-52 --json
 ```
 
 Planner execution requires Pi authentication for the selected model. It writes evidence under `.factory/` relative to the directory where the command runs. Exit codes are `0` for completion, `1` for failure, and `124` for timeout.
