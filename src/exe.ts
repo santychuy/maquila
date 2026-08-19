@@ -16,6 +16,8 @@ const SSH_OPTIONS = [
   "ServerAliveCountMax=2",
   "-o",
   "HostKeyAlias=exe.dev",
+  "-o",
+  "ForwardAgent=no",
 ];
 
 export interface ExecResult {
@@ -47,6 +49,14 @@ export function externalCommandEnvironment(
   return Object.fromEntries(
     SAFE_ENV_KEYS.flatMap((key) => (source[key] === undefined ? [] : [[key, source[key]]])),
   );
+}
+
+export function sshCommandEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env = externalCommandEnvironment(source);
+  const sock = source.SSH_AUTH_SOCK;
+  if (sock === undefined) return env;
+  if (sock.includes("\0") || !sock.trim()) throw new Error("SSH_AUTH_SOCK is invalid");
+  return { ...env, SSH_AUTH_SOCK: sock };
 }
 
 export type ExeRunner = (file: string, args: string[], options: RunOptions) => Promise<ExecResult>;
@@ -231,7 +241,7 @@ export class ExeClient {
     this.connectionOptions = identityFile
       ? [...SSH_OPTIONS, "-o", "IdentitiesOnly=yes", "-i", safeLocalPath(identityFile)]
       : SSH_OPTIONS;
-    this.commandEnv = externalCommandEnvironment(environment);
+    this.commandEnv = sshCommandEnvironment(environment);
   }
 
   private async invoke(

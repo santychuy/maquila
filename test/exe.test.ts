@@ -3,7 +3,9 @@ import { test } from "node:test";
 import {
   ExeClient,
   ExeCommandError,
+  externalCommandEnvironment,
   quoteRemoteArg,
+  sshCommandEnvironment,
   type ExeRunner,
   type ExeStreamRunner,
   type ExecResult,
@@ -68,6 +70,14 @@ test("create VM uses fixed image, safe tag, and validates response", async () =>
   assert.equal(fake.calls[0]?.timeout, 12_345);
 });
 
+test("identity-less client uses OpenSSH defaults without agent forwarding", async () => {
+  const fake = runner([{ stdout: JSON.stringify({ vms: [] }), stderr: "" }]);
+  await new ExeClient(fake.run, 30_000).listVms();
+  assert.equal(fake.calls[0]?.args.includes("-i"), false);
+  assert.equal(fake.calls[0]?.args.includes("-A"), false);
+  assert.ok(fake.calls[0]?.args.includes("BatchMode=yes"));
+});
+
 test("dedicated SSH identity supports unattended commands", async () => {
   const fake = runner([{ stdout: JSON.stringify({ vms: [] }), stderr: "" }]);
   await new ExeClient(fake.run, 30_000, "/tmp/factory-key").listVms();
@@ -91,12 +101,39 @@ test("external commands receive only operational environment", async () => {
     LINEAR_API_TOKEN: "linear-secret",
     GITHUB_TOKEN: "github-secret",
     UNRELATED_SECRET: "other-secret",
+    SSH_AUTH_SOCK: "/tmp/agent.sock",
   }).listVms();
   assert.deepEqual(fake.calls[0]?.env, {
     PATH: "/usr/bin:/bin",
     HOME: "/tmp/home",
     LANG: "C.UTF-8",
+    SSH_AUTH_SOCK: "/tmp/agent.sock",
   });
+  assert.equal(fake.calls[0]?.args.includes("-A"), false);
+  assert.deepEqual(
+    fake.calls[0]?.args.slice(
+      fake.calls[0].args.indexOf("ForwardAgent=no") - 1,
+      fake.calls[0].args.indexOf("ForwardAgent=no") + 1,
+    ),
+    ["-o", "ForwardAgent=no"],
+  );
+  assert.deepEqual(
+    externalCommandEnvironment({
+      PATH: "/usr/bin:/bin",
+      SSH_AUTH_SOCK: "/tmp/agent.sock",
+      LINEAR_API_TOKEN: "linear-secret",
+    }),
+    { PATH: "/usr/bin:/bin" },
+  );
+  assert.equal(
+    sshCommandEnvironment({ PATH: "/bin", SSH_AUTH_SOCK: "/tmp/agent.sock" }).SSH_AUTH_SOCK,
+    "/tmp/agent.sock",
+  );
+  assert.throws(
+    () => sshCommandEnvironment({ SSH_AUTH_SOCK: "bad\0sock" }),
+    /SSH_AUTH_SOCK is invalid/,
+  );
+  assert.throws(() => sshCommandEnvironment({ SSH_AUTH_SOCK: "   " }), /SSH_AUTH_SOCK is invalid/);
 });
 
 test("create and list reject malformed JSON and VM identity", async () => {
