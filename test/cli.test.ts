@@ -199,6 +199,19 @@ test("JSON command errors remain strict and bounded", async () => {
   });
 });
 
+test("dashboard is human alias for idempotent observer startup", () => {
+  assert.deepEqual(parseCli(["dashboard"]), {
+    command: "dashboard",
+    port: 4600,
+  });
+  assert.deepEqual(parseCli(["dashboard", "--port", "4700"]), {
+    command: "dashboard",
+    port: 4700,
+  });
+  assert.throws(() => parseCli(["dashboard", "--json"]), /unsupported option/);
+  assert.match(HELP, /factory dashboard/);
+});
+
 test("observer commands expose explicit server and JSON management contracts", () => {
   assert.deepEqual(parseCli(["observer", "serve"]), {
     command: "observer-serve",

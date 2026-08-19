@@ -36,6 +36,7 @@ Lists agents or runs planner, worker/reviewer, and remote controller workflows.
   factory run --issue ID --owner OWNER --repo REPO --base-ref REF --tag TAG [--identity ABS] [--timeout-seconds 900]
   factory run start --issue ID [--target PATH] [--owner OWNER] [--repo REPO] [--base-ref REF] [--tag TAG] [--identity ABS] [--timeout-seconds 900] [--json]
   factory run status --run-id UUID [--json]
+  factory dashboard [--port 4600]
   factory observer serve [--port 4600]
   factory observer ensure [--port 4600] --json
   factory observer status --json
@@ -72,7 +73,7 @@ interface RunStatusCommand {
   timeoutSeconds?: undefined;
 }
 interface ObserverServeCommand {
-  command: "observer-serve" | "observer-ensure";
+  command: "dashboard" | "observer-serve" | "observer-ensure";
   port: number;
   timeoutSeconds?: undefined;
 }
@@ -184,6 +185,10 @@ export function parseCli(args: string[]): ParsedCli {
   if (command === "agents list") {
     rejectOptions(values, []);
     return "list-agents";
+  }
+  if (command === "dashboard") {
+    rejectOptions(values, ["port"]);
+    return { command: "dashboard", port: observerPort(values.port) };
   }
   if (command === "observer serve") {
     rejectOptions(values, ["port"]);
@@ -318,7 +323,7 @@ export function parseCli(args: string[]): ParsedCli {
   }
   if (command !== "pi plan")
     throw new Error(
-      "Expected command: agents list, setup, doctor, pi plan, pi worker, run, run start, run status, or observer",
+      "Expected command: agents list, setup, doctor, pi plan, pi worker, run, run start, run status, dashboard, or observer",
     );
   rejectOptions(values, ["repo", "issue", "model", "timeout-seconds", "machine"]);
   if (!values.repo || !values.issue || !values.model)
@@ -352,7 +357,7 @@ async function writeHumanStart(root: string, runId: string): Promise<void> {
   process.stdout.write(`Run: ${runId}\nStatus: running\n`);
   const observer = await observerStatus(root);
   if (observer) process.stdout.write(`Observer: ${observer.url}/runs/${runId}\n`);
-  else process.stdout.write("Start observer with: factory observer ensure --json\n");
+  else process.stdout.write("Start dashboard with: factory dashboard\n");
 }
 
 function writeHumanStatus(status: RunStatusSummary): void {
@@ -456,19 +461,17 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         await serveObserver({ root, port: options.port, instanceId });
         return 0;
       }
-      if (options.command === "observer-ensure") {
+      if (options.command === "dashboard" || options.command === "observer-ensure") {
         const cliPath = process.argv[1];
         if (!cliPath) throw new Error("observer CLI path unavailable");
-        json({
-          version: 1,
-          ok: true,
-          observer: await ensureObserver({
-            root,
-            port: options.port,
-            cliPath,
-            env: process.env,
-          }),
+        const observer = await ensureObserver({
+          root,
+          port: options.port,
+          cliPath,
+          env: process.env,
         });
+        if (options.command === "observer-ensure") json({ version: 1, ok: true, observer });
+        else process.stdout.write(`Dashboard: ${observer.url}\n`);
         return 0;
       }
       if (options.command === "observer-status") {
