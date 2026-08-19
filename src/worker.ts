@@ -1,9 +1,11 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { loadAgent } from "./agents.js";
 import { parseEnvelope, type PlannerEnvelope, type ReviewerEnvelope } from "./envelope.js";
-import { runAgent, type AgentRunResult } from "./run-agent.js";
+import { runAgent, type AgentActivity, type AgentRunResult } from "./run-agent.js";
+import { isRemoteToolName, type RemoteEventSink } from "./remote-protocol.js";
 import { createRunArtifacts, type RunArtifacts } from "./run-artifacts.js";
 import {
   assertCleanBaseline,
@@ -26,6 +28,7 @@ export interface WorkerLifecycleOptions {
   root?: string;
   runAgent?: typeof runAgent;
   verifyRepository?: typeof verifyRepository;
+  onEvent?: RemoteEventSink;
 }
 
 export interface WorkerLifecycleResult {
@@ -57,30 +60,13 @@ function approvedPaths(plan: PlannerEnvelope): string[] {
   return paths;
 }
 
-function git(repo: string, args: string[], acceptExitOne = false): string {
-  try {
-    return execFileSync("git", args, { cwd: repo, encoding: "utf8", timeout: 10_000 });
-  } catch (error) {
-    if (
-      acceptExitOne &&
-      isRecord(error) &&
-      error.status === 1 &&
-      typeof error.stdout === "string"
-    ) {
-      return error.stdout;
-    }
-    throw error;
-  }
+function git(repo: string, args: string[]): string {
+  return execFileSync("git", args, { cwd: repo, encoding: "utf8", timeout: 10_000 });
 }
 
 function reviewDiff(repo: string): string {
-  const tracked = git(repo, ["diff", "--binary", "--no-ext-diff", "HEAD"]);
-  const untracked = git(repo, ["ls-files", "--others", "--exclude-standard", "-z"])
-    .split("\0")
-    .filter(Boolean)
-    .map((path) => git(repo, ["diff", "--binary", "--no-index", "--", "/dev/null", path], true))
-    .join("");
-  const patch = `${tracked}${untracked}`;
+  git(repo, ["add", "-A"]);
+  const patch = git(repo, ["diff", "--cached", "--binary", "--no-ext-diff", "HEAD"]);
   if (Buffer.byteLength(patch) > MAX_REVIEW_DIFF_BYTES) {
     throw new Error(`review diff exceeds ${MAX_REVIEW_DIFF_BYTES} bytes`);
   }
@@ -115,6 +101,50 @@ function writeLifecycle(
     artifacts: ["issue.md", "events.jsonl", "receipt.json", "lifecycle.json"],
     ...(typeof value.error === "string" ? { error: value.error } : {}),
   });
+}
+
+function activityEvent(
+  activity: AgentActivity,
+  actor: "worker" | "reviewer",
+  phase: "implementing" | "reviewing",
+): Parameters<RemoteEventSink>[0] {
+  if (activity.type === "tool_started") {
+    if (!isRemoteToolName(activity.toolName)) throw new Error(`unsupported ${actor} tool activity`);
+    return {
+      type: "tool_started",
+      actor,
+      phase,
+      sourceAt: activity.at,
+      toolName: activity.toolName,
+      toolCallId: activity.toolCallId,
+    };
+  }
+  if (activity.type === "tool_finished") {
+    if (!isRemoteToolName(activity.toolName)) throw new Error(`unsupported ${actor} tool activity`);
+    return {
+      type: "tool_finished",
+      actor,
+      phase,
+      sourceAt: activity.at,
+      toolName: activity.toolName,
+      toolCallId: activity.toolCallId,
+      isError: activity.isError,
+    };
+  }
+  const { at, ...event } = activity;
+  return { ...event, sourceAt: at, actor, phase };
+}
+
+function phaseEvent(
+  sink: RemoteEventSink | undefined,
+  type: "phase_started" | "phase_finished",
+  actor: "worker" | "verifier" | "reviewer",
+  phase: "implementing" | "verifying" | "reviewing",
+  status?: LifecycleStatus,
+): void {
+  const sourceAt = new Date().toISOString();
+  if (type === "phase_started") sink?.({ type, actor, phase, sourceAt });
+  else sink?.({ type, actor, phase, status: status!, sourceAt });
 }
 
 function promptIssue(issue: string, plan: PlannerEnvelope): string {
@@ -162,6 +192,7 @@ export async function runWorkerLifecycle(
   const run = options.runAgent ?? runAgent;
   const verify = options.verifyRepository ?? verifyRepository;
   let worker: AgentRunResult;
+  phaseEvent(options.onEvent, "phase_started", "worker", "implementing");
   try {
     worker = await run({
       agent: loadAgent("worker"),
@@ -172,8 +203,12 @@ export async function runWorkerLifecycle(
       artifacts: workerArtifacts,
       envelopeRole: "worker",
       receiptContext: { baseSha: options.baseSha },
+      onActivity: options.onEvent
+        ? (activity) => options.onEvent?.(activityEvent(activity, "worker", "implementing"))
+        : undefined,
     });
   } catch (error) {
+    phaseEvent(options.onEvent, "phase_finished", "worker", "implementing", "failed");
     writeLifecycle(workerArtifacts, {
       status: "failed",
       stage: "worker",
@@ -182,6 +217,7 @@ export async function runWorkerLifecycle(
     return { status: "failed", runDir: workerArtifacts.runDir };
   }
 
+  phaseEvent(options.onEvent, "phase_finished", "worker", "implementing", worker.status);
   if (worker.status !== "completed" || !worker.envelope) {
     writeLifecycle(workerArtifacts, {
       status: worker.status,
@@ -192,6 +228,7 @@ export async function runWorkerLifecycle(
   }
 
   let verification: VerificationResult;
+  phaseEvent(options.onEvent, "phase_started", "verifier", "verifying");
   try {
     verification = await verify({
       repo: options.repo,
@@ -200,6 +237,7 @@ export async function runWorkerLifecycle(
       commandTimeoutMs: options.timeoutSeconds * 1000,
     });
   } catch (error) {
+    phaseEvent(options.onEvent, "phase_finished", "verifier", "verifying", "failed");
     workerArtifacts.writeJson("verification.json", {
       passed: false,
       error: error instanceof Error ? error.message : String(error),
@@ -213,6 +251,27 @@ export async function runWorkerLifecycle(
     return { status: "failed", runDir: worker.runDir };
   }
 
+  options.onEvent?.({
+    type: "gate_finished",
+    actor: "verifier",
+    phase: "verifying",
+    passed: verification.passed,
+    commandCount: verification.commands.length,
+    changedPathCount: verification.git.changedPaths.length,
+    timedOut: verification.commands.some((command) => command.timedOut),
+    sourceAt: new Date().toISOString(),
+  });
+  phaseEvent(
+    options.onEvent,
+    "phase_finished",
+    "verifier",
+    "verifying",
+    verification.passed
+      ? "completed"
+      : verification.commands.some((command) => command.timedOut)
+        ? "timed_out"
+        : "failed",
+  );
   workerArtifacts.writeJson("verification.json", verification);
   addArtifact(workerArtifacts, "verification.json");
   if (!verification.passed) {
@@ -230,6 +289,11 @@ export async function runWorkerLifecycle(
   let patch: string;
   try {
     patch = reviewDiff(options.repo);
+    workerArtifacts.write(
+      "review-diff.sha256",
+      `${createHash("sha256").update(patch).digest("hex")}\n`,
+    );
+    addArtifact(workerArtifacts, "review-diff.sha256");
   } catch (error) {
     writeLifecycle(workerArtifacts, {
       status: "failed",
@@ -241,6 +305,7 @@ export async function runWorkerLifecycle(
   }
 
   const reviewerArtifacts = createRunArtifacts(issue, options.root);
+  phaseEvent(options.onEvent, "phase_started", "reviewer", "reviewing");
   const reviewPrompt = `Issue:\n${issue}\n\nAccepted plan:\n${JSON.stringify(plan, null, 2)}\n\nGit diff:\n${patch}\n\nDeterministic verification:\n${JSON.stringify(verification, null, 2)}\nReview implementation. Submit reviewer envelope.`;
   let reviewer: AgentRunResult;
   try {
@@ -253,8 +318,12 @@ export async function runWorkerLifecycle(
       artifacts: reviewerArtifacts,
       envelopeRole: "reviewer",
       receiptContext: { baseSha: options.baseSha, workerRunId: worker.receipt.runId },
+      onActivity: options.onEvent
+        ? (activity) => options.onEvent?.(activityEvent(activity, "reviewer", "reviewing"))
+        : undefined,
     });
   } catch (error) {
+    phaseEvent(options.onEvent, "phase_finished", "reviewer", "reviewing", "failed");
     writeLifecycle(workerArtifacts, {
       status: "failed",
       stage: "reviewer",
@@ -271,6 +340,7 @@ export async function runWorkerLifecycle(
   }
 
   if (reviewer.status !== "completed" || !reviewer.envelope) {
+    phaseEvent(options.onEvent, "phase_finished", "reviewer", "reviewing", reviewer.status);
     const lifecycle = {
       status: reviewer.status,
       stage: "reviewer",
@@ -289,6 +359,7 @@ export async function runWorkerLifecycle(
   }
 
   if (!("verdict" in reviewer.envelope)) {
+    phaseEvent(options.onEvent, "phase_finished", "reviewer", "reviewing", "failed");
     const lifecycle = {
       status: "failed" as const,
       stage: "reviewer",
@@ -309,12 +380,25 @@ export async function runWorkerLifecycle(
 
   const envelope: ReviewerEnvelope = reviewer.envelope;
   const status: LifecycleStatus = envelope.verdict === "PASS" ? "completed" : "failed";
+  options.onEvent?.({
+    type: "review_finished",
+    actor: "reviewer",
+    phase: "reviewing",
+    verdict: envelope.verdict,
+    blockerCount: envelope.blockingFindings.length,
+    sourceAt: new Date().toISOString(),
+  });
+  phaseEvent(options.onEvent, "phase_finished", "reviewer", "reviewing", status);
   const lifecycle = {
     status,
     stage: "reviewer",
+    baseSha: options.baseSha,
+    allowedPaths: paths,
     workerRunId: worker.receipt.runId,
     workerRunDir: worker.runDir,
+    reviewerRunId: reviewer.receipt.runId,
     reviewerRunDir: reviewer.runDir,
+    reviewPatchSha256: createHash("sha256").update(patch).digest("hex"),
     verification,
   };
   writeLifecycle(workerArtifacts, lifecycle);

@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
   createAgentSession,
@@ -74,6 +74,18 @@ export function runArtifactNameErrors(names: string[], runDir: string): string[]
   return errors;
 }
 
+export type AgentActivity =
+  | { type: "agent_started"; at: string }
+  | { type: "agent_finished"; at: string; status: "completed" | "failed" }
+  | { type: "tool_started"; at: string; toolCallId: string; toolName: string }
+  | {
+      type: "tool_finished";
+      at: string;
+      toolCallId: string;
+      toolName: string;
+      isError: boolean;
+    };
+
 export interface RunAgentOptions {
   agent: AgentDefinition;
   cwd: string;
@@ -85,6 +97,7 @@ export interface RunAgentOptions {
   /** When set, the agent must submit a valid role envelope via submit_envelope as its final action. */
   envelopeRole?: EnvelopeRole;
   onTextDelta?: (delta: string) => void;
+  onActivity?: (activity: AgentActivity) => void;
   onCompleted?: (
     finalText: string,
     artifacts: RunArtifacts,
@@ -99,6 +112,14 @@ export interface AgentRunResult {
   /** Validated role envelope; set only on completed envelope-mode runs. */
   envelope?: Envelope;
   receipt: RunReceipt;
+}
+
+function privatizeSessionFiles(path: string): void {
+  if (!existsSync(path)) return;
+  const metadata = statSync(path);
+  chmodSync(path, metadata.isDirectory() ? 0o700 : 0o600);
+  if (metadata.isDirectory())
+    for (const name of readdirSync(path)) privatizeSessionFiles(join(path, name));
 }
 
 function isolatedResources(systemPrompt: string): ResourceLoader {
@@ -231,6 +252,29 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
     const unsubscribe = session.subscribe((event) => {
       const record = eventRecord(event);
       if (record) artifacts.appendEvent(record);
+      const at = new Date().toISOString();
+      if (event.type === "agent_start") options.onActivity?.({ type: "agent_started", at });
+      if (event.type === "agent_end")
+        options.onActivity?.({
+          type: "agent_finished",
+          at,
+          status: event.willRetry ? "failed" : "completed",
+        });
+      if (event.type === "tool_execution_start")
+        options.onActivity?.({
+          type: "tool_started",
+          at,
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+        });
+      if (event.type === "tool_execution_end")
+        options.onActivity?.({
+          type: "tool_finished",
+          at,
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          isError: event.isError,
+        });
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
         options.onTextDelta?.(event.assistantMessageEvent.delta);
       }
@@ -360,6 +404,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       receipt.stats ??= session.getSessionStats();
       session.dispose();
     }
+    privatizeSessionFiles(artifacts.sessionsDir);
     receipt.finishedAt = new Date().toISOString();
     artifacts.writeJson("receipt.json", receipt);
   }

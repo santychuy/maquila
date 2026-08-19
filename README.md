@@ -1,40 +1,77 @@
 # Software Factory
 
-Small internal software factory, built one proven slice at a time.
+Small local software factory that runs bounded planner, worker, verification, and independent-review sessions inside a fresh exe.dev VM. Controller keeps Linear/GitHub authority on host, harvests evidence and patch, destroys VM, then stops at `ready_for_publication`. Human owns merge or rejection.
 
-Current foundation loads validated specialist definitions, runs planner through Pi SDK, and validates typed role envelopes.
+## Install
+
+Requires Node.js `>=22.19.0` and pnpm `11.22.0`.
 
 ```bash
 corepack enable
 pnpm install --frozen-lockfile
 pnpm run build
-pnpm run factory -- agents list
-pnpm run factory -- pi plan \
-  --repo /absolute/path/to/repository \
-  --issue ./examples/issue.md \
-  --model provider/model \
-  --timeout-seconds 300
+pnpm check
 ```
 
-Evidence lands under `.factory/runs/<run-id>/`:
+Set controller credentials without printing them:
 
-- `issue.md`: snapshotted input
-- `events.jsonl`: concise Pi lifecycle events
-- `plan.md`: planner output, present only for completed runs
-- `receipt.json`: issue hash, base SHA, model, session, usage, cost, status
+```bash
+export LINEAR_API_TOKEN=...
+export GITHUB_TOKEN=...
+export FACTORY_EXE_IDENTITY=/absolute/path/to/exe-dev-key
+```
 
-Agent definitions live in `agents/*.md`: YAML frontmatter holds metadata, access class, and tool allowlist; Markdown body is system prompt. Shape is inspired by pi-subagents, with stricter factory validation. Standalone YAML and TOML are not used.
+## Daily observed run
 
-Defined roles:
+Start or reuse read-only local observer:
 
-- `planner`: read-only repository planning
-- `worker`: sole writer with shell and file mutation tools
-- `reviewer`: fresh, read-only independent review
+```bash
+pnpm run factory -- observer ensure --json
+```
 
-Only planner is wired to executable step today. Model must already have authentication available to Pi.
+Start run against explicit target Git repository and return immediately:
 
-Current timeout is cooperative through Pi SDK. Future controller will enforce hard wall time by terminating VM. Read-only tools prevent mutation, not reads outside repository or source disclosure to model provider. Use only trusted, non-sensitive repositories until sandbox boundary exists.
+```bash
+pnpm run factory -- run start \
+  --target /absolute/path/to/target-repository \
+  --issue RIFF-52 \
+  --json
+```
 
-Evidence root is `.factory/` under directory where command runs.
+Use `observer.url` from `observer ensure --json` and `runId` from `run start --json` to open `<observer.url>/runs/<runId>` (normally `http://127.0.0.1:4600/runs/<run-id>`). Dashboard polls canonical host telemetry and shows live phase, safe tool activity, deterministic gates, reviewer result, cleanup, failures, and safe artifact metadata. It has no workflow controls.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for full blueprint and build order, [docs/envelopes.md](docs/envelopes.md) for the envelope model, and [docs/foundation-checkpoint.md](docs/foundation-checkpoint.md) for a verified snapshot of what exists today.
+Check without browser:
+
+```bash
+pnpm run factory -- run status --run-id <run-id> --json
+pnpm run factory -- observer status --json
+```
+
+Run observer in foreground, like a development server:
+
+```bash
+pnpm run factory -- observer serve --port 4600
+```
+
+Stop only the descriptor- and health-verified observer process:
+
+```bash
+pnpm run factory -- observer stop --json
+```
+
+Pi users in this trusted repository can invoke `/skill:software-factory`. Skill requires Linear issue ID and absolute target-repository path, then routes through deterministic commands above.
+
+## Evidence
+
+- `.factory/telemetry/<run-id>.jsonl` — canonical safe live event ledger
+- `.factory/controllers/<run-id>/` — host controller state, patch, and harvested evidence
+- `.factory/runs/<run-id>/` — local/remote role receipts and transcripts
+- `.factory/observer.json` — private observer ownership descriptor
+
+All generated `.factory/` content is ignored by Git. Observer binds only `127.0.0.1`, accepts GET/HEAD only, serves no artifact content, and never exposes prompts, transcripts, reasoning, tool arguments/results, stdout/stderr, credentials, or repository files.
+
+See [docs/observer.md](docs/observer.md), [ARCHITECTURE.md](ARCHITECTURE.md), [docs/envelopes.md](docs/envelopes.md), and [docs/foundation-checkpoint.md](docs/foundation-checkpoint.md).
+
+## Limits
+
+GitHub PR publication, fix pass, in-flight resume, automatic merge, deployment, and guaranteed cleanup while exe.dev deletion is unavailable remain absent. No credentialed live observer run has been recorded for this new slice yet; local fake lifecycle and deterministic tests are required before that smoke proof.

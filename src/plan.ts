@@ -4,7 +4,8 @@ import { readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { loadAgent } from "./agents.js";
 import { renderPlannerPlan } from "./envelope.js";
-import { runAgent, type AgentRunStatus } from "./run-agent.js";
+import { runAgent, type AgentActivity, type AgentRunStatus } from "./run-agent.js";
+import { isRemoteToolName, type RemoteEventSink } from "./remote-protocol.js";
 import { createRunArtifacts } from "./run-artifacts.js";
 
 export const MAX_TIMEOUT_SECONDS = 1800;
@@ -14,6 +15,8 @@ export interface PlanOptions {
   issue: string;
   model: string;
   timeoutSeconds: number;
+  machine?: boolean;
+  onEvent?: RemoteEventSink;
 }
 
 export type PlanStatus = AgentRunStatus;
@@ -40,6 +43,34 @@ function validateRepo(path: string): void {
   git(path, "rev-parse", "--is-inside-work-tree");
 }
 
+function activityEvent(activity: AgentActivity): Parameters<RemoteEventSink>[0] {
+  if (activity.type === "tool_started") {
+    if (!isRemoteToolName(activity.toolName)) throw new Error("unsupported planner tool activity");
+    return {
+      type: "tool_started",
+      actor: "planner",
+      phase: "planning",
+      sourceAt: activity.at,
+      toolName: activity.toolName,
+      toolCallId: activity.toolCallId,
+    };
+  }
+  if (activity.type === "tool_finished") {
+    if (!isRemoteToolName(activity.toolName)) throw new Error("unsupported planner tool activity");
+    return {
+      type: "tool_finished",
+      actor: "planner",
+      phase: "planning",
+      sourceAt: activity.at,
+      toolName: activity.toolName,
+      toolCallId: activity.toolCallId,
+      isError: activity.isError,
+    };
+  }
+  const { at, ...event } = activity;
+  return { ...event, sourceAt: at, actor: "planner", phase: "planning" };
+}
+
 export async function runPlan(options: PlanOptions): Promise<PlanResult> {
   if (
     !Number.isInteger(options.timeoutSeconds) ||
@@ -58,6 +89,13 @@ export async function runPlan(options: PlanOptions): Promise<PlanResult> {
   const planner = loadAgent("planner");
   const artifacts = createRunArtifacts(issue);
 
+  const phaseStartedAt = new Date().toISOString();
+  options.onEvent?.({
+    type: "phase_started",
+    actor: "planner",
+    phase: "planning",
+    sourceAt: phaseStartedAt,
+  });
   const result = await runAgent({
     agent: planner,
     cwd: repo,
@@ -72,7 +110,10 @@ export async function runPlan(options: PlanOptions): Promise<PlanResult> {
       repoWasDirty: git(repo, "status", "--porcelain").length > 0,
       issueSha256: createHash("sha256").update(issue).digest("hex"),
     },
-    onTextDelta: (delta) => process.stdout.write(delta),
+    onTextDelta: options.machine ? undefined : (delta) => process.stdout.write(delta),
+    onActivity: options.onEvent
+      ? (activity) => options.onEvent?.(activityEvent(activity))
+      : undefined,
     onCompleted: (_finalText, target, envelope) => {
       if (!envelope || !("changes" in envelope))
         throw new Error("Planner completed without a valid planner envelope");
@@ -81,5 +122,12 @@ export async function runPlan(options: PlanOptions): Promise<PlanResult> {
     },
   });
 
+  options.onEvent?.({
+    type: "phase_finished",
+    actor: "planner",
+    phase: "planning",
+    status: result.status,
+    sourceAt: new Date().toISOString(),
+  });
   return { runDir: result.runDir, status: result.status };
 }

@@ -73,6 +73,20 @@ test("controller state writes atomically with strict schema", () => {
   }
 });
 
+test("derived-name cleanup may complete without recording a VM", () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-state-"));
+  const dir = runDir(root, "run-1");
+  try {
+    createControllerState(dir, input("run-1"));
+    transitionControllerState(dir, "creating_vm");
+    assert.equal(recordControllerCleanup(dir, "complete").cleanup, "complete");
+    assert.throws(() => recordControllerCleanup(dir, "pending"), /requires a recorded VM/);
+    assert.throws(() => recordControllerCleanup(dir, "failed"), /requires a recorded VM/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("controller rejects invalid transitions and records VM before bootstrap", () => {
   const root = mkdtempSync(join(tmpdir(), "factory-state-"));
   const dir = runDir(root, "run-1");

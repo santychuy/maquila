@@ -2,7 +2,10 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
-const ALLOWED_TOOLS = new Set(["read", "grep", "find", "ls", "bash", "edit", "write"]);
+export const ALLOWED_AGENT_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write"] as const;
+export type AgentToolName = (typeof ALLOWED_AGENT_TOOLS)[number];
+
+const ALLOWED_TOOLS = new Set<string>(ALLOWED_AGENT_TOOLS);
 const MUTATING_TOOLS = new Set(["bash", "edit", "write"]);
 const ALLOWED_FIELDS = new Set(["name", "description", "tools", "thinking", "access"]);
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
