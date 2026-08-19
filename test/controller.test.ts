@@ -100,10 +100,10 @@ function receipt(
 function validArchive(root: string, unsafeLink = false, reviewDigest = PATCH_SHA256): string {
   const verification = {
     passed: true,
-    config: { commands: [["pnpm", "check"]] },
+    config: { commands: [["bun", "run", "check"]] },
     commands: [
       {
-        argv: ["pnpm", "check"],
+        argv: ["bun", "run", "check"],
         exitCode: 0,
         timedOut: false,
         stdout: "",
@@ -141,7 +141,7 @@ function validArchive(root: string, unsafeLink = false, reviewDigest = PATCH_SHA
       summary: "Document architecture assessment",
       evidence: ["RIFF-39 requests documentation"],
       changes: [{ path: "docs/a.md", action: "add", rationale: "Document assessment" }],
-      verification: ["Run pnpm check"],
+      verification: ["Run bun run check"],
       risks: [],
       decisionsNeeded: [],
     }),
@@ -165,7 +165,7 @@ function validArchive(root: string, unsafeLink = false, reviewDigest = PATCH_SHA
     JSON.stringify({
       implemented: ["Documented assessment"],
       changedFiles: ["docs/a.md"],
-      validation: [{ command: "pnpm check", outcome: "pass", detail: "passed" }],
+      validation: [{ command: "bun run check", outcome: "pass", detail: "passed" }],
       openRisks: [],
     }),
   );
@@ -847,7 +847,8 @@ test("controller exposes fixed bootstrap checkpoints without leaking raw errors"
     },
     {
       name: "Factory build",
-      matches: (argv: string[]) => argv.includes("pnpm") && argv.at(-1) === "build",
+      matches: (argv: string[]) =>
+        argv.some((arg) => arg.endsWith("/bun")) && argv.at(-1) === "build",
       expected: "Factory build failed",
     },
   ];

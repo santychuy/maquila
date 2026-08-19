@@ -50,7 +50,6 @@ const REMOTE_FACTORY = "/home/exedev/factory";
 const REMOTE_WORK = "/home/exedev/work";
 const REMOTE_NODE = "/home/exedev/.local/node/bin/node";
 const REMOTE_NPM = "/home/exedev/.local/node/bin/npm";
-const REMOTE_COREPACK = "/home/exedev/.local/node/bin/corepack";
 const REMOTE_BUN = "/home/exedev/.local/bun/bin/bun";
 const REMOTE_PATH =
   "/home/exedev/.local/bun/bin:/home/exedev/.local/node/bin:/usr/local/bin:/usr/bin:/bin";
@@ -842,8 +841,7 @@ export async function runController(options: ControllerOptions): Promise<Control
           "-C",
           REMOTE_FACTORY,
           `PATH=${REMOTE_PATH}`,
-          REMOTE_COREPACK,
-          "pnpm",
+          REMOTE_BUN,
           "install",
           "--frozen-lockfile",
           "--ignore-scripts",
@@ -854,16 +852,7 @@ export async function runController(options: ControllerOptions): Promise<Control
       await remote(
         exe,
         vm.sshDest,
-        [
-          "env",
-          "-C",
-          REMOTE_FACTORY,
-          `PATH=${REMOTE_PATH}`,
-          REMOTE_COREPACK,
-          "pnpm",
-          "run",
-          "build",
-        ],
+        ["env", "-C", REMOTE_FACTORY, `PATH=${REMOTE_PATH}`, REMOTE_BUN, "run", "build"],
         120_000,
       );
       publicFailureMessage = "target dependency installation failed";
@@ -1075,8 +1064,7 @@ export async function runController(options: ControllerOptions): Promise<Control
             "-C",
             REMOTE_FACTORY,
             `PATH=${REMOTE_PATH}`,
-            REMOTE_NODE,
-            "dist/src/cli.js",
+            `${REMOTE_FACTORY}/dist/factory`,
             "pi",
             "plan",
             "--repo",
@@ -1116,8 +1104,7 @@ export async function runController(options: ControllerOptions): Promise<Control
             "-C",
             REMOTE_FACTORY,
             `PATH=${REMOTE_PATH}`,
-            REMOTE_NODE,
-            "dist/src/cli.js",
+            `${REMOTE_FACTORY}/dist/factory`,
             "pi",
             "worker",
             "--repo",

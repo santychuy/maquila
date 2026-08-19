@@ -37,8 +37,8 @@ test("doctor checks credentials independently and recognizes OpenSSH config", as
   try {
     mkdirSync(resolve(root, ".ssh"), { recursive: true });
     writeFileSync(resolve(root, ".ssh", "config"), "Host exe.dev\n");
-    mkdirSync(resolve(root, "dist/src"), { recursive: true });
-    writeFileSync(resolve(root, "dist/src/cli.js"), "");
+    mkdirSync(resolve(root, "dist"), { recursive: true });
+    writeFileSync(resolve(root, "dist/factory"), "");
     const result = await runDoctor({
       factoryRoot: root,
       target: root,

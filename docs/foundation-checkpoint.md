@@ -43,7 +43,7 @@ The lock and recovery model is single-host and serial. A timed-out SSH command m
 
 ## Factory DX
 
-Build and link global executable with `pnpm run build` then `pnpm link --global`. Commands target current working directory by default; `--target PATH` overrides it. Human output is default; `--json` is machine mode.
+Build and link the current-platform standalone executable with `bun run build` then `bun link`. Commands target current working directory by default; `--target PATH` overrides it. Human output is default; `--json` is machine mode. The global command stays linked to the checkout because runtime agent definitions, skill files, and the source archive remain repository-owned.
 
 `factory setup` writes strict mode-`0600` config under `$XDG_CONFIG_HOME/factory/config.json` or `~/.config/factory/config.json`. It may store only an optional Linear `op://Vault/Item/field` reference and may install user-scope Pi skill with `--install-skill`. `factory doctor` checks config, target, credentials, SSH, built CLI, and skill, and reports remediation.
 
@@ -51,19 +51,19 @@ GitHub credential precedence: `GITHUB_TOKEN`, `GH_TOKEN`, `gh auth token`. Linea
 
 ## Local tooling
 
-This repository uses pnpm `11.22.0`, pinned by `package.json` and recorded in `pnpm-lock.yaml`. Use `corepack enable` followed by `pnpm install --frozen-lockfile`; Node 25 and newer do not include Corepack, so install Corepack separately first. Do not restore an npm lockfile.
+This repository uses Bun `1.3.14`, pinned by `package.json` and recorded in `bun.lock`. Use `bun install --frozen-lockfile`. Do not restore npm or pnpm lockfiles.
 
-`pnpm check` is the full local gate: type-aware Oxlint, Oxfmt verification, TypeScript checking, build, and compiled tests. Oxlint enables correctness and suspicious rules with TypeScript, Oxc, Unicorn, import, Node, and Promise plugins. Tests turn off only `typescript/no-floating-promises` and `typescript/no-unsafe-type-assertion`; this keeps the type-aware policy balanced for test code without disabling the broader checks. Oxfmt uses its defaults; `pnpm format` writes them and `pnpm format:check` verifies them.
+`bun run check` is the full local gate: type-aware Oxlint, Oxfmt verification, TypeScript checking, compiled Node tests, standalone binary compilation, and a read-only `--help` smoke check. Oxlint enables correctness and suspicious rules with TypeScript, Oxc, Unicorn, import, Node, and Promise plugins. Tests turn off only `typescript/no-floating-promises` and `typescript/no-unsafe-type-assertion`; this keeps the type-aware policy balanced for test code without disabling the broader checks. Oxfmt uses its defaults; `bun run format` writes them and `bun run format:check` verifies them.
 
-Husky is local only: pre-commit runs `pnpm exec lint-staged`, and pre-push runs `pnpm run check`. lint-staged runs `oxlint --fix` then Oxfmt on staged TypeScript and JavaScript files, and Oxfmt on staged JSON, Markdown, and YAML files. It preserves unstaged work while handling partial staging, and only its staged-file results enter the commit. Run the full gate before relying on these hooks.
+Husky is local only: pre-commit runs `bunx lint-staged`, and pre-push runs `bun run check`. lint-staged runs `oxlint --fix` then Oxfmt on staged TypeScript and JavaScript files, and Oxfmt on staged JSON, Markdown, and YAML files. It preserves unstaged work while handling partial staging, and only its staged-file results enter the commit. Run the full gate before relying on these hooks.
 
-`pnpm-workspace.yaml` keeps lifecycle builds disabled for `@google/genai` and `protobufjs` (`allowBuilds: false`); no package-specific build approval is granted. There is no hosted CI workflow: checks run locally through these commands and hooks.
+An empty `trustedDependencies` list keeps dependency lifecycle scripts blocked unless explicitly reviewed and approved. There is no hosted CI workflow: checks run locally through these commands and hooks.
 
 ## Tests
 
-The verified DX checkpoint passes 158 tests (`pnpm test`), with zero failures and zero skips. This count records this checkpoint; it is not an evergreen promise.
+The verified DX checkpoint passes 162 tests (`bun run test`), with zero failures and zero skips. This count records this checkpoint; it is not an evergreen promise.
 
-`pnpm test` covers role boundaries, envelopes, local worker/reviewer lifecycle failures, controller lock/recovery and fake remote lifecycle paths, tar and patch trust boundaries, artifact safety, verification and Git gates, Linear/GitHub input validation and publication, credential redaction, deterministic intake and publication identities, detached startup, telemetry replay, observer ownership, read-only HTTP boundaries, UI routes, and skill wiring.
+`bun run test` covers role boundaries, envelopes, local worker/reviewer lifecycle failures, controller lock/recovery and fake remote lifecycle paths, tar and patch trust boundaries, artifact safety, verification and Git gates, Linear/GitHub input validation and publication, credential redaction, deterministic intake and publication identities, detached startup, telemetry replay, observer ownership, read-only HTTP boundaries, UI routes, and skill wiring.
 
 ## Failure and security limits
 

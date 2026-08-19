@@ -14,6 +14,7 @@ import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { controllerChildEnvironment, resolveControllerCredentials } from "./credentials.js";
 import { telemetryPath } from "./telemetry.js";
+import { cliInvocation } from "./runtime.js";
 import { resolveTargetRepository, type TargetRepository } from "./target.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -219,8 +220,7 @@ export async function startDetachedRun(options: StartDetachedRunOptions): Promis
   const stderr = openSync(stderrPath, "wx", 0o600);
   const cliPath = resolve(options.cliPath ?? process.argv[1]!);
   const childEnv = { ...env, FACTORY_LAUNCH_INSTANCE_ID: instanceId };
-  const args = [
-    cliPath,
+  const invocation = cliInvocation(cliPath, [
     "run",
     "execute",
     "--run-id",
@@ -237,12 +237,12 @@ export async function startDetachedRun(options: StartDetachedRunOptions): Promis
     target.tag,
     "--timeout-seconds",
     String(options.timeoutSeconds),
-  ];
+  ]);
   let child: SpawnedChild;
   try {
     child = (
       options.spawnChild ?? ((command, argv, spawnOptions) => spawn(command, argv, spawnOptions))
-    )(process.execPath, args, {
+    )(invocation.command, invocation.args, {
       cwd: root,
       detached: true,
       stdio: ["ignore", stdout, stderr],

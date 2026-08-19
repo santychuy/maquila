@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 
 import { randomUUID } from "node:crypto";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { pathToFileURL } from "node:url";
 import { listAgents } from "./agents.js";
 import { runPlan, type PlanOptions } from "./plan.js";
 import { runWorkerLifecycle, type WorkerLifecycleOptions } from "./worker.js";
@@ -16,6 +15,7 @@ import { runDoctor } from "./doctor.js";
 import { runSetup } from "./setup.js";
 import { startDetachedRun, writeLaunchHandshake } from "./run-launcher.js";
 import { foldRunStatus, type RunStatusSummary } from "./run-status.js";
+import { factoryRoot, isMain } from "./runtime.js";
 import { validateResolvedTarget } from "./target.js";
 import {
   DEFAULT_OBSERVER_PORT,
@@ -345,10 +345,6 @@ export function agentExitCode(
   return status === "timed_out" ? 124 : status === "completed" ? 0 : 1;
 }
 
-function factoryRoot(): string {
-  return resolve(import.meta.dirname, "../..");
-}
-
 function json(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
@@ -435,7 +431,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         );
       return 0;
     }
-    const root = factoryRoot();
+    const root = factoryRoot(import.meta.dirname);
     if ("command" in options) {
       if (options.command === "setup") {
         const result = await runSetup({
@@ -619,5 +615,4 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href)
-  process.exitCode = await main();
+if (isMain(import.meta.url)) process.exitCode = await main();

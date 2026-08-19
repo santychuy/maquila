@@ -36,20 +36,20 @@ function initRepo(commands: string[][] = [["true"]]): string {
 test("parseVerifyConfig accepts valid argv commands", () => {
   const config = parseVerifyConfig({
     commands: [
-      ["pnpm", "check"],
+      ["bun", "run", "check"],
       ["node", "-e", "process.exit(0)"],
     ],
   });
-  assert.deepEqual(config.commands[0], ["pnpm", "check"]);
+  assert.deepEqual(config.commands[0], ["bun", "run", "check"]);
 });
 
 test("parseVerifyConfig rejects malformed input", () => {
   assert.throws(() => parseVerifyConfig({ commands: [], extra: true }), /unknown fields/);
   assert.throws(() => parseVerifyConfig({ commands: [] }), /non-empty array/);
-  assert.throws(() => parseVerifyConfig({ commands: "pnpm check" }), /non-empty array/);
+  assert.throws(() => parseVerifyConfig({ commands: "bun run check" }), /non-empty array/);
   assert.throws(() => parseVerifyConfig({ commands: [["", "check"]] }), /non-blank/);
   assert.throws(() => parseVerifyConfig({ commands: [[]] }), /non-empty argv/);
-  assert.throws(() => parseVerifyConfig({ commands: ["pnpm check"] }), /argv array/);
+  assert.throws(() => parseVerifyConfig({ commands: ["bun run check"] }), /argv array/);
 });
 
 test("repository paths reject Git metadata on POSIX and Windows separators", () => {

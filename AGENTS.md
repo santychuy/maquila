@@ -29,7 +29,7 @@ Implemented now:
 - Executable `factory run`: single-host lock, restart cleanup, pinned Node/Bun bootstrap, remote planner/worker/verification/reviewer, evidence and patch harvest, VM destruction, then controller-side bot branch and ready-for-review pull-request publication.
 - Strict host telemetry with streaming remote phase/activity frames, accepted detached `run start`, and read-only `run status`.
 - Managed loopback observer server/UI with replay/cursor polling, human `factory dashboard` startup alias, and factory-owned `.pi/skills/software-factory` command routing.
-- Global `factory` executable through `pnpm link --global`, with cwd target inference, `--target` override, human output, and explicit `--json` mode.
+- Global `factory` executable through a Bun-compiled binary and `bun link`, with cwd target inference, `--target` override, human output, and explicit `--json` mode.
 - `factory setup` and `factory doctor` for strict XDG config, optional Linear `op://` reference, optional user-scope Pi skill, credential checks, and remediation.
 - Controller-side credential precedence for GitHub (`GITHUB_TOKEN`, `GH_TOKEN`, `gh auth token`) and Linear (`LINEAR_API_TOKEN`, then `op read`); optional exe.dev identity with OpenSSH config/agent support and no agent forwarding.
 
@@ -81,27 +81,26 @@ Generated `dist/`, `node_modules/`, and `.factory/` content is ignored. Do not e
 
 ## Development Commands
 
-Requires Node.js `>=22.19.0`.
+Requires Bun `1.3.14` and Node.js `>=22.19.0`.
 
 ```bash
-corepack enable
-pnpm install --frozen-lockfile
-pnpm run build
-pnpm test
-pnpm lint
-pnpm format:check
-pnpm check
+bun install --frozen-lockfile
+bun run build
+bun run test
+bun run lint
+bun run format:check
+bun run check
 ```
 
-The repository pins pnpm through `packageManager`. Node 25+ does not bundle Corepack; install Corepack separately there before running `corepack enable`.
+The repository pins Bun through `packageManager` and commits `bun.lock`. `bun run build` emits compiled JavaScript plus the current-platform standalone `dist/factory` executable.
 
-`pnpm check` is the required full local gate. It runs type-aware Oxlint, verifies Oxfmt output, type-checks, builds, and runs compiled tests.
+`bun run check` is the required full local gate. It runs type-aware Oxlint, verifies Oxfmt output, type-checks, runs compiled Node tests, builds the standalone binary, and smoke-checks its help path.
 
 Useful CLI checks after building:
 
 ```bash
-pnpm run factory -- agents list
-pnpm run factory -- pi plan \
+bun run factory -- agents list
+bun run factory -- pi plan \
   --repo /absolute/path/to/repository \
   --issue ./examples/issue.md \
   --model provider/model \
@@ -118,8 +117,8 @@ Planner execution requires Pi authentication for the selected model. It writes e
 ## Code Conventions
 
 - TypeScript, ESM, `NodeNext`, strict mode, and `noUncheckedIndexedAccess` are mandatory.
-- Oxfmt defaults are canonical. Run `pnpm format`; verify with `pnpm format:check`.
-- Oxlint enforces correctness and suspicious rules with type-aware TypeScript, Oxc, Unicorn, import, Node, and Promise plugins. Fix only safe findings with `pnpm lint:fix`.
+- Oxfmt defaults are canonical. Run `bun run format`; verify with `bun run format:check`.
+- Oxlint enforces correctness and suspicious rules with type-aware TypeScript, Oxc, Unicorn, import, Node, and Promise plugins. Fix only safe findings with `bun run lint:fix`.
 - Use `.js` extensions in relative TypeScript imports so compiled ESM resolves correctly.
 - Prefer Node standard library and existing dependencies over new abstractions or packages.
 - Keep changes focused on the next proven slice; do not prebuild later architecture milestones.
@@ -128,8 +127,8 @@ Planner execution requires Pi authentication for the selected model. It writes e
 - Preserve evidence on every terminal path, including setup failure and timeout.
 - Keep public artifact names as safe basenames that exist inside run directory.
 - Write JSON evidence atomically where current helpers provide that behavior.
-- Use pnpm only. Update `pnpm-lock.yaml` whenever dependency metadata changes; never add an npm lockfile.
-- Keep dependency lifecycle-script decisions explicit in `pnpm-workspace.yaml`. Do not broaden `allowBuilds` without reviewing the exact package scripts.
+- Use Bun only for package management. Update `bun.lock` whenever dependency metadata changes; never add npm or pnpm lockfiles.
+- Keep dependency lifecycle scripts blocked with an empty `trustedDependencies` list. Do not trust a dependency without reviewing its exact scripts.
 
 ## Agent Definition Contract
 
@@ -172,7 +171,7 @@ Failed or timed-out runs must not expose a successful envelope. Keep receipts ho
 
 ## Git Hooks
 
-Husky installs through the `prepare` script. Pre-commit runs lint-staged, which applies safe Oxlint fixes and Oxfmt only to staged supported files. Pre-push runs `pnpm check`. Hooks are local safeguards, not permission to skip the full gate. Bypass only for recovery, then run the missed command manually.
+Husky installs through the `prepare` script. Pre-commit runs lint-staged through `bunx`, which applies safe Oxlint fixes and Oxfmt only to staged supported files. Pre-push runs `bun run check`. Hooks are local safeguards, not permission to skip the full gate. Bypass only for recovery, then run the missed command manually.
 
 ## Testing Expectations
 
@@ -181,7 +180,7 @@ Use `node:test` and `node:assert/strict`, matching existing tests. Add the small
 Before finishing:
 
 1. Run focused tests while developing.
-2. Run `pnpm check`.
+2. Run `bun run check`.
 3. Confirm generated files remain untracked.
 4. Reconcile documentation with implemented code, especially when a milestone moves from planned to current.
 

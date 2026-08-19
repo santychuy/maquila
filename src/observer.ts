@@ -17,6 +17,7 @@ import { resolve } from "node:path";
 import { externalCommandEnvironment } from "./exe.js";
 import { linuxProcessIdentity } from "./controller-lock.js";
 import { foldRunStatus, type RunStatusSummary } from "./run-status.js";
+import { cliInvocation } from "./runtime.js";
 import { readTelemetry, telemetryPath, type TelemetryRecord } from "./telemetry.js";
 import { OBSERVER_CSS, OBSERVER_HTML, OBSERVER_JS } from "./observer-ui.js";
 
@@ -423,21 +424,23 @@ export async function ensureObserver(options: EnsureObserverOptions): Promise<Ob
   ensurePrivateDirectory(dir);
   const stdout = openSync(resolve(dir, "observer.stdout.log"), "a", 0o600);
   const stderr = openSync(resolve(dir, "observer.stderr.log"), "a", 0o600);
+  const invocation = cliInvocation(options.cliPath, [
+    "observer",
+    "serve",
+    "--port",
+    String(options.port),
+  ]);
   const child = (
     options.spawnChild ?? ((command, args, spawnOptions) => spawn(command, args, spawnOptions))
-  )(
-    process.execPath,
-    [resolve(options.cliPath), "observer", "serve", "--port", String(options.port)],
-    {
-      cwd: root,
-      detached: true,
-      stdio: ["ignore", stdout, stderr],
-      env: {
-        ...externalCommandEnvironment(options.env ?? process.env),
-        FACTORY_OBSERVER_INSTANCE_ID: instanceId,
-      },
+  )(invocation.command, invocation.args, {
+    cwd: root,
+    detached: true,
+    stdio: ["ignore", stdout, stderr],
+    env: {
+      ...externalCommandEnvironment(options.env ?? process.env),
+      FACTORY_OBSERVER_INSTANCE_ID: instanceId,
     },
-  );
+  });
   closeSync(stdout);
   closeSync(stderr);
   let spawnError: Error | undefined;

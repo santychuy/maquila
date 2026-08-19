@@ -20,7 +20,7 @@ const validPlanner = {
   summary: "Add envelope validation to the run loop.",
   evidence: ["src/run-agent.ts has no structured final output"],
   changes: [{ path: "src/envelope.ts", action: "add", rationale: "Validate role envelopes" }],
-  verification: ["pnpm run check"],
+  verification: ["bun run check"],
   risks: ["Model may ignore the tool"],
   decisionsNeeded: [],
 };
@@ -28,7 +28,7 @@ const validPlanner = {
 const validWorker = {
   implemented: "Added envelope validation",
   changedFiles: ["src/envelope.ts"],
-  validation: [{ command: "pnpm run check", outcome: "pass", detail: "5 tests pass" }],
+  validation: [{ command: "bun run check", outcome: "pass", detail: "5 tests pass" }],
   openRisks: ["none"],
 };
 

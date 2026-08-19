@@ -4,8 +4,8 @@ Software Factory takes a Linear issue, works on it inside a fresh exe.dev VM, ve
 
 ## What you need
 
-- Node.js `>=22.19.0`
-- pnpm `11.22.0`
+- Bun `1.3.14`
+- Node.js `>=22.19.0` for source tests and remote target compatibility
 - An exe.dev account
 - GitHub CLI (`gh`) authenticated to the target repository
 - A Linear personal API key or 1Password secret reference
@@ -16,27 +16,20 @@ Software Factory takes a Linear issue, works on it inside a fresh exe.dev VM, ve
 git clone git@github.com:santychuy/software-factory.git
 cd software-factory
 
-# Make Node use the pnpm version pinned by this repository.
-corepack enable
-
-# Install, build, and make `factory` available from any directory.
-pnpm install --frozen-lockfile
-pnpm run build
-pnpm link --global
+# Install, build the current platform binary, and expose it globally.
+bun install --frozen-lockfile
+bun run build
+bun link
 ```
 
-Corepack is included with Node.js 22–24. With Node.js 25+, install it first:
+Confirm binary exists and inspect CLI without starting a Factory workflow:
 
 ```bash
-npm install --global corepack@latest
-corepack enable
-```
-
-Confirm installation:
-
-```bash
+test -x ./dist/factory
 factory --help
 ```
+
+`bun run build:binary` rebuilds only the standalone executable for the current OS and CPU. `bun link` keeps the global command linked to this checkout because Factory still needs its agent definitions, Pi skill, and source archive at runtime.
 
 ## Connect GitHub
 

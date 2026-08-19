@@ -34,7 +34,7 @@ Planner explains a possible change from repository evidence:
   "summary": "Add envelope validation",
   "evidence": ["Runner accepts final agent text"],
   "changes": [{ "path": "src/envelope.ts", "action": "add", "rationale": "Check role output" }],
-  "verification": ["pnpm test"],
+  "verification": ["bun run test"],
   "risks": ["Model may omit the tool"],
   "decisionsNeeded": []
 }
@@ -48,7 +48,7 @@ Worker reports implementation and checks actually run:
 {
   "implemented": "Added validation",
   "changedFiles": ["src/envelope.ts"],
-  "validation": [{ "command": "pnpm test", "outcome": "pass", "detail": "19 tests pass" }],
+  "validation": [{ "command": "bun run test", "outcome": "pass", "detail": "19 tests pass" }],
   "openRisks": []
 }
 ```

@@ -145,14 +145,14 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
       "start ssh-agent or set FACTORY_EXE_IDENTITY",
     ),
   );
-  const cli = resolve(options.factoryRoot, "dist/src/cli.js");
+  const cli = resolve(options.factoryRoot, "dist/factory");
   checks.push(
     check(
       "cli",
       existsSync(cli),
       "factory CLI build present",
-      "dist/src/cli.js missing",
-      "pnpm run build",
+      "dist/factory missing",
+      "bun run build",
     ),
   );
   const skill = resolve(home, ".pi", "agent", "skills", "software-factory");

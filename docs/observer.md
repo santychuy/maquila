@@ -7,8 +7,8 @@ Observer is read-only local view over controller-owned telemetry. It does not la
 Build and link global executable once, then configure host tools:
 
 ```bash
-pnpm run build
-pnpm link --global
+bun run build
+bun link
 factory setup
 factory doctor
 ```
