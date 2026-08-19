@@ -97,9 +97,28 @@ test("controller command accepts bounded immutable inputs", () => {
       ]),
     /absolute path/,
   );
+  const withoutIdentity = parseCli([
+    "run",
+    "--issue",
+    "RIFF-39",
+    "--owner",
+    "santychuy",
+    "--repo",
+    "bookbounce",
+    "--base-ref",
+    "main",
+    "--tag",
+    "santychuy-bookbounce",
+  ]);
+  assert.equal(
+    typeof withoutIdentity === "object" && "identity" in withoutIdentity
+      ? withoutIdentity.identity
+      : undefined,
+    undefined,
+  );
 });
 
-test("detached run and status commands require explicit JSON contracts", () => {
+test("detached run and status commands default target to cwd and treat JSON as optional", () => {
   assert.deepEqual(
     parseCli(["run", "start", "--target", "/tmp/target", "--issue", "RIFF-52", "--json"]),
     {
@@ -107,17 +126,26 @@ test("detached run and status commands require explicit JSON contracts", () => {
       target: "/tmp/target",
       issue: "RIFF-52",
       timeoutSeconds: 900,
+      json: true,
     },
   );
+  assert.deepEqual(parseCli(["run", "start", "--issue", "RIFF-52"]), {
+    command: "run-start",
+    target: process.cwd(),
+    issue: "RIFF-52",
+    timeoutSeconds: 900,
+  });
   assert.deepEqual(
     parseCli(["run", "status", "--run-id", "11111111-1111-4111-8111-111111111111", "--json"]),
-    { command: "run-status", runId: "11111111-1111-4111-8111-111111111111" },
+    { command: "run-status", runId: "11111111-1111-4111-8111-111111111111", json: true },
   );
-  assert.throws(
-    () => parseCli(["run", "start", "--target", "/tmp/target", "--issue", "x"]),
-    /--json/,
+  assert.deepEqual(
+    parseCli(["run", "status", "--run-id", "11111111-1111-4111-8111-111111111111"]),
+    {
+      command: "run-status",
+      runId: "11111111-1111-4111-8111-111111111111",
+    },
   );
-  assert.throws(() => parseCli(["run", "status", "--run-id", "x"]), /--json/);
   assert.throws(
     () =>
       parseCli([
@@ -167,7 +195,7 @@ test("JSON command errors remain strict and bounded", async () => {
   assert.deepEqual(JSON.parse(output), {
     version: 1,
     ok: false,
-    error: { code: "command_failed", message: "--target and --issue are required" },
+    error: { code: "command_failed", message: "--issue is required" },
   });
 });
 

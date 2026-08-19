@@ -10,8 +10,12 @@ import { runPlan, type PlanOptions } from "./plan.js";
 import { runWorkerLifecycle, type WorkerLifecycleOptions } from "./worker.js";
 import { runController, type ControllerOptions } from "./controller.js";
 import { createRemoteProtocolWriter } from "./remote-protocol.js";
+import { loadFactoryConfig } from "./config.js";
+import { resolveControllerCredentials } from "./credentials.js";
+import { runDoctor } from "./doctor.js";
+import { runSetup } from "./setup.js";
 import { startDetachedRun, writeLaunchHandshake } from "./run-launcher.js";
-import { foldRunStatus } from "./run-status.js";
+import { foldRunStatus, type RunStatusSummary } from "./run-status.js";
 import { validateResolvedTarget } from "./target.js";
 import {
   DEFAULT_OBSERVER_PORT,
@@ -23,13 +27,15 @@ import {
 
 export const HELP = `Usage:
   factory agents list
+  factory setup [--linear-token-reference op://Vault/Item/field] [--install-skill] [--json]
+  factory doctor [--target PATH] [--json]
   factory pi plan --repo PATH --issue PATH --model PROVIDER/MODEL [--timeout-seconds 300]
 
 Lists agents or runs planner, worker/reviewer, and remote controller workflows.
   factory pi worker --repo PATH --issue PATH --planner PATH --base-sha SHA --model PROVIDER/MODEL [--timeout-seconds 300]
   factory run --issue ID --owner OWNER --repo REPO --base-ref REF --tag TAG [--identity ABS] [--timeout-seconds 900]
-  factory run start --target PATH --issue ID [--owner OWNER] [--repo REPO] [--base-ref REF] [--tag TAG] [--identity ABS] [--timeout-seconds 900] --json
-  factory run status --run-id UUID --json
+  factory run start --issue ID [--target PATH] [--owner OWNER] [--repo REPO] [--base-ref REF] [--tag TAG] [--identity ABS] [--timeout-seconds 900] [--json]
+  factory run status --run-id UUID [--json]
   factory observer serve [--port 4600]
   factory observer ensure [--port 4600] --json
   factory observer status --json
@@ -47,6 +53,7 @@ interface RunStartCommand {
   tag?: string;
   identity?: string;
   timeoutSeconds: number;
+  json?: boolean;
 }
 interface RunExecuteCommand {
   command: "run-execute";
@@ -61,6 +68,7 @@ interface RunExecuteCommand {
 interface RunStatusCommand {
   command: "run-status";
   runId: string;
+  json?: boolean;
   timeoutSeconds?: undefined;
 }
 interface ObserverServeCommand {
@@ -71,6 +79,19 @@ interface ObserverServeCommand {
 interface ObserverReadCommand {
   command: "observer-status" | "observer-stop";
   timeoutSeconds?: undefined;
+}
+interface SetupCommand {
+  command: "setup";
+  timeoutSeconds?: undefined;
+  json?: boolean;
+  linearTokenReference?: string;
+  installSkill?: boolean;
+}
+interface DoctorCommand {
+  command: "doctor";
+  timeoutSeconds?: undefined;
+  json?: boolean;
+  target: string;
 }
 type WorkerCliOptions = WorkerLifecycleOptions & { machine?: boolean };
 
@@ -83,6 +104,8 @@ type ParsedCli =
   | RunStatusCommand
   | ObserverServeCommand
   | ObserverReadCommand
+  | SetupCommand
+  | DoctorCommand
   | "help"
   | "list-agents";
 
@@ -129,6 +152,8 @@ export function parseCli(args: string[]): ParsedCli {
       "run-id": { type: "string" },
       json: { type: "boolean" },
       port: { type: "string" },
+      "linear-token-reference": { type: "string" },
+      "install-skill": { type: "boolean" },
     },
   });
 
@@ -137,6 +162,25 @@ export function parseCli(args: string[]): ParsedCli {
     return "help";
   }
   const command = positionals.join(" ");
+  if (command === "setup") {
+    rejectOptions(values, ["json", "linear-token-reference", "install-skill"]);
+    return {
+      command: "setup",
+      ...(values.json ? { json: true } : {}),
+      ...(values["linear-token-reference"]
+        ? { linearTokenReference: values["linear-token-reference"] }
+        : {}),
+      ...(values["install-skill"] ? { installSkill: true } : {}),
+    };
+  }
+  if (command === "doctor") {
+    rejectOptions(values, ["json", "target"]);
+    return {
+      command: "doctor",
+      target: values.target ?? process.cwd(),
+      ...(values.json ? { json: true } : {}),
+    };
+  }
   if (command === "agents list") {
     rejectOptions(values, []);
     return "list-agents";
@@ -172,11 +216,10 @@ export function parseCli(args: string[]): ParsedCli {
       "identity",
       "timeout-seconds",
     ]);
-    if (!values.json) throw new Error("run start requires --json");
-    if (!values.target || !values.issue) throw new Error("--target and --issue are required");
+    if (!values.issue) throw new Error("--issue is required");
     return {
       command: "run-start",
-      target: values.target,
+      target: values.target ?? process.cwd(),
       issue: values.issue,
       timeoutSeconds: timeout(values["timeout-seconds"], "900"),
       ...(values.owner ? { owner: values.owner } : {}),
@@ -184,6 +227,7 @@ export function parseCli(args: string[]): ParsedCli {
       ...(values["base-ref"] ? { baseRef: values["base-ref"] } : {}),
       ...(values.tag ? { tag: values.tag } : {}),
       ...(values.identity ? { identity: values.identity } : {}),
+      ...(values.json ? { json: true } : {}),
     };
   }
   if (command === "run execute") {
@@ -218,9 +262,12 @@ export function parseCli(args: string[]): ParsedCli {
   }
   if (command === "run status") {
     rejectOptions(values, ["json", "run-id"]);
-    if (!values.json || !values["run-id"])
-      throw new Error("run status requires --run-id and --json");
-    return { command: "run-status", runId: values["run-id"] };
+    if (!values["run-id"]) throw new Error("run status requires --run-id");
+    return {
+      command: "run-status",
+      runId: values["run-id"],
+      ...(values.json ? { json: true } : {}),
+    };
   }
   if (command === "run") {
     rejectOptions(values, [
@@ -235,8 +282,7 @@ export function parseCli(args: string[]): ParsedCli {
     if (!values.issue || !values.owner || !values.repo || !values["base-ref"] || !values.tag)
       throw new Error("--issue, --owner, --repo, --base-ref, and --tag are required");
     const identity = values.identity ?? process.env.FACTORY_EXE_IDENTITY;
-    if (!identity) throw new Error("--identity or FACTORY_EXE_IDENTITY is required");
-    if (!isAbsolute(identity) || identity.includes("\0"))
+    if (identity && (!isAbsolute(identity) || identity.includes("\0")))
       throw new Error("exe.dev identity must be an absolute path");
     return {
       issue: values.issue,
@@ -244,8 +290,8 @@ export function parseCli(args: string[]): ParsedCli {
       repo: values.repo,
       baseRef: values["base-ref"],
       tag: values.tag,
-      identity,
       timeoutSeconds: timeout(values["timeout-seconds"], "900"),
+      ...(identity ? { identity } : {}),
     };
   }
   if (command === "pi worker") {
@@ -272,7 +318,7 @@ export function parseCli(args: string[]): ParsedCli {
   }
   if (command !== "pi plan")
     throw new Error(
-      "Expected command: agents list, pi plan, pi worker, run, run start, run status, or observer",
+      "Expected command: agents list, setup, doctor, pi plan, pi worker, run, run start, run status, or observer",
     );
   rejectOptions(values, ["repo", "issue", "model", "timeout-seconds", "machine"]);
   if (!values.repo || !values.issue || !values.model)
@@ -302,6 +348,31 @@ function json(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
+async function writeHumanStart(root: string, runId: string): Promise<void> {
+  process.stdout.write(`Run: ${runId}\nStatus: running\n`);
+  const observer = await observerStatus(root);
+  if (observer) process.stdout.write(`Observer: ${observer.url}/runs/${runId}\n`);
+  else process.stdout.write("Start observer with: factory observer ensure --json\n");
+}
+
+function writeHumanStatus(status: RunStatusSummary): void {
+  process.stdout.write(
+    [
+      `Run: ${status.runId}`,
+      `Status: ${status.status}`,
+      `Phase: ${status.phase ?? "-"}`,
+      `Actor: ${status.actor ?? "-"}`,
+      `Tool: ${status.currentTool ?? "-"}`,
+      `Cleanup: ${status.cleanup ?? "-"}`,
+      `Last activity: ${status.lastActivity ?? "-"}`,
+      status.failure ? `Failure: ${status.failure.code} ${status.failure.message}` : undefined,
+      status.pullRequest ? `Pull request: ${status.pullRequest.url}` : undefined,
+    ]
+      .filter((line): line is string => Boolean(line))
+      .join("\n") + "\n",
+  );
+}
+
 function takeControllerEnvironment(): {
   linearToken: string | undefined;
   githubToken: string | undefined;
@@ -316,6 +387,7 @@ function takeControllerEnvironment(): {
   };
   delete process.env.LINEAR_API_TOKEN;
   delete process.env.GITHUB_TOKEN;
+  delete process.env.GH_TOKEN;
   delete process.env.FACTORY_EXE_IDENTITY;
   delete process.env.FACTORY_LAUNCH_INSTANCE_ID;
   return result;
@@ -328,8 +400,14 @@ function publicJsonError(message: string): string {
     /^invalid /,
     /^target /,
     /^cannot inspect target Git repository$/,
-    /^LINEAR_API_TOKEN and GITHUB_TOKEN are required$/,
-    /^--identity or FACTORY_EXE_IDENTITY must/,
+    /^LINEAR_API_TOKEN(?: and GITHUB_TOKEN are required| is required)$/,
+    /^GITHUB_TOKEN is required$/,
+    /^GitHub CLI auth is unavailable$/,
+    /^1Password reference could not be read$/,
+    /^invalid Linear token reference$/,
+    /^invalid factory config$/,
+    /^SSH_AUTH_SOCK is invalid$/,
+    /^exe\.dev identity must be an absolute path$/,
     /^controller child (?:could not start|rejected startup)$/,
     /^controller child termination unconfirmed for run [0-9a-f-]{36}$/,
     /^observer /,
@@ -354,6 +432,24 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     }
     const root = factoryRoot();
     if ("command" in options) {
+      if (options.command === "setup") {
+        const result = await runSetup({
+          json: options.json,
+          linearTokenReference: options.linearTokenReference,
+          installSkill: options.installSkill,
+          factoryRoot: root,
+        });
+        if (options.json) return result.ok ? 0 : 1;
+        return 0;
+      }
+      if (options.command === "doctor") {
+        const result = await runDoctor({
+          json: options.json,
+          target: options.target,
+          factoryRoot: root,
+        });
+        return result.ok ? 0 : 1;
+      }
       if (options.command === "observer-serve") {
         const instanceId = process.env.FACTORY_OBSERVER_INSTANCE_ID ?? randomUUID();
         delete process.env.FACTORY_OBSERVER_INSTANCE_ID;
@@ -387,32 +483,45 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       }
       if (options.command === "run-start") {
         const launchEnv = { ...process.env };
-        const result = startDetachedRun({
+        const credentials = await resolveControllerCredentials({
+          env: launchEnv,
+          identityFlag: options.identity,
+          config: loadFactoryConfig({ env: launchEnv }),
+        });
+        const result = await startDetachedRun({
           ...options,
           factoryRoot: root,
           cliPath: process.argv[1],
-          env: launchEnv,
+          env: {
+            ...launchEnv,
+            LINEAR_API_TOKEN: credentials.linearToken,
+            GITHUB_TOKEN: credentials.githubToken,
+            ...(credentials.identity ? { FACTORY_EXE_IDENTITY: credentials.identity } : {}),
+          },
+          ...(credentials.identity ? { identity: credentials.identity } : { identity: undefined }),
         });
         delete process.env.LINEAR_API_TOKEN;
         delete process.env.GITHUB_TOKEN;
+        delete process.env.GH_TOKEN;
         delete process.env.FACTORY_EXE_IDENTITY;
-        json(await result);
+        if (options.json) json(result);
+        else await writeHumanStart(root, result.runId);
         return 0;
       }
       if (options.command === "run-status") {
-        json(
-          foldRunStatus({
-            root,
-            runId: options.runId,
-            controllerExists: (runId) =>
-              existsSync(resolve(root, ".factory", "controllers", runId, "controller-state.json")),
-          }),
-        );
+        const status = foldRunStatus({
+          root,
+          runId: options.runId,
+          controllerExists: (runId) =>
+            existsSync(resolve(root, ".factory", "controllers", runId, "controller-state.json")),
+        });
+        if (options.json) json(status);
+        else writeHumanStatus(status);
         return 0;
       }
       if (options.command !== "run-execute") throw new Error("invalid observer command");
       const { linearToken, githubToken, identity, instanceId } = takeControllerEnvironment();
-      if (!linearToken || !githubToken || !identity || !instanceId)
+      if (!linearToken || !githubToken || !instanceId)
         throw new Error("controller child environment is incomplete");
       const target = validateResolvedTarget({
         owner: options.owner,
@@ -426,7 +535,6 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         repo: target.repo,
         baseRef: target.baseRef,
         tag: target.tag,
-        identity,
         timeoutSeconds: options.timeoutSeconds,
         linearToken,
         githubToken,
@@ -434,15 +542,24 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         factoryRoot: root,
         runId: options.runId,
         onAccepted: () => writeLaunchHandshake(root, options.runId, instanceId),
+        ...(identity ? { identity } : {}),
       });
       process.stdout.write(`Controller evidence: ${result.runDir}\n`);
       return result.status === "completed" ? 0 : 1;
     }
-    if ("identity" in options) {
-      const { linearToken, githubToken } = takeControllerEnvironment();
-      if (!linearToken || !githubToken)
-        throw new Error("LINEAR_API_TOKEN and GITHUB_TOKEN are required");
-      const result = await runController({ ...options, linearToken, githubToken });
+    if ("baseRef" in options) {
+      const launchEnv = { ...process.env };
+      const credentials = await resolveControllerCredentials({
+        env: launchEnv,
+        identityFlag: options.identity,
+        config: loadFactoryConfig({ env: launchEnv }),
+      });
+      const result = await runController({
+        ...options,
+        linearToken: credentials.linearToken,
+        githubToken: credentials.githubToken,
+        ...(credentials.identity ? { identity: credentials.identity } : {}),
+      });
       process.stdout.write(`\nController evidence: ${result.runDir}\n`);
       return result.status === "completed" ? 0 : 1;
     }

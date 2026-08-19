@@ -84,7 +84,7 @@ export interface ControllerOptions {
   repo: string;
   baseRef: string;
   tag: string;
-  identity: string;
+  identity?: string;
   timeoutSeconds: number;
   linearToken: string;
   githubToken: string;
@@ -518,7 +518,7 @@ export async function runController(options: ControllerOptions): Promise<Control
     throw new Error("timeoutSeconds must be an integer from 1 to 1800");
   if (!options.linearToken.trim()) throw new Error("Linear token missing");
   if (!options.githubToken.trim()) throw new Error("GitHub token missing");
-  requireAbsolute(options.identity);
+  if (options.identity) requireAbsolute(options.identity);
   safeRepo(options.owner, options.repo);
   const root = resolve(options.root ?? process.cwd());
   const factoryRoot = resolve(options.factoryRoot ?? process.cwd());

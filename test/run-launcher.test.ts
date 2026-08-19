@@ -85,6 +85,7 @@ test("detached launch returns only after matching accepted handshake", async () 
     assert.doesNotMatch(capturedArgs.join(" "), /linear-secret|github-secret|private-identity/);
     assert.equal(capturedEnv.UNRELATED_SECRET, undefined);
     assert.equal(capturedEnv.LINEAR_API_TOKEN, "linear-secret");
+    assert.equal(capturedEnv.FACTORY_EXE_IDENTITY, "/tmp/private-identity");
     assert.equal(capturedEnv.FACTORY_LAUNCH_INSTANCE_ID, instanceId);
     assert.equal(statSync(telemetryPath(factoryRoot, runId)).mode & 0o777, 0o600);
     const launches = resolve(factoryRoot, ".factory", "launches", runId);
@@ -341,6 +342,58 @@ test("unkillable child preserves ownership and reports termination unconfirmed",
       recordedAt: record.recordedAt,
     });
     assert.equal(statSync(terminationUnconfirmedPath(factoryRoot, runId)).mode & 0o777, 0o600);
+  } finally {
+    rmSync(factoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("optional identity omits key path and copies host agent socket", async () => {
+  const factoryRoot = root();
+  let capturedEnv: NodeJS.ProcessEnv = {};
+  try {
+    await startDetachedRun({
+      factoryRoot,
+      target: target.path,
+      issue: "RIFF-52",
+      timeoutSeconds: 60,
+      env: {
+        LINEAR_API_TOKEN: "linear-secret",
+        GITHUB_TOKEN: "github-secret",
+        PATH: "/usr/bin:/bin",
+        HOME: "/tmp/home",
+        SSH_AUTH_SOCK: "/tmp/agent.sock",
+        GH_TOKEN: "should-not-copy",
+        UNRELATED_SECRET: "must-not-cross",
+      },
+      cliPath: "/factory/dist/src/cli.js",
+      runId,
+      instanceId,
+      resolveTarget: () => target,
+      spawnChild: (_command: string, args: string[], options: { env?: NodeJS.ProcessEnv }) => {
+        capturedEnv = options.env ?? {};
+        assert.equal(args.includes(target.path), false);
+        writeLaunchHandshake(
+          factoryRoot,
+          runId,
+          options.env?.FACTORY_LAUNCH_INSTANCE_ID ?? "",
+          4321,
+        );
+        return {
+          pid: 4321,
+          exitCode: null,
+          signalCode: null,
+          kill: () => true,
+          unref: () => {},
+          once: () => undefined,
+        };
+      },
+      sleep: async () => {},
+    });
+    assert.equal(capturedEnv.FACTORY_EXE_IDENTITY, undefined);
+    assert.equal(capturedEnv.SSH_AUTH_SOCK, "/tmp/agent.sock");
+    assert.equal(capturedEnv.GH_TOKEN, undefined);
+    assert.equal(capturedEnv.UNRELATED_SECRET, undefined);
+    assert.throws(() => statSync(telemetryPath(target.path, runId)));
   } finally {
     rmSync(factoryRoot, { recursive: true, force: true });
   }

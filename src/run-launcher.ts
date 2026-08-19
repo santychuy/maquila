@@ -10,9 +10,9 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { resolve } from "node:path";
 import { spawn } from "node:child_process";
-import { externalCommandEnvironment } from "./exe.js";
+import { controllerChildEnvironment, resolveControllerCredentials } from "./credentials.js";
 import { telemetryPath } from "./telemetry.js";
 import { resolveTargetRepository, type TargetRepository } from "./target.js";
 
@@ -168,20 +168,12 @@ export function writeLaunchHandshake(
   renameSync(temporary, target);
 }
 
-function requireEnvironment(env: NodeJS.ProcessEnv, identity?: string): NodeJS.ProcessEnv {
-  const linearToken = env.LINEAR_API_TOKEN?.trim();
-  const githubToken = env.GITHUB_TOKEN?.trim();
-  if (!linearToken || !githubToken)
-    throw new Error("LINEAR_API_TOKEN and GITHUB_TOKEN are required");
-  const selectedIdentity = identity ?? env.FACTORY_EXE_IDENTITY;
-  if (!selectedIdentity || !isAbsolute(selectedIdentity) || selectedIdentity.includes("\0"))
-    throw new Error("--identity or FACTORY_EXE_IDENTITY must be an absolute path");
-  return {
-    ...externalCommandEnvironment(env),
-    LINEAR_API_TOKEN: linearToken,
-    GITHUB_TOKEN: githubToken,
-    FACTORY_EXE_IDENTITY: selectedIdentity,
-  };
+async function controllerEnvironment(
+  env: NodeJS.ProcessEnv,
+  identity?: string,
+): Promise<NodeJS.ProcessEnv> {
+  const credentials = await resolveControllerCredentials({ env, identityFlag: identity });
+  return controllerChildEnvironment(env, credentials);
 }
 
 function exited(child: SpawnedChild): boolean {
@@ -213,7 +205,7 @@ export async function startDetachedRun(options: StartDetachedRunOptions): Promis
     ...(options.baseRef ? { baseRef: options.baseRef } : {}),
     ...(options.tag ? { tag: options.tag } : {}),
   });
-  const env = requireEnvironment(options.env ?? process.env, options.identity);
+  const env = await controllerEnvironment(options.env ?? process.env, options.identity);
   const runId = options.runId ?? randomUUID();
   const instanceId = options.instanceId ?? randomUUID();
   if (!UUID.test(runId) || !UUID.test(instanceId)) throw new Error("invalid launch identity");
