@@ -36,16 +36,36 @@ const ids = [
   "11111111-1111-1111-1111-111111111111",
   "22222222-2222-2222-2222-222222222222",
   "33333333-3333-3333-3333-333333333333",
+  "44444444-4444-4444-4444-444444444444",
 ];
 const BASE_SHA = "a".repeat(40);
-const PATCH = "diff --git a/docs/a.md b/docs/a.md\n";
+const DOCS_PATCH = [
+  "diff --git a/docs/a.md b/docs/a.md",
+  "new file mode 100644",
+  "--- /dev/null",
+  "+++ b/docs/a.md",
+  "@@ -0,0 +1 @@",
+  "+Documented behavior",
+  "",
+].join("\n");
+const SOURCE_PATCH = [
+  "diff --git a/src/a.ts b/src/a.ts",
+  "new file mode 100644",
+  "--- /dev/null",
+  "+++ b/src/a.ts",
+  "@@ -0,0 +1 @@",
+  "+export const implemented = true;",
+  "",
+].join("\n");
+const PATCH = `${DOCS_PATCH}${SOURCE_PATCH}`;
 const PATCH_SHA256 = createHash("sha256").update(PATCH).digest("hex");
+const DOCS_PATCH_SHA256 = createHash("sha256").update(DOCS_PATCH).digest("hex");
 let factoryRoot: string | undefined;
 function testFactoryRoot(): string {
   if (factoryRoot) return factoryRoot;
   factoryRoot = mkdtempSync(join(tmpdir(), "factory-runtime-"));
   mkdirSync(join(factoryRoot, "src", "agents"), { recursive: true });
-  for (const role of ["planner", "worker", "reviewer"]) {
+  for (const role of ["planner", "worker", "documenter", "reviewer"]) {
     copyFileSync(
       join(process.cwd(), "src", "agents", `${role}.md`),
       join(factoryRoot, "src", "agents", `${role}.md`),
@@ -108,7 +128,7 @@ test("recovery terminalizes an accepted child that died before intake state", ()
 });
 const HARVEST_EXPECTED = {
   baseSha: BASE_SHA,
-  allowedPaths: ["docs/a.md"],
+  allowedPaths: ["docs/a.md", "src/a.ts"],
   patchSha256: PATCH_SHA256,
 };
 function file(root: string, run: string, name: string, value = "{}") {
@@ -118,19 +138,136 @@ function file(root: string, run: string, name: string, value = "{}") {
 }
 function receipt(
   runId: string,
-  role: "planner" | "worker" | "reviewer",
+  role: "planner" | "worker" | "documenter" | "reviewer",
   artifacts: string[],
 ): string {
   return JSON.stringify({
     runId,
     status: "completed",
     baseSha: BASE_SHA,
-    ...(role === "reviewer" ? { workerRunId: ids[1] } : {}),
+    ...(role === "reviewer" ? { workerRunId: ids[1], documenterRunId: ids[2] } : {}),
     agent: { name: role },
     artifacts,
   });
 }
 function validArchive(root: string, unsafeLink = false, reviewDigest = PATCH_SHA256): string {
+  const verification = {
+    passed: true,
+    config: { commands: [["bun", "run", "check"]] },
+    commands: [
+      {
+        argv: ["bun", "run", "check"],
+        exitCode: 0,
+        timedOut: false,
+        stdout: "",
+        stderr: "",
+        durationMs: 1,
+      },
+    ],
+    git: {
+      passed: true,
+      baseSha: BASE_SHA,
+      headSha: BASE_SHA,
+      changedPaths: ["docs/a.md", "src/a.ts"],
+      unexpectedPaths: [],
+      reason: null,
+    },
+  };
+  const lifecycle = {
+    status: "completed",
+    stage: "reviewer",
+    baseSha: BASE_SHA,
+    allowedPaths: ["docs/a.md", "src/a.ts"],
+    workerRunId: ids[1],
+    documenterRunId: ids[2],
+    reviewerRunId: ids[3],
+    workerRunDir: `/home/exedev/factory/.factory/runs/${ids[1]}`,
+    documenterRunDir: `/home/exedev/factory/.factory/runs/${ids[2]}`,
+    reviewerRunDir: `/home/exedev/factory/.factory/runs/${ids[3]}`,
+    reviewPatchSha256: reviewDigest,
+    verification,
+  };
+  file(root, ids[0]!, "receipt.json", receipt(ids[0]!, "planner", ["envelope.json", "plan.md"]));
+  file(
+    root,
+    ids[0]!,
+    "envelope.json",
+    JSON.stringify({
+      summary: "Document architecture assessment",
+      evidence: ["RIFF-39 requests documentation"],
+      changes: [
+        { path: "src/a.ts", action: "add", rationale: "Implement assessment" },
+        { path: "docs/a.md", action: "add", rationale: "Document assessment" },
+      ],
+      verification: ["Run bun run check"],
+      risks: [],
+      decisionsNeeded: [],
+    }),
+  );
+  file(root, ids[0]!, "plan.md", "plan");
+  file(
+    root,
+    ids[1]!,
+    "receipt.json",
+    receipt(ids[1]!, "worker", [
+      "envelope.json",
+      "lifecycle.json",
+      "verification.json",
+      "review-diff.sha256",
+    ]),
+  );
+  file(
+    root,
+    ids[1]!,
+    "envelope.json",
+    JSON.stringify({
+      implemented: "Implemented assessment",
+      changedFiles: ["src/a.ts"],
+      validation: [{ command: "bun run check", outcome: "pass", detail: "passed" }],
+      openRisks: [],
+    }),
+  );
+  file(root, ids[1]!, "lifecycle.json", JSON.stringify(lifecycle));
+  file(root, ids[1]!, "verification.json", JSON.stringify(verification));
+  file(root, ids[1]!, "review-diff.sha256", `${reviewDigest}\n`);
+  file(root, ids[2]!, "receipt.json", receipt(ids[2]!, "documenter", ["envelope.json"]));
+  file(
+    root,
+    ids[2]!,
+    "envelope.json",
+    JSON.stringify({
+      outcome: "updated",
+      changedFiles: ["docs/a.md"],
+      detail: "Documented assessment",
+    }),
+  );
+  file(
+    root,
+    ids[3]!,
+    "receipt.json",
+    receipt(ids[3]!, "reviewer", ["envelope.json", "lifecycle.json"]),
+  );
+  file(root, ids[3]!, "lifecycle.json", JSON.stringify(lifecycle));
+  file(
+    root,
+    ids[3]!,
+    "envelope.json",
+    JSON.stringify({
+      verdict: "PASS",
+      correct: ["Verification passed"],
+      blockingFindings: [],
+      nonBlockingFindings: [],
+      residualRisks: [],
+    }),
+  );
+  if (unsafeLink) symlinkSync("/tmp", join(root, ".factory", "runs", ids[0]!, "unsafe-link"));
+  const archive = join(root, "evidence.tar");
+  execFileSync("tar", ["-cf", archive, "-C", root, ".factory/runs"]);
+  return archive;
+}
+function validDocsOnlyArchive(root: string): string {
+  validArchive(root);
+  rmSync(join(root, ".factory", "runs", ids[1]!), { recursive: true, force: true });
   const verification = {
     passed: true,
     config: { commands: [["bun", "run", "check"]] },
@@ -158,77 +295,76 @@ function validArchive(root: string, unsafeLink = false, reviewDigest = PATCH_SHA
     stage: "reviewer",
     baseSha: BASE_SHA,
     allowedPaths: ["docs/a.md"],
-    workerRunId: ids[1],
-    reviewerRunId: ids[2],
-    workerRunDir: `/home/exedev/factory/.factory/runs/${ids[1]}`,
-    reviewerRunDir: `/home/exedev/factory/.factory/runs/${ids[2]}`,
-    reviewPatchSha256: reviewDigest,
+    documenterRunId: ids[2],
+    documenterRunDir: `/home/exedev/factory/.factory/runs/${ids[2]}`,
+    reviewerRunId: ids[3],
+    reviewerRunDir: `/home/exedev/factory/.factory/runs/${ids[3]}`,
+    reviewPatchSha256: DOCS_PATCH_SHA256,
     verification,
   };
-  file(root, ids[0]!, "receipt.json", receipt(ids[0]!, "planner", ["envelope.json", "plan.md"]));
   file(
     root,
     ids[0]!,
     "envelope.json",
     JSON.stringify({
-      summary: "Document architecture assessment",
-      evidence: ["RIFF-39 requests documentation"],
-      changes: [{ path: "docs/a.md", action: "add", rationale: "Document assessment" }],
-      verification: ["Run bun run check"],
+      summary: "Docs",
+      evidence: ["fact"],
+      changes: [{ path: "docs/a.md", action: "add", rationale: "Docs" }],
+      verification: ["check"],
       risks: [],
       decisionsNeeded: [],
     }),
   );
-  file(root, ids[0]!, "plan.md", "plan");
   file(
     root,
-    ids[1]!,
+    ids[2]!,
     "receipt.json",
-    receipt(ids[1]!, "worker", [
+    receipt(ids[2]!, "documenter", [
       "envelope.json",
       "lifecycle.json",
       "verification.json",
       "review-diff.sha256",
     ]),
   );
-  file(
-    root,
-    ids[1]!,
-    "envelope.json",
-    JSON.stringify({
-      implemented: ["Documented assessment"],
-      changedFiles: ["docs/a.md"],
-      validation: [{ command: "bun run check", outcome: "pass", detail: "passed" }],
-      openRisks: [],
-    }),
-  );
-  file(root, ids[1]!, "lifecycle.json", JSON.stringify(lifecycle));
-  file(root, ids[1]!, "verification.json", JSON.stringify(verification));
-  file(root, ids[1]!, "review-diff.sha256", `${reviewDigest}\n`);
-  file(
-    root,
-    ids[2]!,
-    "receipt.json",
-    receipt(ids[2]!, "reviewer", ["envelope.json", "lifecycle.json"]),
-  );
   file(root, ids[2]!, "lifecycle.json", JSON.stringify(lifecycle));
+  file(root, ids[2]!, "verification.json", JSON.stringify(verification));
+  file(root, ids[2]!, "review-diff.sha256", `${DOCS_PATCH_SHA256}\n`);
   file(
     root,
-    ids[2]!,
-    "envelope.json",
+    ids[3]!,
+    "receipt.json",
     JSON.stringify({
-      verdict: "PASS",
-      correct: ["Verification passed"],
-      blockingFindings: [],
-      nonBlockingFindings: [],
-      residualRisks: [],
+      runId: ids[3],
+      status: "completed",
+      baseSha: BASE_SHA,
+      documenterRunId: ids[2],
+      agent: { name: "reviewer" },
+      artifacts: ["envelope.json", "lifecycle.json"],
     }),
   );
-  if (unsafeLink) symlinkSync("/tmp", join(root, ".factory", "runs", ids[0]!, "unsafe-link"));
-  const archive = join(root, "evidence.tar");
+  file(root, ids[3]!, "lifecycle.json", JSON.stringify(lifecycle));
+  const archive = join(root, "docs-evidence.tar");
   execFileSync("tar", ["-cf", archive, "-C", root, ".factory/runs"]);
   return archive;
 }
+
+test("controller patch fixtures are valid Git patches", () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-patch-fixture-"));
+  try {
+    execFileSync("git", ["init", "--quiet"], { cwd: root });
+    for (const [name, patch] of [
+      ["docs.patch", DOCS_PATCH],
+      ["mixed.patch", PATCH],
+    ] as const) {
+      const path = join(root, name);
+      writeFileSync(path, patch);
+      execFileSync("git", ["apply", "--check", path], { cwd: root });
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("harvest validates evidence requirements", () => {
   const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
   try {
@@ -237,6 +373,19 @@ test("harvest validates evidence requirements", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+test("harvest accepts docs-only evidence without a worker receipt", () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
+  try {
+    harvest(validDocsOnlyArchive(root), join(root, "out"), [ids[0]!, ids[2]!, ids[3]!], {
+      ...HARVEST_EXPECTED,
+      allowedPaths: ["docs/a.md"],
+      patchSha256: DOCS_PATCH_SHA256,
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("harvest rejects traversal run identifiers", () => {
   const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
   try {
@@ -302,10 +451,30 @@ test("harvest binds verification, role links, base SHA, and reviewed patch", () 
       name: "missing reviewer link",
       mutate(root) {
         const reviewerReceipt = JSON.parse(
-          readFileSync(join(root, ".factory", "runs", ids[2]!, "receipt.json"), "utf8"),
+          readFileSync(join(root, ".factory", "runs", ids[3]!, "receipt.json"), "utf8"),
         ) as Record<string, unknown>;
         delete reviewerReceipt.workerRunId;
-        file(root, ids[2]!, "receipt.json", JSON.stringify(reviewerReceipt));
+        file(root, ids[3]!, "receipt.json", JSON.stringify(reviewerReceipt));
+      },
+    },
+    {
+      name: "worker changed files mismatch",
+      mutate(root) {
+        const envelope = JSON.parse(
+          readFileSync(join(root, ".factory", "runs", ids[1]!, "envelope.json"), "utf8"),
+        ) as { changedFiles: string[] };
+        envelope.changedFiles = ["src/other.ts"];
+        file(root, ids[1]!, "envelope.json", JSON.stringify(envelope));
+      },
+    },
+    {
+      name: "documenter changed files mismatch",
+      mutate(root) {
+        const envelope = JSON.parse(
+          readFileSync(join(root, ".factory", "runs", ids[2]!, "envelope.json"), "utf8"),
+        ) as { changedFiles: string[] };
+        envelope.changedFiles = ["docs/other.md"];
+        file(root, ids[2]!, "envelope.json", JSON.stringify(envelope));
       },
     },
     {
@@ -496,6 +665,39 @@ class FakeExe implements ControllerExe {
         status: "completed",
         sourceAt,
       });
+      protocol.event({
+        type: "phase_started",
+        actor: "documenter",
+        phase: "documenting",
+        sourceAt,
+      });
+      protocol.event({
+        type: "agent_started",
+        actor: "documenter",
+        phase: "documenting",
+        sourceAt,
+      });
+      protocol.event({
+        type: "agent_finished",
+        actor: "documenter",
+        phase: "documenting",
+        status: "completed",
+        sourceAt,
+      });
+      protocol.event({
+        type: "agent_usage",
+        actor: "documenter",
+        phase: "documenting",
+        tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+        sourceAt,
+      });
+      protocol.event({
+        type: "phase_finished",
+        actor: "documenter",
+        phase: "documenting",
+        status: "completed",
+        sourceAt,
+      });
       protocol.event({ type: "phase_started", actor: "verifier", phase: "verifying", sourceAt });
       if (!this.missingGate)
         protocol.event({
@@ -557,7 +759,7 @@ class FakeExe implements ControllerExe {
       protocol.result({
         status: this.normalFailedReview ? "failed" : "completed",
         runDir: `/home/exedev/factory/.factory/runs/${ids[1]}`,
-        reviewerRunDir: `/home/exedev/factory/.factory/runs/${ids[2]}`,
+        reviewerRunDir: `/home/exedev/factory/.factory/runs/${ids[3]}`,
       });
     }
     const framed = output.join("");
@@ -580,7 +782,7 @@ class FakeExe implements ControllerExe {
       const command = child.join(" ");
       const stdout = command.includes(" pi plan ")
         ? `\nRun evidence: /home/exedev/factory/.factory/runs/${ids[0]}\n`
-        : `\nRun evidence: /home/exedev/factory/.factory/runs/${ids[1]}\nReviewer evidence: /home/exedev/factory/.factory/runs/${ids[2]}\n`;
+        : `\nRun evidence: /home/exedev/factory/.factory/runs/${ids[1]}\nReviewer evidence: /home/exedev/factory/.factory/runs/${ids[3]}\n`;
       return {
         stdout: JSON.stringify({
           code: this.failPlanner && command.includes(" pi plan ") ? 1 : 0,
@@ -601,17 +803,22 @@ class FakeExe implements ControllerExe {
         stderr: "",
       };
     }
+    if (argv[0] === "cat" && argv[1]?.endsWith("/lifecycle.json")) {
+      return {
+        stdout: JSON.stringify({
+          documenterRunDir: `/home/exedev/factory/.factory/runs/${ids[2]}`,
+        }),
+        stderr: "",
+      };
+    }
     if (argv[0] === "cat" && argv[1]?.endsWith("/envelope.json")) {
       return {
         stdout: JSON.stringify({
           summary: "Document architecture assessment",
           evidence: ["RIFF-39 requests documentation"],
           changes: [
-            {
-              path: "docs/a.md",
-              action: "add",
-              rationale: "Document assessment",
-            },
+            { path: "src/a.ts", action: "add", rationale: "Implement assessment" },
+            { path: "docs/a.md", action: "add", rationale: "Document assessment" },
           ],
           verification: ["Run bun run validate"],
           risks: [],
@@ -638,6 +845,132 @@ class FakeExe implements ControllerExe {
         validArchive(source, false, this.mismatchedReviewDigest ? "0".repeat(64) : PATCH_SHA256),
         localPath,
       );
+    } finally {
+      rmSync(source, { recursive: true, force: true });
+    }
+  }
+}
+
+class DocsOnlyExe extends FakeExe {
+  override async execStream(
+    destination: string,
+    argv: string[],
+    onStdout: (chunk: Buffer) => void,
+    timeoutMs?: number,
+  ) {
+    if (argv.includes("plan")) return super.execStream(destination, argv, onStdout, timeoutMs);
+    this.calls.push({ operation: "execStream", value: { destination, argv, timeoutMs } });
+    const output: string[] = [];
+    const protocol = createRemoteProtocolWriter((line) => output.push(line));
+    const sourceAt = "1970-01-01T00:00:00.000+00:00";
+    protocol.event({ type: "phase_started", actor: "documenter", phase: "documenting", sourceAt });
+    protocol.event({ type: "agent_started", actor: "documenter", phase: "documenting", sourceAt });
+    protocol.event({
+      type: "agent_finished",
+      actor: "documenter",
+      phase: "documenting",
+      status: "completed",
+      sourceAt,
+    });
+    protocol.event({
+      type: "agent_usage",
+      actor: "documenter",
+      phase: "documenting",
+      tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+      sourceAt,
+    });
+    protocol.event({
+      type: "phase_finished",
+      actor: "documenter",
+      phase: "documenting",
+      status: "completed",
+      sourceAt,
+    });
+    protocol.event({ type: "phase_started", actor: "verifier", phase: "verifying", sourceAt });
+    protocol.event({
+      type: "gate_finished",
+      actor: "verifier",
+      phase: "verifying",
+      passed: true,
+      commandCount: 1,
+      changedPathCount: 1,
+      timedOut: false,
+      sourceAt,
+    });
+    protocol.event({
+      type: "phase_finished",
+      actor: "verifier",
+      phase: "verifying",
+      status: "completed",
+      sourceAt,
+    });
+    protocol.event({ type: "phase_started", actor: "reviewer", phase: "reviewing", sourceAt });
+    protocol.event({ type: "agent_started", actor: "reviewer", phase: "reviewing", sourceAt });
+    protocol.event({
+      type: "agent_finished",
+      actor: "reviewer",
+      phase: "reviewing",
+      status: "completed",
+      sourceAt,
+    });
+    protocol.event({
+      type: "agent_usage",
+      actor: "reviewer",
+      phase: "reviewing",
+      tokens: { input: 3, output: 2, cacheRead: 0, cacheWrite: 0, total: 5 },
+      sourceAt,
+    });
+    protocol.event({
+      type: "review_finished",
+      actor: "reviewer",
+      phase: "reviewing",
+      verdict: "PASS",
+      blockerCount: 0,
+      sourceAt,
+    });
+    protocol.event({
+      type: "phase_finished",
+      actor: "reviewer",
+      phase: "reviewing",
+      status: "completed",
+      sourceAt,
+    });
+    protocol.result({
+      status: "completed",
+      runDir: `/home/exedev/factory/.factory/runs/${ids[2]}`,
+      reviewerRunDir: `/home/exedev/factory/.factory/runs/${ids[3]}`,
+    });
+    onStdout(Buffer.from(output.join("")));
+    return { stderr: "" };
+  }
+
+  override async exec(destination: string, argv: string[], timeoutMs?: number) {
+    if (argv[0] === "cat" && argv[1]?.endsWith("/envelope.json")) {
+      this.calls.push({ operation: "exec", value: { destination, argv, timeoutMs } });
+      return {
+        stdout: JSON.stringify({
+          summary: "Docs",
+          evidence: ["fact"],
+          changes: [{ path: "docs/a.md", action: "add", rationale: "Docs" }],
+          verification: ["check"],
+          risks: [],
+          decisionsNeeded: [],
+        }),
+        stderr: "",
+      };
+    }
+    if (argv.includes("diff")) {
+      this.calls.push({ operation: "exec", value: { destination, argv, timeoutMs } });
+      return { stdout: DOCS_PATCH, stderr: "" };
+    }
+    return super.exec(destination, argv, timeoutMs);
+  }
+
+  override async copyFrom(destination: string, remotePath: string, localPath: string) {
+    this.calls.push({ operation: "copyFrom", value: { destination, remotePath, localPath } });
+    const source = mkdtempSync(join(tmpdir(), "factory-docs-only-evidence-"));
+    try {
+      copyFileSync(validDocsOnlyArchive(source), localPath);
     } finally {
       rmSync(source, { recursive: true, force: true });
     }
@@ -805,7 +1138,7 @@ test("controller reaches ready only after remote evidence and VM cleanup", async
     assert.doesNotMatch(JSON.stringify(readiness), new RegExp(openRouterKey));
     const events = readTelemetry(telemetryPath(root, state.runId));
     const contexts = events.filter((event) => event.type === "agent_context");
-    assert.equal(contexts.length, 3);
+    assert.equal(contexts.length, 4);
     assert.ok(contexts.every((event) => /^[0-9a-f]{64}$/.test(event.payload.systemPromptSha256)));
     assert.ok(contexts.every((event) => event.payload.model === "openrouter/openai/gpt-5.6-terra"));
     assert.ok(contexts.every((event) => event.payload.executionLimits === undefined));
@@ -814,13 +1147,13 @@ test("controller reaches ready only after remote evidence and VM cleanup", async
     );
     assert.deepEqual(
       events.filter((event) => event.type === "agent_usage").map((event) => event.payload.total),
-      [14, 2, 5],
+      [14, 2, 2, 5],
     );
     assert.deepEqual(
       events
         .filter((event) => event.type === "agent_usage")
         .map((event) => event.payload.referenceEstimateNanoUsd),
-      [undefined, undefined, undefined],
+      [undefined, undefined, undefined, undefined],
     );
     assert.deepEqual(
       events.filter((event) => event.type === "phase_started").map((event) => event.phase?.name),
@@ -829,6 +1162,7 @@ test("controller reaches ready only after remote evidence and VM cleanup", async
         "bootstrapping",
         "planning",
         "implementing",
+        "documenting",
         "verifying",
         "reviewing",
         "ready_for_publication",
@@ -854,6 +1188,27 @@ test("controller reaches ready only after remote evidence and VM cleanup", async
     assert.equal(publicTool?.payload.toolCallId, "tool-1");
     assert.equal(publicTool?.sourceAt, "1970-01-01T00:00:00.000Z");
     assert.doesNotMatch(JSON.stringify(events), /remote-private-path-content/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("controller completes docs-only remote lifecycle without a worker run", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
+  try {
+    const result = await runController(controllerOptions(root, new DocsOnlyExe()));
+    assert.equal(result.status, "completed", result.error);
+    const runs = JSON.parse(
+      readFileSync(join(result.runDir, "remote-runs.json"), "utf8"),
+    ) as Record<string, unknown>;
+    assert.equal(runs.workerRun, undefined);
+    assert.equal(runs.documenterRun, `/home/exedev/factory/.factory/runs/${ids[2]}`);
+    const phases = readTelemetry(telemetryPath(root, readControllerState(result.runDir).runId))
+      .filter((event) => event.type === "phase_started")
+      .map((event) => event.phase?.name);
+    assert.equal(phases.includes("implementing"), false);
+    assert.ok(phases.includes("documenting"));
+    assert.ok(statSync(join(result.runDir, "evidence-manifest.json")).isFile());
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

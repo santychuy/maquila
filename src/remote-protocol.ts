@@ -10,12 +10,14 @@ export const MAX_REMOTE_STREAM_BYTES = 8 * 1024 * 1024;
 const ActorSchema = Type.Union([
   Type.Literal("planner"),
   Type.Literal("worker"),
+  Type.Literal("documenter"),
   Type.Literal("verifier"),
   Type.Literal("reviewer"),
 ]);
 const PhaseSchema = Type.Union([
   Type.Literal("planning"),
   Type.Literal("implementing"),
+  Type.Literal("documenting"),
   Type.Literal("verifying"),
   Type.Literal("reviewing"),
 ]);
@@ -105,11 +107,13 @@ const RemoteEventSchema = Type.Union([
       actor: Type.Union([
         Type.Literal("planner"),
         Type.Literal("worker"),
+        Type.Literal("documenter"),
         Type.Literal("reviewer"),
       ]),
       phase: Type.Union([
         Type.Literal("planning"),
         Type.Literal("implementing"),
+        Type.Literal("documenting"),
         Type.Literal("reviewing"),
       ]),
       tokens: TokenSchema,

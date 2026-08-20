@@ -67,11 +67,25 @@ type RemoteActor = RemoteEvent["actor"];
 const PHASE_OWNER: Record<RemotePhase, RemoteActor> = {
   planning: "planner",
   implementing: "worker",
+  documenting: "documenter",
   verifying: "verifier",
   reviewing: "reviewer",
 };
 function telemetryPhase(phase: RemotePhase): { id: string; name: RemotePhase; attempt: 1 } {
   return { id: `${phase}:1`, name: phase, attempt: 1 };
+}
+
+function claimedPaths(paths: string[]): string[] | undefined {
+  try {
+    const safe = paths.map(assertSafeRepoPath);
+    return new Set(safe).size === safe.length ? safe.toSorted() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isDocs(path: string): boolean {
+  return path === "docs" || path.startsWith("docs/");
 }
 export interface ControllerOptions {
   issue: string;
@@ -213,23 +227,40 @@ export function harvest(
     if (!UUID.test(run)) throw new Error("unsafe remote run id");
   }
   if (new Set(runs).size !== runs.length) throw new Error("remote run ids must be distinct");
+  const docsOnly = expected.allowedPaths.every((path) => {
+    const safe = assertSafeRepoPath(path);
+    return safe === "docs" || safe.startsWith("docs/");
+  });
+  if (runs.length !== (docsOnly ? 3 : 4)) throw new Error("remote lifecycle run count is invalid");
+  const plannerRun = runs[0]!;
+  const workerRun = docsOnly ? undefined : runs[1]!;
+  const documenterRun = runs[docsOnly ? 1 : 2]!;
+  const reviewerRun = runs[docsOnly ? 2 : 3]!;
+  const primaryRun = workerRun ?? documenterRun;
   const required = [
-    [runs[0], "receipt.json"],
-    [runs[0], "envelope.json"],
-    [runs[0], "plan.md"],
-    [runs[1], "receipt.json"],
-    [runs[1], "lifecycle.json"],
-    [runs[1], "verification.json"],
-    [runs[1], "review-diff.sha256"],
-    [runs[2], "receipt.json"],
-    [runs[2], "envelope.json"],
+    [plannerRun, "receipt.json"],
+    [plannerRun, "envelope.json"],
+    [plannerRun, "plan.md"],
+    [primaryRun, "receipt.json"],
+    [primaryRun, "lifecycle.json"],
+    [primaryRun, "verification.json"],
+    [primaryRun, "review-diff.sha256"],
+    [documenterRun, "envelope.json"],
+    [reviewerRun, "receipt.json"],
+    [reviewerRun, "envelope.json"],
+    [reviewerRun, "lifecycle.json"],
   ];
   for (const [run, file] of required)
     if (!existsSync(resolve(target, ".factory", "runs", run!, file!)))
       throw new Error("required remote evidence missing");
+  const archivedRuns = new Set(
+    names.map((name) => name.split("/")[2]).filter((name): name is string => Boolean(name)),
+  );
+  if (archivedRuns.size !== runs.length || runs.some((run) => !archivedRuns.has(run)))
+    throw new Error("remote evidence has unexpected runs");
   const receipt = (
     run: string,
-    role: "planner" | "worker" | "reviewer",
+    role: "planner" | "worker" | "documenter" | "reviewer",
     requiredArtifacts: string[],
   ): Record<string, unknown> | undefined => {
     const value = json(resolve(target, ".factory", "runs", run, "receipt.json"));
@@ -253,24 +284,39 @@ export function harvest(
       return undefined;
     return value;
   };
-  const plannerReceipt = receipt(runs[0]!, "planner", ["envelope.json", "plan.md"]);
-  const workerReceipt = receipt(runs[1]!, "worker", [
+  const plannerReceipt = receipt(plannerRun, "planner", ["envelope.json", "plan.md"]);
+  const workerReceipt = workerRun
+    ? receipt(workerRun, "worker", [
+        "envelope.json",
+        "lifecycle.json",
+        "verification.json",
+        "review-diff.sha256",
+      ])
+    : undefined;
+  const documenterReceipt = receipt(documenterRun, "documenter", [
     "envelope.json",
-    "lifecycle.json",
-    "verification.json",
-    "review-diff.sha256",
+    ...(docsOnly ? ["lifecycle.json", "verification.json", "review-diff.sha256"] : []),
   ]);
-  const reviewerReceipt = receipt(runs[2]!, "reviewer", ["envelope.json", "lifecycle.json"]);
+  const reviewerReceipt = receipt(reviewerRun, "reviewer", ["envelope.json", "lifecycle.json"]);
   const planner = parseEnvelope(
     "planner",
-    json(resolve(target, ".factory", "runs", runs[0]!, "envelope.json")),
+    json(resolve(target, ".factory", "runs", plannerRun, "envelope.json")),
   );
-  const worker = json(resolve(target, ".factory", "runs", runs[1]!, "lifecycle.json"));
-  const verification = json(resolve(target, ".factory", "runs", runs[1]!, "verification.json"));
-  const reviewerLifecycle = json(resolve(target, ".factory", "runs", runs[2]!, "lifecycle.json"));
+  const workerEnvelope = workerRun
+    ? parseEnvelope("worker", json(resolve(target, ".factory", "runs", workerRun, "envelope.json")))
+    : undefined;
+  const worker = json(resolve(target, ".factory", "runs", primaryRun, "lifecycle.json"));
+  const verification = json(resolve(target, ".factory", "runs", primaryRun, "verification.json"));
+  const documenter = parseEnvelope(
+    "documenter",
+    json(resolve(target, ".factory", "runs", documenterRun, "envelope.json")),
+  );
+  const reviewerLifecycle = json(
+    resolve(target, ".factory", "runs", reviewerRun, "lifecycle.json"),
+  );
   const reviewer = parseEnvelope(
     "reviewer",
-    json(resolve(target, ".factory", "runs", runs[2]!, "envelope.json")),
+    json(resolve(target, ".factory", "runs", reviewerRun, "envelope.json")),
   );
   const allowed = new Set(expected.allowedPaths.map(assertSafeRepoPath));
   const pathAllowed = (path: unknown): path is string =>
@@ -302,41 +348,77 @@ export function harvest(
         command.timedOut === false,
     );
   const reviewedDigest = readFileSync(
-    resolve(target, ".factory", "runs", runs[1]!, "review-diff.sha256"),
+    resolve(target, ".factory", "runs", primaryRun, "review-diff.sha256"),
     "utf8",
   ).trim();
   const plannerPaths = planner.ok
     ? planner.envelope.changes.map((change) => assertSafeRepoPath(change.path))
     : [];
+  const verifiedPaths =
+    isRecord(verification) &&
+    isRecord(verification.git) &&
+    Array.isArray(verification.git.changedPaths)
+      ? claimedPaths(
+          verification.git.changedPaths.filter((path): path is string => typeof path === "string"),
+        )
+      : undefined;
+  const workerClaims = workerEnvelope?.ok
+    ? claimedPaths(workerEnvelope.envelope.changedFiles)
+    : undefined;
+  const documenterClaims = documenter.ok
+    ? claimedPaths(documenter.envelope.changedFiles)
+    : undefined;
+  const lifecycleLinks =
+    isRecord(worker) &&
+    isRecord(reviewerLifecycle) &&
+    worker.status === "completed" &&
+    worker.stage === "reviewer" &&
+    worker.baseSha === expected.baseSha &&
+    worker.documenterRunId === documenterRun &&
+    worker.reviewerRunId === reviewerRun &&
+    typeof worker.documenterRunDir === "string" &&
+    basename(worker.documenterRunDir) === documenterRun &&
+    typeof worker.reviewerRunDir === "string" &&
+    basename(worker.reviewerRunDir) === reviewerRun &&
+    worker.reviewPatchSha256 === expected.patchSha256 &&
+    reviewerLifecycle.status === "completed" &&
+    reviewerLifecycle.stage === "reviewer" &&
+    reviewerLifecycle.baseSha === expected.baseSha &&
+    reviewerLifecycle.documenterRunId === documenterRun &&
+    reviewerLifecycle.reviewerRunId === reviewerRun &&
+    reviewerLifecycle.reviewPatchSha256 === expected.patchSha256 &&
+    (docsOnly
+      ? worker.workerRunId === undefined && reviewerLifecycle.workerRunId === undefined
+      : worker.workerRunId === workerRun && reviewerLifecycle.workerRunId === workerRun) &&
+    Array.isArray(worker.allowedPaths) &&
+    worker.allowedPaths.length === allowed.size &&
+    worker.allowedPaths.every((path) => typeof path === "string" && allowed.has(path)) &&
+    JSON.stringify(worker.verification) === JSON.stringify(verification) &&
+    JSON.stringify(reviewerLifecycle.verification) === JSON.stringify(verification);
   if (
     !plannerReceipt ||
-    !workerReceipt ||
+    (!docsOnly && !workerReceipt) ||
+    !documenterReceipt ||
     !reviewerReceipt ||
-    reviewerReceipt.workerRunId !== runs[1] ||
+    (!docsOnly && reviewerReceipt.workerRunId !== workerRun) ||
+    (docsOnly && reviewerReceipt.workerRunId !== undefined) ||
+    reviewerReceipt.documenterRunId !== documenterRun ||
     !planner.ok ||
     planner.envelope.decisionsNeeded.length > 0 ||
     plannerPaths.length !== allowed.size ||
     !plannerPaths.every((path) => allowed.has(path)) ||
-    !isRecord(worker) ||
-    worker.status !== "completed" ||
-    worker.stage !== "reviewer" ||
-    worker.baseSha !== expected.baseSha ||
-    worker.workerRunId !== runs[1] ||
-    worker.reviewerRunId !== runs[2] ||
-    typeof worker.reviewerRunDir !== "string" ||
-    basename(worker.reviewerRunDir) !== runs[2] ||
-    worker.reviewPatchSha256 !== expected.patchSha256 ||
+    !lifecycleLinks ||
+    !verifiedPaths ||
+    (!docsOnly &&
+      (!workerEnvelope?.ok ||
+        !workerClaims ||
+        JSON.stringify(workerClaims) !==
+          JSON.stringify(verifiedPaths.filter((path) => !isDocs(path))))) ||
+    !documenterClaims ||
+    JSON.stringify(documenterClaims) !== JSON.stringify(verifiedPaths.filter(isDocs)) ||
+    (documenter.ok &&
+      (documenter.envelope.outcome === "updated") !== documenterClaims.length > 0) ||
     reviewedDigest !== expected.patchSha256 ||
-    !isRecord(reviewerLifecycle) ||
-    reviewerLifecycle.status !== "completed" ||
-    reviewerLifecycle.stage !== "reviewer" ||
-    reviewerLifecycle.baseSha !== expected.baseSha ||
-    reviewerLifecycle.workerRunId !== runs[1] ||
-    reviewerLifecycle.reviewerRunId !== runs[2] ||
-    reviewerLifecycle.reviewPatchSha256 !== expected.patchSha256 ||
-    !Array.isArray(worker.allowedPaths) ||
-    worker.allowedPaths.length !== allowed.size ||
-    !worker.allowedPaths.every((path) => typeof path === "string" && allowed.has(path)) ||
     !isRecord(verification) ||
     verification.passed !== true ||
     !commandsPass ||
@@ -350,8 +432,8 @@ export function harvest(
     !Array.isArray(verification.git.unexpectedPaths) ||
     verification.git.unexpectedPaths.length !== 0 ||
     verification.git.reason !== null ||
-    JSON.stringify(worker.verification) !== JSON.stringify(verification) ||
-    JSON.stringify(reviewerLifecycle.verification) !== JSON.stringify(verification) ||
+    !documenter.ok ||
+    documenter.envelope.outcome === "blocked" ||
     !reviewer.ok ||
     reviewer.envelope.verdict !== "PASS"
   ) {
@@ -743,7 +825,7 @@ export async function runController(options: ControllerOptions): Promise<Control
       factorySha: archive.sha,
       sha256: hash(archive.path),
     });
-    const archivedRole = (role: "planner" | "worker" | "reviewer") => {
+    const archivedRole = (role: "planner" | "worker" | "documenter" | "reviewer") => {
       const filePath = `src/agents/${role}.md`;
       const source = execFileSync("git", ["show", `${archive!.sha}:${filePath}`], {
         cwd: factoryRoot,
@@ -754,6 +836,7 @@ export async function runController(options: ControllerOptions): Promise<Control
     const archivedRoles = {
       planner: archivedRole("planner"),
       worker: archivedRole("worker"),
+      documenter: archivedRole("documenter"),
       reviewer: archivedRole("reviewer"),
     };
     const configDir = mkdtempSync(resolve(tmpdir(), "factory-pi-"));
@@ -891,7 +974,7 @@ export async function runController(options: ControllerOptions): Promise<Control
       );
       let nextPublicToolId = 1;
       const remoteSequence = (
-        expected: Array<"planning" | "implementing" | "verifying" | "reviewing">,
+        expected: Array<"planning" | "implementing" | "documenting" | "verifying" | "reviewing">,
       ) => {
         let index = 0;
         let open: (typeof expected)[number] | undefined;
@@ -904,6 +987,7 @@ export async function runController(options: ControllerOptions): Promise<Control
         const allowedTools: Record<RemoteEvent["actor"], Set<string>> = {
           planner: new Set([...archivedRoles.planner.tools, "submit_envelope"]),
           worker: new Set([...archivedRoles.worker.tools, "submit_envelope"]),
+          documenter: new Set([...archivedRoles.documenter.tools, "submit_envelope"]),
           verifier: new Set(),
           reviewer: new Set([...archivedRoles.reviewer.tools, "submit_envelope"]),
         };
@@ -1160,7 +1244,16 @@ export async function runController(options: ControllerOptions): Promise<Control
       const parsedPlan = parseEnvelope("planner", plannerEnvelope);
       if (!parsedPlan.ok || parsedPlan.envelope.decisionsNeeded.length)
         throw new Error("remote planner envelope is blocked");
-      const workerSequence = remoteSequence(["implementing", "verifying", "reviewing"]);
+      const hasWorker = parsedPlan.envelope.changes.some((change) => {
+        const path = assertSafeRepoPath(change.path);
+        return path !== "docs" && !path.startsWith("docs/");
+      });
+      const workerSequence = remoteSequence([
+        ...(hasWorker ? (["implementing"] as const) : []),
+        "documenting",
+        "verifying",
+        "reviewing",
+      ]);
       let workerResult: RemoteResultFrame;
       try {
         workerResult = await streamed(
@@ -1196,6 +1289,15 @@ export async function runController(options: ControllerOptions): Promise<Control
       }
       const workerRun = outputPath(workerResult.runDir, "Run evidence");
       if (workerResult.status !== "completed") throw new Error("remote worker lifecycle failed");
+      const lifecycle: unknown = JSON.parse(
+        await remote(exe, vm.sshDest, ["cat", `${workerRun}/lifecycle.json`], 30_000),
+      );
+      const documenterRun = outputPath(
+        isRecord(lifecycle) && typeof lifecycle.documenterRunDir === "string"
+          ? lifecycle.documenterRunDir
+          : undefined,
+        "Documenter evidence",
+      );
       const reviewerRun = outputPath(workerResult.reviewerRunDir, "Reviewer evidence");
       stage = "harvesting";
       const patch = await remote(
@@ -1235,7 +1337,12 @@ export async function runController(options: ControllerOptions): Promise<Control
         [options.openRouterKey],
         "evidence archive",
       );
-      const runIds = [plannerRun, workerRun, reviewerRun].map((path) => basename(path));
+      const runIds = [
+        plannerRun,
+        ...(hasWorker ? [workerRun] : []),
+        documenterRun,
+        reviewerRun,
+      ].map((path) => basename(path));
       harvest(resolve(runDir, "evidence.tar"), runDir, runIds, {
         baseSha: state.baseSha,
         allowedPaths: parsedPlan.envelope.changes.map((change) => change.path),
@@ -1250,7 +1357,12 @@ export async function runController(options: ControllerOptions): Promise<Control
           sha256: hash(resolve(runDir, "evidence.tar")),
         },
       });
-      writeJson(resolve(runDir, "remote-runs.json"), { plannerRun, workerRun, reviewerRun });
+      writeJson(resolve(runDir, "remote-runs.json"), {
+        plannerRun,
+        ...(hasWorker ? { workerRun } : {}),
+        documenterRun,
+        reviewerRun,
+      });
     } finally {
       rmSync(configDir, { recursive: true, force: true });
     }

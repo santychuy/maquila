@@ -32,6 +32,12 @@ const validWorker = {
   openRisks: ["none"],
 };
 
+const validDocumenter = {
+  outcome: "no_change",
+  changedFiles: [],
+  detail: "No documentation changes needed",
+};
+
 const validReviewer = {
   verdict: "PASS",
   correct: ["Envelope schema matches roles"],
@@ -40,7 +46,7 @@ const validReviewer = {
   residualRisks: ["Prompt drift"],
 };
 
-test("parseEnvelope accepts valid planner, worker, and reviewer envelopes", () => {
+test("parseEnvelope accepts valid planner, worker, documenter, and reviewer envelopes", () => {
   const planner = parseEnvelope("planner", validPlanner);
   assert.equal(planner.ok, true);
   if (planner.ok) assert.equal(planner.envelope.summary, validPlanner.summary);
@@ -48,6 +54,9 @@ test("parseEnvelope accepts valid planner, worker, and reviewer envelopes", () =
   const worker = parseEnvelope("worker", validWorker);
   assert.equal(worker.ok, true);
   if (worker.ok) assert.equal(worker.envelope.validation[0]?.outcome, "pass");
+
+  const documenter = parseEnvelope("documenter", validDocumenter);
+  assert.equal(documenter.ok, true);
 
   const reviewer = parseEnvelope("reviewer", validReviewer);
   assert.equal(reviewer.ok, true);
@@ -84,6 +93,22 @@ test("blocked planner with decisions and no changes or verification is valid", (
   });
   assert.equal(result.ok, true);
   if (result.ok) assert.deepEqual(result.envelope.changes, []);
+});
+
+test("documenter outcomes have unambiguous changed-file semantics", () => {
+  assert.equal(parseEnvelope("documenter", { ...validDocumenter, outcome: "updated" }).ok, false);
+  assert.equal(
+    parseEnvelope("documenter", { ...validDocumenter, changedFiles: ["docs/a.md"] }).ok,
+    false,
+  );
+  assert.equal(
+    parseEnvelope("documenter", {
+      outcome: "updated",
+      changedFiles: ["docs/a.md"],
+      detail: "Updated docs",
+    }).ok,
+    true,
+  );
 });
 
 test("reviewer PASS with blocking findings is invalid", () => {

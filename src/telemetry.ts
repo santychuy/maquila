@@ -24,6 +24,7 @@ const ActorSchema = Type.Union([
   Type.Literal("controller"),
   Type.Literal("planner"),
   Type.Literal("worker"),
+  Type.Literal("documenter"),
   Type.Literal("verifier"),
   Type.Literal("reviewer"),
 ]);
@@ -33,6 +34,7 @@ const PhaseNameSchema = Type.Union([
   Type.Literal("bootstrapping"),
   Type.Literal("planning"),
   Type.Literal("implementing"),
+  Type.Literal("documenting"),
   Type.Literal("verifying"),
   Type.Literal("reviewing"),
   Type.Literal("fixing"),
@@ -515,7 +517,7 @@ export function readTelemetry(path: string): TelemetryRecord[] {
       activeTools.delete(record.payload.toolCallId);
     }
     if (record.type === "agent_context" || record.type === "agent_usage") {
-      if (!record.phase || !["planner", "worker", "reviewer"].includes(record.actor))
+      if (!record.phase || !["planner", "worker", "documenter", "reviewer"].includes(record.actor))
         throw new Error("agent telemetry requires agent phase");
       const started = openPhases.get(record.phase.id);
       if (
@@ -558,7 +560,7 @@ export function readTelemetry(path: string): TelemetryRecord[] {
       if (
         record.payload.status === "completed" &&
         ([...activeTools.values()].some((tool) => tool.phaseId === record.phase!.id) ||
-          (["planner", "worker", "reviewer"].includes(record.actor) &&
+          (["planner", "worker", "documenter", "reviewer"].includes(record.actor) &&
             (agentStates.get(record.phase.id) !== "completed" || !usages.has(record.phase.id))))
       )
         throw new Error("completed phase has incomplete agent activity");
@@ -631,7 +633,7 @@ export function createTelemetryWriter(root: string, runId: string): TelemetryWri
           throw new Error("phase closure does not match active phase");
         if (
           record.payload.status === "completed" &&
-          ["planner", "worker", "reviewer"].includes(record.actor) &&
+          ["planner", "worker", "documenter", "reviewer"].includes(record.actor) &&
           (!phaseEvents.some(
             (event) => event.type === "agent_finished" && event.payload.status === "completed",
           ) ||

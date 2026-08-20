@@ -8,7 +8,7 @@ import { test } from "node:test";
 import type { Envelope } from "../src/envelope.js";
 import type { AgentRunResult, RunAgentOptions, RunReceipt } from "../src/run-agent.js";
 import type { VerificationResult, VerifyOptions } from "../src/verify.js";
-import { runWorkerLifecycle } from "../src/worker.js";
+import { runWorkerLifecycle } from "../src/workflows/worker.js";
 import type { RemoteEvent } from "../src/remote-protocol.js";
 
 const planner = {
@@ -82,10 +82,21 @@ interface StubResponse {
 function agentStub(
   responses: StubResponse[],
   calls: RunAgentOptions[],
+  documenterResponse?: StubResponse,
 ): typeof import("../src/run-agent.js").runAgent {
   return async (runOptions) => {
     calls.push(runOptions);
-    const response = responses.shift();
+    const response =
+      runOptions.agent.name === "documenter"
+        ? (documenterResponse ?? {
+            status: "completed" as const,
+            envelope: {
+              outcome: "no_change" as const,
+              changedFiles: [],
+              detail: "No documentation changes needed",
+            },
+          })
+        : responses.shift();
     if (!response) throw new Error("unexpected agent call");
     await response.mutate?.();
     const receipt: RunReceipt = {
@@ -205,7 +216,7 @@ test("verification failure blocks reviewer and indexes evidence", async () => {
       verifyRepository: async () => verification(false),
     });
     assert.equal(result.status, "failed");
-    assert.equal(calls.length, 1);
+    assert.equal(calls.length, 2);
     assert.equal((await json(join(result.runDir, "lifecycle.json"))).stage, "verification");
     const receipt = await json(join(result.runDir, "receipt.json"));
     assert.deepEqual(
@@ -246,18 +257,19 @@ test("successful worker invokes separate reviewer with untracked patch", async (
     });
     assert.equal(result.status, "completed");
     assert.equal(verifyOptions?.commandTimeoutMs, 60_000);
-    assert.equal(calls.length, 2);
+    assert.equal(calls.length, 3);
     assert.equal(calls[0]?.agent.model, "openrouter/openai/gpt-5.6-terra");
     assert.equal(calls[1]?.agent.model, "openrouter/openai/gpt-5.6-terra");
-    assert.notEqual(calls[0]?.artifacts.runDir, calls[1]?.artifacts.runDir);
-    assert.match(calls[1]?.prompt ?? "", /new file mode/);
-    assert.match(calls[1]?.prompt ?? "", /export const x = 1/);
+    assert.equal(calls[2]?.agent.model, "openrouter/openai/gpt-5.6-terra");
+    assert.notEqual(calls[0]?.artifacts.runDir, calls[2]?.artifacts.runDir);
+    assert.match(calls[2]?.prompt ?? "", /new file mode/);
+    assert.match(calls[2]?.prompt ?? "", /export const x = 1/);
     const lifecycle = await json(join(result.runDir, "lifecycle.json"));
     assert.equal(lifecycle.reviewerRunDir, result.reviewerRunDir);
     assert.ok(result.reviewerRunDir);
     assert.deepEqual(
       events.filter((event) => event.type === "phase_started").map((event) => event.phase),
-      ["implementing", "verifying", "reviewing"],
+      ["implementing", "documenting", "verifying", "reviewing"],
     );
     assert.ok(events.some((event) => event.type === "gate_finished" && event.passed));
     assert.ok(events.some((event) => event.type === "review_finished" && event.verdict === "PASS"));
@@ -313,8 +325,118 @@ test("review digest matches one staged diff for mixed tracked and untracked chan
       cwd: f.repo,
     });
     assert.equal(reviewed, createHash("sha256").update(staged).digest("hex"));
-    const prompt = calls[1]?.prompt ?? "";
+    const prompt = calls[2]?.prompt ?? "";
     assert.ok(prompt.indexOf("a/src/a.ts") < prompt.indexOf("a/src/z.ts"));
+  } finally {
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("docs-only plan skips worker and runs documenter before review", async () => {
+  const f = await fixture();
+  const calls: RunAgentOptions[] = [];
+  try {
+    await writeFile(
+      f.envelope,
+      JSON.stringify({
+        ...planner,
+        changes: [{ path: "docs/a.md", action: "add", rationale: "Document behavior" }],
+      }),
+    );
+    const result = await runWorkerLifecycle({
+      ...options(f),
+      runAgent: agentStub([{ status: "completed", envelope: reviewerPass }], calls, {
+        status: "completed",
+        envelope: {
+          outcome: "updated",
+          changedFiles: ["docs/a.md"],
+          detail: "Documented behavior",
+        },
+        mutate: async () => {
+          await mkdir(join(f.repo, "docs"), { recursive: true });
+          await writeFile(join(f.repo, "docs", "a.md"), "Documented\n");
+        },
+      }),
+      verifyRepository: async () => verification(true, { changedPaths: ["docs/a.md"] }),
+    });
+    assert.equal(result.status, "completed");
+    assert.deepEqual(
+      calls.map((call) => call.agent.name),
+      ["documenter", "reviewer"],
+    );
+    assert.ok(await readFile(join(result.runDir, "lifecycle.json")));
+    assert.ok(await readFile(join(result.runDir, "verification.json")));
+    assert.ok(await readFile(join(result.runDir, "review-diff.sha256")));
+  } finally {
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("documenter timeout stays timed_out and closes documenting once", async () => {
+  const f = await fixture();
+  const events: RemoteEvent[] = [];
+  try {
+    await writeFile(
+      f.envelope,
+      JSON.stringify({
+        ...planner,
+        changes: [{ path: "docs/a.md", action: "add", rationale: "Document behavior" }],
+      }),
+    );
+    const result = await runWorkerLifecycle({
+      ...options(f),
+      runAgent: agentStub([], [], { status: "timed_out" }),
+      onEvent: (event) => events.push(event),
+    });
+    assert.equal(result.status, "timed_out");
+    assert.deepEqual(
+      events
+        .filter(
+          (event): event is Extract<RemoteEvent, { type: "phase_finished" }> =>
+            event.type === "phase_finished" && event.phase === "documenting",
+        )
+        .map((event) => event.status),
+      ["timed_out"],
+    );
+  } finally {
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("blocked documenter fails and closes documenting once", async () => {
+  const f = await fixture();
+  const events: RemoteEvent[] = [];
+  try {
+    await writeFile(
+      f.envelope,
+      JSON.stringify({
+        ...planner,
+        changes: [{ path: "docs/a.md", action: "add", rationale: "Document behavior" }],
+      }),
+    );
+    const result = await runWorkerLifecycle({
+      ...options(f),
+      runAgent: agentStub([], [], {
+        status: "completed",
+        envelope: {
+          outcome: "blocked",
+          changedFiles: [],
+          detail: "Missing product decision",
+        },
+      }),
+      onEvent: (event) => events.push(event),
+    });
+    assert.equal(result.status, "failed");
+    assert.equal((await json(join(result.runDir, "lifecycle.json"))).stage, "documenter");
+    assert.deepEqual(
+      events
+        .filter(
+          (event): event is Extract<RemoteEvent, { type: "phase_finished" }> =>
+            event.type === "phase_finished" && event.phase === "documenting",
+        )
+        .map((event) => event.status),
+      ["failed"],
+    );
   } finally {
     await rm(f.root, { recursive: true, force: true });
   }
@@ -388,6 +510,7 @@ test("worker and reviewer timeouts remain timed out", async () => {
         .map((event) => [event.phase, event.status]),
       [
         ["implementing", "completed"],
+        ["documenting", "completed"],
         ["verifying", "completed"],
         ["reviewing", "timed_out"],
       ],
@@ -407,7 +530,10 @@ test("reviewer exception closes the phase once", async () => {
       {
         status: "completed",
         envelope: workerEnvelope,
-        mutate: () => writeFile(join(f.repo, "src-x.ts"), "x\n"),
+        mutate: async () => {
+          await mkdir(join(f.repo, "src"), { recursive: true });
+          await writeFile(join(f.repo, "src", "x.ts"), "x\n");
+        },
       },
     ],
     calls,
@@ -416,7 +542,7 @@ test("reviewer exception closes the phase once", async () => {
     const result = await runWorkerLifecycle({
       ...options(f),
       runAgent: async (runOptions) => {
-        if (calls.length > 0) throw new Error("reviewer unavailable");
+        if (runOptions.agent.name === "reviewer") throw new Error("reviewer unavailable");
         return workerRun(runOptions);
       },
       verifyRepository: async () => verification(true),
@@ -429,6 +555,7 @@ test("reviewer exception closes the phase once", async () => {
         .map((event) => [event.phase, event.status]),
       [
         ["implementing", "completed"],
+        ["documenting", "completed"],
         ["verifying", "completed"],
         ["reviewing", "failed"],
       ],
@@ -457,6 +584,7 @@ test("verification exception closes the phase once", async () => {
         .map((event) => [event.phase, event.status]),
       [
         ["implementing", "completed"],
+        ["documenting", "completed"],
         ["verifying", "failed"],
       ],
     );
@@ -474,6 +602,82 @@ test("verification timeout returns timed_out", async () => {
       verifyRepository: async () => verification(false, { timedOut: true }),
     });
     assert.equal(result.status, "timed_out");
+  } finally {
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("worker rejects untracked documentation changes", async () => {
+  const f = await fixture();
+  const events: RemoteEvent[] = [];
+  try {
+    const result = await runWorkerLifecycle({
+      ...options(f),
+      runAgent: agentStub(
+        [
+          {
+            status: "completed",
+            envelope: workerEnvelope,
+            mutate: async () => {
+              await mkdir(join(f.repo, "docs"), { recursive: true });
+              await writeFile(join(f.repo, "docs", "leak.md"), "leak\n");
+            },
+          },
+        ],
+        [],
+      ),
+      onEvent: (event) => events.push(event),
+    });
+    assert.equal(result.status, "failed");
+    assert.equal((await json(join(result.runDir, "lifecycle.json"))).stage, "worker");
+    assert.deepEqual(
+      events
+        .filter(
+          (event): event is Extract<RemoteEvent, { type: "phase_finished" }> =>
+            event.type === "phase_finished" && event.phase === "implementing",
+        )
+        .map((event) => event.status),
+      ["failed"],
+    );
+  } finally {
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("documenter cannot alter worker-owned content and closes its phase failed", async () => {
+  const f = await fixture();
+  const events: RemoteEvent[] = [];
+  try {
+    await mkdir(join(f.repo, "src"), { recursive: true });
+    const result = await runWorkerLifecycle({
+      ...options(f),
+      runAgent: agentStub(
+        [
+          {
+            status: "completed",
+            envelope: workerEnvelope,
+            mutate: () => writeFile(join(f.repo, "src", "x.ts"), "worker\n"),
+          },
+        ],
+        [],
+        {
+          status: "completed",
+          envelope: { outcome: "no_change", changedFiles: [], detail: "No docs" },
+          mutate: () => writeFile(join(f.repo, "src", "x.ts"), "documenter\n"),
+        },
+      ),
+      onEvent: (event) => events.push(event),
+    });
+    assert.equal(result.status, "failed");
+    assert.deepEqual(
+      events
+        .filter(
+          (event): event is Extract<RemoteEvent, { type: "phase_finished" }> =>
+            event.type === "phase_finished" && event.phase === "documenting",
+        )
+        .map((event) => event.status),
+      ["failed"],
+    );
   } finally {
     await rm(f.root, { recursive: true, force: true });
   }

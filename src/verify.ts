@@ -124,7 +124,7 @@ function isAllowed(path: string, allowed: Set<string>): boolean {
   return false;
 }
 
-function changedPaths(repo: string): string[] {
+export function changedPaths(repo: string): string[] {
   const tracked = splitNul(git(repo, "diff", "--no-renames", "--name-only", "-z", "HEAD"));
   const staged = splitNul(git(repo, "diff", "--cached", "--no-renames", "--name-only", "-z"));
   const untracked = splitNul(git(repo, "ls-files", "--others", "--exclude-standard", "-z"));

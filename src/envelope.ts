@@ -2,7 +2,7 @@ import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent
 import { Type, type Static, type TSchema } from "typebox";
 import { Value } from "typebox/value";
 
-export type EnvelopeRole = "planner" | "worker" | "reviewer";
+export type EnvelopeRole = "planner" | "worker" | "documenter" | "reviewer";
 
 const PlannerChangeSchema = Type.Object(
   {
@@ -57,6 +57,19 @@ export const WorkerEnvelopeSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const DocumenterEnvelopeSchema = Type.Object(
+  {
+    outcome: Type.Unsafe<"updated" | "no_change" | "blocked">({
+      type: "string",
+      enum: ["updated", "no_change", "blocked"],
+      description: "Documentation outcome",
+    }),
+    changedFiles: Type.Array(Type.String(), { description: "Documentation files changed" }),
+    detail: Type.String({ description: "What was updated, skipped, or blocked" }),
+  },
+  { additionalProperties: false },
+);
+
 export const ReviewerEnvelopeSchema = Type.Object(
   {
     verdict: Type.Unsafe<"PASS" | "FAIL">({
@@ -77,13 +90,15 @@ export const ReviewerEnvelopeSchema = Type.Object(
 const Schemas: Record<EnvelopeRole, TSchema> = {
   planner: PlannerEnvelopeSchema,
   worker: WorkerEnvelopeSchema,
+  documenter: DocumenterEnvelopeSchema,
   reviewer: ReviewerEnvelopeSchema,
 };
 
 export type PlannerEnvelope = Static<typeof PlannerEnvelopeSchema>;
 export type WorkerEnvelope = Static<typeof WorkerEnvelopeSchema>;
+export type DocumenterEnvelope = Static<typeof DocumenterEnvelopeSchema>;
 export type ReviewerEnvelope = Static<typeof ReviewerEnvelopeSchema>;
-export type Envelope = PlannerEnvelope | WorkerEnvelope | ReviewerEnvelope;
+export type Envelope = PlannerEnvelope | WorkerEnvelope | DocumenterEnvelope | ReviewerEnvelope;
 
 export type EnvelopeParseResult<T extends Envelope = Envelope> =
   | { ok: true; envelope: T }
@@ -128,6 +143,12 @@ function semanticErrors(role: EnvelopeRole, envelope: Envelope): string[] {
       }
     }
   }
+  if (role === "documenter" && "outcome" in envelope) {
+    if (envelope.outcome === "updated" && envelope.changedFiles.length === 0)
+      errors.push("/changedFiles: at least one file is required when outcome is updated");
+    if (envelope.outcome !== "updated" && envelope.changedFiles.length > 0)
+      errors.push("/changedFiles: must be empty unless outcome is updated");
+  }
   if (role === "reviewer" && "verdict" in envelope) {
     if (envelope.verdict === "PASS" && envelope.blockingFindings.length > 0) {
       errors.push("/blockingFindings: must be empty when verdict is PASS");
@@ -146,6 +167,10 @@ export function parseEnvelope(
   value: unknown,
 ): EnvelopeParseResult<PlannerEnvelope>;
 export function parseEnvelope(role: "worker", value: unknown): EnvelopeParseResult<WorkerEnvelope>;
+export function parseEnvelope(
+  role: "documenter",
+  value: unknown,
+): EnvelopeParseResult<DocumenterEnvelope>;
 export function parseEnvelope(
   role: "reviewer",
   value: unknown,

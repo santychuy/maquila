@@ -2,11 +2,11 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
-import { loadAgent } from "./agents/index.js";
-import { renderPlannerPlan } from "./envelope.js";
-import { runAgent, type AgentActivity, type AgentRunStatus } from "./run-agent.js";
-import { isRemoteToolName, type RemoteEventSink } from "./remote-protocol.js";
-import { createRunArtifacts } from "./run-artifacts.js";
+import { loadAgent } from "../agents/index.js";
+import { renderPlannerPlan } from "../envelope.js";
+import { runAgent, type AgentActivity, type AgentRunStatus } from "../run-agent.js";
+import { isRemoteToolName, type RemoteEventSink } from "../remote-protocol.js";
+import { createRunArtifacts } from "../run-artifacts.js";
 
 export const MAX_TIMEOUT_SECONDS = 1800;
 
@@ -95,37 +95,47 @@ export async function runPlan(options: PlanOptions): Promise<PlanResult> {
     phase: "planning",
     sourceAt: phaseStartedAt,
   });
-  const result = await runAgent({
-    agent: planner,
-    cwd: repo,
-    timeoutSeconds: options.timeoutSeconds,
-    prompt: `Plan this issue. Do not modify the repository.\n\n${issue}`,
-    artifacts,
-    envelopeRole: "planner",
-    receiptContext: {
-      repo,
-      baseSha: git(repo, "rev-parse", "HEAD"),
-      repoWasDirty: git(repo, "status", "--porcelain").length > 0,
-      issueSha256: createHash("sha256").update(issue).digest("hex"),
-    },
-    onTextDelta: options.machine ? undefined : (delta) => process.stdout.write(delta),
-    onActivity: options.onEvent
-      ? (activity) => options.onEvent?.(activityEvent(activity))
-      : undefined,
-    onCompleted: (_finalText, target, envelope) => {
-      if (!envelope || !("changes" in envelope))
-        throw new Error("Planner completed without a valid planner envelope");
-      target.write("plan.md", `${renderPlannerPlan(envelope)}\n`);
-      return ["plan.md"];
-    },
-  });
-
-  options.onEvent?.({
-    type: "phase_finished",
-    actor: "planner",
-    phase: "planning",
-    status: result.status,
-    sourceAt: new Date().toISOString(),
-  });
-  return { runDir: result.runDir, status: result.status };
+  try {
+    const result = await runAgent({
+      agent: planner,
+      cwd: repo,
+      timeoutSeconds: options.timeoutSeconds,
+      prompt: `Plan this issue. Do not modify the repository.\n\n${issue}`,
+      artifacts,
+      envelopeRole: "planner",
+      receiptContext: {
+        repo,
+        baseSha: git(repo, "rev-parse", "HEAD"),
+        repoWasDirty: git(repo, "status", "--porcelain").length > 0,
+        issueSha256: createHash("sha256").update(issue).digest("hex"),
+      },
+      onTextDelta: options.machine ? undefined : (delta) => process.stdout.write(delta),
+      onActivity: options.onEvent
+        ? (activity) => options.onEvent?.(activityEvent(activity))
+        : undefined,
+      onCompleted: (_finalText, target, envelope) => {
+        if (!envelope || !("changes" in envelope))
+          throw new Error("Planner completed without a valid planner envelope");
+        target.write("plan.md", `${renderPlannerPlan(envelope)}\n`);
+        return ["plan.md"];
+      },
+    });
+    options.onEvent?.({
+      type: "phase_finished",
+      actor: "planner",
+      phase: "planning",
+      status: result.status,
+      sourceAt: new Date().toISOString(),
+    });
+    return { runDir: result.runDir, status: result.status };
+  } catch (error) {
+    options.onEvent?.({
+      type: "phase_finished",
+      actor: "planner",
+      phase: "planning",
+      status: "failed",
+      sourceAt: new Date().toISOString(),
+    });
+    throw error;
+  }
 }

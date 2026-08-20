@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { test } from "node:test";
 import { listAgents, loadAgentFile } from "../src/agents/index.js";
 import { agentExitCode, HELP, main, parseCli } from "../src/cli.js";
-import { MAX_TIMEOUT_SECONDS } from "../src/plan.js";
+import { MAX_TIMEOUT_SECONDS } from "../src/workflows/plan.js";
 
 test("planner command accepts required inputs and safe timeout", () => {
   assert.deepEqual(
@@ -320,15 +320,26 @@ test("planner rejects missing input and timeouts beyond run ceiling", () => {
 
 test("specialized agents load with explicit capability boundaries", () => {
   const agents = Object.fromEntries(listAgents().map((agent) => [agent.name, agent]));
-  assert.deepEqual(Object.keys(agents), ["planner", "reviewer", "worker"]);
+  assert.deepEqual(Object.keys(agents), ["documenter", "planner", "reviewer", "worker"]);
   assert.deepEqual(
     Object.values(agents).map((agent) => agent?.model),
     [
       "openrouter/openai/gpt-5.6-terra",
       "openrouter/openai/gpt-5.6-terra",
       "openrouter/openai/gpt-5.6-terra",
+      "openrouter/openai/gpt-5.6-terra",
     ],
   );
+  assert.equal(agents.documenter?.access, "writer");
+  assert.deepEqual(agents.documenter?.tools, [
+    "read",
+    "grep",
+    "find",
+    "ls",
+    "bash",
+    "edit",
+    "write",
+  ]);
   assert.equal(agents.planner?.access, "read-only");
   assert.deepEqual(agents.planner?.tools, ["read", "grep", "find", "ls"]);
   assert.equal(agents.reviewer?.access, "read-only");
