@@ -28,7 +28,7 @@ All three role schemas run locally and through `factory run` in a fresh exe.dev 
 - `src/telemetry.ts` adds a strict append-only host event ledger with gap-free sequencing, safe replay, bounded public fields, and terminal cleanup reconciliation.
 - `src/remote-protocol.ts` plus streaming exe.dev SSH expose deterministic live phase, agent/tool, gate, and review activity without prompts, tool arguments/results, or raw output. Controller code still owns state transitions and acceptance.
 - `src/target.ts`, `src/run-launcher.ts`, and `src/run-status.ts` add target-repository inference, accepted detached controller startup with a preallocated run ID, and read-only telemetry status folding.
-- `src/observer.ts` and `src/observer-ui.ts` add a managed loopback-only GET/HEAD server, ownership-checked process lifecycle, replay/cursor API, and accessible polling UI.
+- `src/observer.ts`, `src/observer-ui.ts`, and Preact components in `src/observer-app.tsx` add a managed loopback-only GET/HEAD server, ownership-checked process lifecycle, replay/cursor API, and accessible polling UI bundled into the binary.
 - `.pi/skills/software-factory/SKILL.md` provides a thin factory-owned Pi command router for observed start and status flows.
 
 ## Evidence
