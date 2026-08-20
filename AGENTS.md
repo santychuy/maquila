@@ -18,20 +18,20 @@ Do not confuse the blueprint with implemented behavior.
 
 Implemented now:
 
-- Strict loading of `planner`, `worker`, and `reviewer` definitions from `src/agents/*.md`.
+- Strict loading of `planner`, `worker`, `documenter`, and `reviewer` definitions from `src/agents/*.md`.
 - Generic `runAgent()` Pi session execution with isolated resources, receipts, events, session transcripts, and cooperative timeouts.
-- Typed planner, worker, and reviewer envelopes with structural and semantic validation.
+- Typed planner, worker, documenter, and reviewer envelopes with structural and semantic validation.
 - A `submit_envelope` tool and one same-session correction attempt.
 - Executable read-only planner command: `factory pi plan`.
-- Executable local worker/reviewer lifecycle: `factory pi worker` with fresh reviewer session and deterministic verification.
+- Executable local worker/documenter/reviewer lifecycle: `factory pi worker`; worker owns approved non-doc paths, documenter owns approved docs paths, then deterministic verification and fresh review cover aggregate diff. Docs-only runs skip worker.
 - Deterministic verification: `factory.verify.json` argv commands plus exact Git diff gate (`src/verify.ts`).
 - Controller-side Linear `Todo` issue and GitHub base-SHA snapshot primitives with credential-free hashes.
-- Executable `factory run`: single-host lock, restart cleanup, pinned Node/Bun bootstrap, remote planner/worker/verification/reviewer, evidence and patch harvest, VM destruction, then controller-side bot branch and ready-for-review pull-request publication.
+- Executable `factory run`: single-host lock, restart cleanup, pinned Node/Bun bootstrap, remote planner/worker/documenter/verification/reviewer, evidence and patch harvest, VM destruction, then controller-side bot branch and ready-for-review pull-request publication.
 - Strict host telemetry with streaming remote phase/activity frames, accepted detached `run start`, and read-only `run status`.
 - Managed loopback observer server/UI with replay/cursor polling, human `factory dashboard` startup alias, and factory-owned `.pi/skills/software-factory` command routing.
 - Global `factory` executable through a Bun-compiled binary and `bun link`, with cwd target inference, `--target` override, human output, and explicit `--json` mode.
 - `factory setup` and `factory doctor` for strict XDG config, optional Linear and OpenRouter `op://` references, optional user-scope Pi skill, credential checks, and remediation.
-- OpenRouter execution for all three roles. Each `src/agents/*.md` definition must declare an authoritative pinned `openrouter/<provider>/<model>` identifier; current defaults are `openrouter/openai/gpt-5.6-terra`. No complete model catalog is bundled.
+- OpenRouter execution for all four roles. Each `src/agents/*.md` definition must declare an authoritative pinned `openrouter/<provider>/<model>` identifier; current defaults are `openrouter/openai/gpt-5.6-terra`. No complete model catalog is bundled.
 - Controller-side credential precedence for GitHub (`GITHUB_TOKEN`, `GH_TOKEN`, `gh auth token`) and Linear (`LINEAR_API_TOKEN`, then `op read`); optional exe.dev identity with OpenSSH config/agent support and no agent forwarding.
 
 Not implemented yet:
@@ -49,7 +49,7 @@ Preserve these boundaries:
 
 - Controller owns orchestration and external authority.
 - Planner and reviewer are read-only.
-- Worker is sole writer.
+- Worker and documenter are sequential disjoint writers: worker owns approved non-doc paths; documenter owns approved docs paths. Docs-only runs skip worker. Verification and reviewer cover aggregate diff.
 - Linear credentials and GitHub write credentials stay outside execution VM. OpenRouter uses a dedicated capped key as deliberate transient VM exception; controller injects it into VM-local Pi config for agent calls.
 - No agent may commit, push, publish, merge, or make unapproved product or architecture decisions.
 - Human owns final merge or rejection.
@@ -62,7 +62,7 @@ Current execution is not a security sandbox. Read-only tools stop mutation but d
 - `src/agents/index.ts` — loads and fail-closed validates specialist definitions.
 - `src/run-agent.ts` — generic Pi session runner, lifecycle capture, timeout, envelope flow, and receipts.
 - `src/envelope.ts` — TypeBox schemas, semantic validation, correction prompt, submit tool, and planner rendering.
-- `src/plan.ts` — validates planner inputs, snapshots issue context, runs planner, and writes `plan.md`.
+- `src/workflows/plan.ts` — validates planner inputs, snapshots issue context, runs planner, and writes `plan.md`.
 - `src/run-artifacts.ts` — creates `.factory/runs/<run-id>/` and writes evidence.
 - `src/verify.ts` — fail-closed `factory.verify.json` parsing, command execution, exact Git gate.
 - `src/linear.ts`, `src/github.ts`, and `src/intake.ts` — immutable external input snapshots, idempotency hash, and controller-side GitHub publication.

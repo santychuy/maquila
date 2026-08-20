@@ -67,7 +67,7 @@ Reviewer gives an independent verdict:
 }
 ```
 
-All three schemas execute locally and through the remote controller. Worker is sole writer; reviewer runs in a fresh read-only session. Envelope shape never creates write, review, or acceptance authority.
+All four schemas execute locally and through remote controller. Worker and documenter are sequential disjoint writers: worker owns approved non-doc paths; documenter owns approved docs paths. Docs-only runs skip worker. Verification and fresh read-only reviewer cover aggregate diff. Envelope shape never creates write, review, or acceptance authority.
 
 ## Still needed
 
