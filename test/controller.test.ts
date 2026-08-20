@@ -377,6 +377,7 @@ class FakeExe implements ControllerExe {
         protocol.event({ type: "phase_started", actor: "worker", phase: "implementing", sourceAt });
       else protocol.event({ type: "phase_started", actor: "planner", phase: "planning", sourceAt });
       if (!this.invalidSequence) {
+        protocol.event({ type: "agent_started", actor: "planner", phase: "planning", sourceAt });
         protocol.event({
           type: "tool_started",
           actor: "planner",
@@ -396,6 +397,20 @@ class FakeExe implements ControllerExe {
           isError: false,
           sourceAt,
         });
+        protocol.event({
+          type: "agent_finished",
+          actor: "planner",
+          phase: "planning",
+          status: "completed",
+          sourceAt,
+        });
+        protocol.event({
+          type: "agent_usage",
+          actor: "planner",
+          phase: "planning",
+          tokens: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, total: 14 },
+          sourceAt,
+        });
       }
       protocol.event({
         type: "phase_finished",
@@ -410,6 +425,21 @@ class FakeExe implements ControllerExe {
       });
     } else {
       protocol.event({ type: "phase_started", actor: "worker", phase: "implementing", sourceAt });
+      protocol.event({ type: "agent_started", actor: "worker", phase: "implementing", sourceAt });
+      protocol.event({
+        type: "agent_finished",
+        actor: "worker",
+        phase: "implementing",
+        status: "completed",
+        sourceAt,
+      });
+      protocol.event({
+        type: "agent_usage",
+        actor: "worker",
+        phase: "implementing",
+        tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+        sourceAt,
+      });
       if (this.failedPhaseProgression) {
         protocol.event({
           type: "phase_finished",
@@ -461,6 +491,21 @@ class FakeExe implements ControllerExe {
         return { stderr: "" };
       }
       protocol.event({ type: "phase_started", actor: "reviewer", phase: "reviewing", sourceAt });
+      protocol.event({ type: "agent_started", actor: "reviewer", phase: "reviewing", sourceAt });
+      protocol.event({
+        type: "agent_finished",
+        actor: "reviewer",
+        phase: "reviewing",
+        status: "completed",
+        sourceAt,
+      });
+      protocol.event({
+        type: "agent_usage",
+        actor: "reviewer",
+        phase: "reviewing",
+        tokens: { input: 3, output: 2, cacheRead: 0, cacheWrite: 0, total: 5 },
+        sourceAt,
+      });
       protocol.event({
         type: "review_finished",
         actor: "reviewer",
@@ -690,6 +735,32 @@ test("controller reaches ready only after remote evidence and VM cleanup", async
     assert.equal(contains(root, githubToken), false);
     assert.deepEqual(exe.calls.filter((call) => call.operation === "destroy").length, 1);
     const events = readTelemetry(telemetryPath(root, state.runId));
+    const contexts = events.filter((event) => event.type === "agent_context");
+    assert.equal(contexts.length, 3);
+    assert.ok(contexts.every((event) => /^[0-9a-f]{64}$/.test(event.payload.systemPromptSha256)));
+    assert.ok(contexts.every((event) => event.payload.model === "exe/claude-sonnet-4-6"));
+    assert.ok(
+      contexts.every(
+        (event) =>
+          event.payload.executionLimits?.contextTokens === 200_000 &&
+          event.payload.executionLimits.maxOutputTokens === 16_384 &&
+          event.payload.modelReference?.model === "anthropic/claude-sonnet-4-6" &&
+          event.payload.modelReference.source.commit === "eeffdfc0157a27e3abf6fdb75e52f91db3c8d29f",
+      ),
+    );
+    assert.ok(
+      contexts.every((event) => !("prompt" in event.payload) && !("systemPrompt" in event.payload)),
+    );
+    assert.deepEqual(
+      events.filter((event) => event.type === "agent_usage").map((event) => event.payload.total),
+      [14, 2, 5],
+    );
+    assert.deepEqual(
+      events
+        .filter((event) => event.type === "agent_usage")
+        .map((event) => event.payload.referenceEstimateNanoUsd),
+      [70_950, 18_000, 39_000],
+    );
     assert.deepEqual(
       events.filter((event) => event.type === "phase_started").map((event) => event.phase?.name),
       [

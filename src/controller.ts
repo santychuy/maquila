@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, resolve } from "node:path";
-import { loadAgent } from "./agents/index.js";
+import { parseAgentDefinition } from "./agents/index.js";
 import { createIntake } from "./intake.js";
 import { publishGitHubPullRequest, type GitHubPublication } from "./github.js";
 import { parseEnvelope } from "./envelope.js";
@@ -44,8 +44,14 @@ import {
   type TelemetryInput,
   type TelemetryWriter,
 } from "./telemetry.js";
+import {
+  estimateReferenceNanoUsd,
+  EXECUTION_LIMITS,
+  EXECUTION_MODEL,
+  modelReference,
+} from "./model-reference.js";
 
-const MODEL = "exe/claude-sonnet-4-6";
+const MODEL = EXECUTION_MODEL;
 const REMOTE_FACTORY = "/home/exedev/factory";
 const REMOTE_WORK = "/home/exedev/work";
 const REMOTE_NODE = "/home/exedev/.local/node/bin/node";
@@ -73,10 +79,6 @@ const PHASE_OWNER: Record<RemotePhase, RemoteActor> = {
 function telemetryPhase(phase: RemotePhase): { id: string; name: RemotePhase; attempt: 1 } {
   return { id: `${phase}:1`, name: phase, attempt: 1 };
 }
-function roleTools(role: "planner" | "worker" | "reviewer"): Set<string> {
-  return new Set([...loadAgent(role).tools, "submit_envelope"]);
-}
-
 export interface ControllerOptions {
   issue: string;
   owner: string;
@@ -729,6 +731,19 @@ export async function runController(options: ControllerOptions): Promise<Control
       factorySha: archive.sha,
       sha256: hash(archive.path),
     });
+    const archivedRole = (role: "planner" | "worker" | "reviewer") => {
+      const filePath = `src/agents/${role}.md`;
+      const source = execFileSync("git", ["show", `${archive!.sha}:${filePath}`], {
+        cwd: factoryRoot,
+        encoding: "utf8",
+      });
+      return parseAgentDefinition(source, filePath);
+    };
+    const archivedRoles = {
+      planner: archivedRole("planner"),
+      worker: archivedRole("worker"),
+      reviewer: archivedRole("reviewer"),
+    };
     const configDir = mkdtempSync(resolve(tmpdir(), "factory-pi-"));
     const models = resolve(configDir, "models.json");
     writeJson(models, {
@@ -742,8 +757,9 @@ export async function runController(options: ControllerOptions): Promise<Control
               id: "claude-sonnet-4-6",
               reasoning: true,
               input: ["text"],
-              contextWindow: 200000,
-              maxTokens: 16384,
+              contextWindow: EXECUTION_LIMITS.contextTokens,
+              maxTokens: EXECUTION_LIMITS.maxOutputTokens,
+              // Host telemetry may add a non-billable reference estimate; SDK cost stays disabled.
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               compat: { forceAdaptiveThinking: true },
             },
@@ -892,11 +908,15 @@ export async function runController(options: ControllerOptions): Promise<Control
         let reviewSeen = false;
         const tools = new Map<string, { publicId: string; name: string }>();
         const allowedTools: Record<RemoteEvent["actor"], Set<string>> = {
-          planner: roleTools("planner"),
-          worker: roleTools("worker"),
+          planner: new Set([...archivedRoles.planner.tools, "submit_envelope"]),
+          worker: new Set([...archivedRoles.worker.tools, "submit_envelope"]),
           verifier: new Set(),
-          reviewer: roleTools("reviewer"),
+          reviewer: new Set([...archivedRoles.reviewer.tools, "submit_envelope"]),
         };
+        const contextSeen = new Set<RemotePhase>();
+        const usageSeen = new Set<RemotePhase>();
+        const agentStarted = new Set<RemotePhase>();
+        const agentFinished = new Map<RemotePhase, "completed" | "failed" | "timed_out">();
         const closeOpen = (status: "failed" | "timed_out" = "failed"): void => {
           if (!open) return;
           const actor = PHASE_OWNER[open];
@@ -924,13 +944,45 @@ export async function runController(options: ControllerOptions): Promise<Control
               throw new Error("invalid remote phase sequence");
             open = event.phase;
             advance(runDir, event.phase, event.actor, sourceAt);
+            if (event.actor !== "verifier") {
+              const role = archivedRoles[event.actor];
+              emit({
+                type: "agent_context",
+                actor: event.actor,
+                phase: telemetryPhase(event.phase),
+                payload: {
+                  model: MODEL,
+                  description: role.description,
+                  tools: [...role.tools, "submit_envelope"],
+                  thinking: role.thinking,
+                  access: role.access,
+                  systemPromptSha256: createHash("sha256").update(role.systemPrompt).digest("hex"),
+                  executionLimits: EXECUTION_LIMITS,
+                  modelReference: modelReference(MODEL),
+                },
+              });
+              contextSeen.add(event.phase);
+            }
             return;
           }
           if (!open || event.phase !== open) throw new Error("remote event outside active phase");
+          if (
+            usageSeen.has(event.phase) &&
+            ["agent_started", "agent_finished", "tool_started", "tool_finished"].includes(
+              event.type,
+            )
+          )
+            throw new Error("remote agent activity after usage");
           const phase = telemetryPhase(event.phase);
           switch (event.type) {
             case "phase_finished":
               if (tools.size) throw new Error("remote phase finished with active tool calls");
+              if (
+                event.actor !== "verifier" &&
+                event.status === "completed" &&
+                (agentFinished.get(event.phase) !== "completed" || !usageSeen.has(event.phase))
+              )
+                throw new Error("completed remote agent phase lacks completed agent usage");
               if (pendingNegativeClosure && event.status !== pendingNegativeClosure)
                 throw new Error("remote phase closure contradicts negative result");
               emit({
@@ -949,15 +1001,44 @@ export async function runController(options: ControllerOptions): Promise<Control
               index += 1;
               break;
             case "agent_started":
+              if (agentStarted.has(event.phase) || agentFinished.has(event.phase))
+                throw new Error("invalid remote agent lifecycle");
+              agentStarted.add(event.phase);
               emit({ type: "agent_started", actor: event.actor, phase, sourceAt, payload: {} });
               break;
             case "agent_finished":
+              if (!agentStarted.has(event.phase) || agentFinished.has(event.phase))
+                throw new Error("invalid remote agent lifecycle");
+              agentFinished.set(event.phase, event.status);
               emit({
                 type: "agent_finished",
                 actor: event.actor,
                 phase,
                 sourceAt,
                 payload: { status: event.status },
+              });
+              break;
+            case "agent_usage":
+              if (
+                !contextSeen.has(event.phase) ||
+                agentFinished.get(event.phase) !== "completed" ||
+                tools.size ||
+                usageSeen.has(event.phase)
+              )
+                throw new Error("invalid remote agent usage");
+              usageSeen.add(event.phase);
+              emit({
+                type: "agent_usage",
+                actor: event.actor,
+                phase,
+                sourceAt,
+                payload: {
+                  ...event.tokens,
+                  referenceEstimateNanoUsd: estimateReferenceNanoUsd(
+                    event.tokens,
+                    modelReference(MODEL)!,
+                  ),
+                },
               });
               break;
             case "tool_started": {

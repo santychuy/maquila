@@ -4,8 +4,17 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { test } from "node:test";
 import type { AgentDefinition } from "../src/agents/index.js";
-import { runAgent, runArtifactNameErrors } from "../src/run-agent.js";
+import { runAgent, runArtifactNameErrors, tokenUsageActivity } from "../src/run-agent.js";
 import { createRunArtifacts } from "../src/run-artifacts.js";
+
+test("token usage activity copies finalized session token totals", () => {
+  const tokens = { input: 2, output: 3, cacheRead: 5, cacheWrite: 7, total: 17 };
+  assert.deepEqual(tokenUsageActivity(tokens, "2026-01-01T00:00:00.000Z"), {
+    type: "agent_usage",
+    at: "2026-01-01T00:00:00.000Z",
+    tokens,
+  });
+});
 
 const planner: AgentDefinition = {
   name: "planner",

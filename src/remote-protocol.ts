@@ -24,6 +24,16 @@ const StatusSchema = Type.Union([
   Type.Literal("failed"),
   Type.Literal("timed_out"),
 ]);
+const TokenSchema = Type.Object(
+  {
+    input: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    output: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    cacheRead: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    cacheWrite: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    total: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  },
+  { additionalProperties: false },
+);
 export const REMOTE_TOOL_NAMES = [...ALLOWED_AGENT_TOOLS, "submit_envelope"] as const;
 export const ToolNameSchema = Type.String({ enum: REMOTE_TOOL_NAMES });
 
@@ -85,6 +95,24 @@ const RemoteEventSchema = Type.Union([
       toolName: ToolNameSchema,
       toolCallId: Type.String({ minLength: 1, maxLength: 200 }),
       isError: Type.Boolean(),
+      sourceAt: Type.String({ minLength: 1 }),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      type: Type.Literal("agent_usage"),
+      actor: Type.Union([
+        Type.Literal("planner"),
+        Type.Literal("worker"),
+        Type.Literal("reviewer"),
+      ]),
+      phase: Type.Union([
+        Type.Literal("planning"),
+        Type.Literal("implementing"),
+        Type.Literal("reviewing"),
+      ]),
+      tokens: TokenSchema,
       sourceAt: Type.String({ minLength: 1 }),
     },
     { additionalProperties: false },
@@ -159,6 +187,16 @@ function parseFrame(line: string): RemoteFrame {
   const frame = value;
   if ("event" in frame && !Number.isFinite(Date.parse(frame.event.sourceAt)))
     throw new Error("invalid remote protocol timestamp");
+  if (
+    "event" in frame &&
+    frame.event.type === "agent_usage" &&
+    BigInt(frame.event.tokens.total) !==
+      BigInt(frame.event.tokens.input) +
+        BigInt(frame.event.tokens.output) +
+        BigInt(frame.event.tokens.cacheRead) +
+        BigInt(frame.event.tokens.cacheWrite)
+  )
+    throw new Error("invalid remote protocol token total");
   return frame;
 }
 

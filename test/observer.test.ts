@@ -12,7 +12,7 @@ import {
   stopObserver,
   type ObserverDescriptor,
 } from "../src/observer.js";
-import { OBSERVER_CSS, OBSERVER_JS } from "../src/observer-ui.js";
+import { OBSERVER_CSS, OBSERVER_HTML, OBSERVER_JS } from "../src/observer-ui.js";
 import { createTelemetryWriter, telemetryPath } from "../src/telemetry.js";
 
 const runId = "11111111-1111-4111-8111-111111111111";
@@ -238,6 +238,31 @@ test("observer ensure reuses healthy owner and starts after stale descriptor", a
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("observer UI renders accessible safe actor timeline and raw drill-down", () => {
+  assert.match(OBSERVER_HTML, /Phase sequence/);
+  assert.match(OBSERVER_HTML, /<details class="raw-events">/);
+  assert.match(OBSERVER_JS, /button\.type='button'/);
+  assert.match(OBSERVER_JS, /aria-pressed/);
+  assert.match(OBSERVER_JS, /Prompt body','Unavailable by design/);
+  assert.match(OBSERVER_JS, /Reference list rates \(\$\/1M tokens\)/);
+  assert.match(OBSERVER_JS, /Estimated total \(not invoice\)/);
+  assert.match(OBSERVER_JS, /not an exe\.dev bill/);
+  assert.match(OBSERVER_JS, /no controller-pinned compatible estimate recorded/);
+  assert.match(OBSERVER_JS, /token usage not reported yet/);
+  assert.match(OBSERVER_JS, /padStart\(9,'0'\)\.replace\(\/0\+\$\//);
+  assert.match(OBSERVER_JS, /while\(page\.hasMore\)/);
+  assert.match(OBSERVER_JS, /scrollIntoView/);
+  assert.doesNotMatch(OBSERVER_HTML, /segment-detail[^>]+aria-live/);
+  assert.match(OBSERVER_JS, /segment\.boundary\?'interrupted':'running'/);
+  assert.match(OBSERVER_JS, /detail\.phaseRuntimeMilliseconds/);
+  assert.doesNotMatch(OBSERVER_JS, /Date\.now\(\)/);
+  assert.match(OBSERVER_JS, /interrupted at run end/);
+  assert.match(OBSERVER_JS, /focus\(\{preventScroll:true\}\)/);
+  assert.match(OBSERVER_HTML, /Width encodes elapsed time/);
+  assert.match(OBSERVER_JS, /140\+Math\.min\(580,Math\.max\(0,elapsed\)\/2000\)/);
+  assert.doesNotMatch(OBSERVER_JS, /innerHTML/);
 });
 
 test("observer UI preserves focus and truthful partial telemetry state", () => {

@@ -45,6 +45,204 @@ test("telemetry schema rejects unknown fields and inconsistent identity", () => 
       ),
     /invalid telemetry/,
   );
+  assert.throws(
+    () =>
+      parseTelemetryRecord(
+        record({ type: "phase_finished", actor: "planner", payload: { status: "completed" } }),
+      ),
+    /requires phase/,
+  );
+  assert.throws(
+    () => parseTelemetryRecord(record({ type: "agent_started", actor: "planner", payload: {} })),
+    /requires phase/,
+  );
+  assert.throws(
+    () =>
+      parseTelemetryRecord(
+        record({
+          type: "tool_started",
+          actor: "worker",
+          payload: { toolName: "edit", toolCallId: "1" },
+        }),
+      ),
+    /requires phase/,
+  );
+});
+
+test("agent context and usage are strict, ordered, and prompt/cost free", () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-telemetry-agent-"));
+  try {
+    const writer = createTelemetryWriter(root, runId);
+    const phase = { id: "planning:1", name: "planning" as const, attempt: 1 };
+    writer.append({ type: "phase_started", actor: "planner", phase, payload: {} });
+    const context = {
+      model: "provider/model",
+      description: "Plans changes",
+      tools: ["read"],
+      thinking: "high" as const,
+      access: "read-only" as const,
+      systemPromptSha256: "a".repeat(64),
+    };
+    assert.throws(
+      () =>
+        writer.append({
+          type: "agent_usage",
+          actor: "planner",
+          phase,
+          payload: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+        }),
+      /before context/,
+    );
+    writer.append({ type: "agent_context", actor: "planner", phase, payload: context });
+    assert.throws(
+      () =>
+        writer.append({
+          type: "agent_usage",
+          actor: "planner",
+          phase,
+          payload: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+        }),
+      /completed activity/,
+    );
+    writer.append({ type: "agent_started", actor: "planner", phase, payload: {} });
+    assert.throws(
+      () =>
+        writer.append({
+          type: "agent_finished",
+          actor: "worker",
+          phase: { ...phase, name: "implementing" },
+          payload: { status: "completed" },
+        }),
+      /matching phase/,
+    );
+    assert.throws(
+      () =>
+        writer.append({
+          type: "agent_finished",
+          actor: "planner",
+          phase: { ...phase, attempt: 2 },
+          payload: { status: "completed" },
+        }),
+      /matching phase/,
+    );
+    writer.append({
+      type: "agent_finished",
+      actor: "planner",
+      phase,
+      payload: { status: "completed" },
+    });
+    writer.append({
+      type: "agent_usage",
+      actor: "planner",
+      phase,
+      payload: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+    });
+    assert.throws(
+      () => writer.append({ type: "agent_context", actor: "planner", phase, payload: context }),
+      /duplicate/,
+    );
+    assert.throws(
+      () =>
+        parseTelemetryRecord(
+          record({
+            type: "agent_context",
+            actor: "planner",
+            phase,
+            payload: { ...context, prompt: "secret" },
+          }),
+        ),
+      /invalid telemetry/,
+    );
+    assert.throws(
+      () =>
+        parseTelemetryRecord(
+          record({
+            type: "agent_usage",
+            actor: "planner",
+            phase,
+            payload: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2, cost: 0 },
+          }),
+        ),
+      /invalid telemetry/,
+    );
+    assert.throws(
+      () =>
+        writer.append({
+          type: "tool_started",
+          actor: "planner",
+          phase,
+          payload: { toolName: "read", toolCallId: "late" },
+        }),
+      /after usage/,
+    );
+    assert.equal(readTelemetry(writer.path).at(-1)?.type, "agent_usage");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("phase closure must match active actor and full phase identity", () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-telemetry-phase-"));
+  try {
+    const writer = createTelemetryWriter(root, runId);
+    const phase = { id: "planning:1", name: "planning" as const, attempt: 1 };
+    writer.append({ type: "phase_started", actor: "planner", phase, payload: {} });
+    assert.throws(
+      () =>
+        writer.append({
+          type: "phase_finished",
+          actor: "worker",
+          phase: { ...phase, name: "implementing" },
+          payload: { status: "completed" },
+        }),
+      /does not match/,
+    );
+    assert.throws(
+      () =>
+        writer.append({
+          type: "phase_finished",
+          actor: "planner",
+          phase: { ...phase, attempt: 2 },
+          payload: { status: "completed" },
+        }),
+      /does not match/,
+    );
+    writer.append({
+      type: "phase_finished",
+      actor: "planner",
+      phase,
+      payload: { status: "failed" },
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("replay rejects reuse of a closed phase ID", () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-telemetry-phase-reuse-"));
+  try {
+    const writer = createTelemetryWriter(root, runId);
+    const phase = { id: "planning:1", name: "planning" as const, attempt: 1 };
+    const started = writer.append({
+      type: "phase_started",
+      actor: "planner",
+      phase,
+      payload: {},
+    });
+    writer.append({
+      type: "phase_finished",
+      actor: "planner",
+      phase,
+      payload: { status: "failed" },
+    });
+    appendFileSync(
+      writer.path,
+      `${JSON.stringify({ ...started, seq: 3, eventId: `${runId}:3` })}\n`,
+    );
+    assert.throws(() => readTelemetry(writer.path), /duplicate phase start/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("writer assigns gap-free sequence across reopen and replay ignores partial tail", () => {

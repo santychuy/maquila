@@ -57,8 +57,8 @@ function parseTools(value: unknown, filePath: string): string[] {
   return tools;
 }
 
-export function loadAgentFile(filePath: string): AgentDefinition {
-  const { frontmatter, body } = parseFrontmatter<AgentFrontmatter>(readFileSync(filePath, "utf8"));
+export function parseAgentDefinition(source: string, filePath: string): AgentDefinition {
+  const { frontmatter, body } = parseFrontmatter<AgentFrontmatter>(source);
   const unknownFields = Object.keys(frontmatter).filter((field) => !ALLOWED_FIELDS.has(field));
   if (unknownFields.length)
     throw new Error(`${filePath}: unknown fields: ${unknownFields.join(", ")}`);
@@ -100,6 +100,10 @@ export function loadAgentFile(filePath: string): AgentDefinition {
     systemPrompt: body.trim(),
     filePath,
   };
+}
+
+export function loadAgentFile(filePath: string): AgentDefinition {
+  return parseAgentDefinition(readFileSync(filePath, "utf8"), filePath);
 }
 
 export function listAgents(agentsDir = defaultAgentsDir()): AgentDefinition[] {

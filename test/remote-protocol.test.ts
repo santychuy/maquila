@@ -87,6 +87,44 @@ test("remote protocol fails closed on malformed, out-of-order, and missing termi
   );
 });
 
+test("remote protocol accepts strict reported token totals and rejects cost or mismatch", () => {
+  const usage = {
+    type: "agent_usage",
+    actor: "planner",
+    phase: "planning",
+    tokens: { input: 2, output: 3, cacheRead: 4, cacheWrite: 1, total: 10 },
+    sourceAt: new Date(0).toISOString(),
+  } as const;
+  let output = "";
+  const writer = createRemoteProtocolWriter((line) => (output += line));
+  writer.event(usage);
+  writer.result({ status: "completed", runDir: "/tmp/run" });
+  const seen: RemoteEvent[] = [];
+  const parser = new RemoteProtocolParser((value) => seen.push(value));
+  parser.push(output);
+  assert.deepEqual(seen, [usage]);
+  assert.equal(parser.finish().status, "completed");
+  for (const tokens of [
+    { ...usage.tokens, total: 9 },
+    { ...usage.tokens, input: -1 },
+    { ...usage.tokens, output: 1.5 },
+    { ...usage.tokens, input: Number.MAX_SAFE_INTEGER + 1 },
+    { ...usage.tokens, cost: 0 },
+    { ...usage.tokens, referenceEstimateNanoUsd: 1 },
+  ]) {
+    const frame = JSON.stringify({
+      protocol: 1,
+      kind: "event",
+      remoteSeq: 1,
+      event: { ...usage, tokens },
+    });
+    assert.throws(
+      () => new RemoteProtocolParser(() => {}).push(frame + "\n"),
+      /invalid remote protocol/,
+    );
+  }
+});
+
 test("remote protocol bounds aggregate frames and bytes", () => {
   const frame = `${JSON.stringify({ protocol: 1, kind: "event", remoteSeq: 1, event })}\n`;
   assert.throws(

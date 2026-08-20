@@ -76,7 +76,18 @@ export function runArtifactNameErrors(names: string[], runDir: string): string[]
 
 export type AgentActivity =
   | { type: "agent_started"; at: string }
-  | { type: "agent_finished"; at: string; status: "completed" | "failed" }
+  | { type: "agent_finished"; at: string; status: "completed" | "failed" | "timed_out" }
+  | {
+      type: "agent_usage";
+      at: string;
+      tokens: {
+        input: number;
+        output: number;
+        cacheRead: number;
+        cacheWrite: number;
+        total: number;
+      };
+    }
   | { type: "tool_started"; at: string; toolCallId: string; toolName: string }
   | {
       type: "tool_finished";
@@ -85,6 +96,13 @@ export type AgentActivity =
       toolName: string;
       isError: boolean;
     };
+
+export function tokenUsageActivity(
+  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number },
+  at = new Date().toISOString(),
+): Extract<AgentActivity, { type: "agent_usage" }> {
+  return { type: "agent_usage", at, tokens: { ...tokens } };
+}
 
 export interface RunAgentOptions {
   agent: AgentDefinition;
@@ -253,13 +271,6 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       const record = eventRecord(event);
       if (record) artifacts.appendEvent(record);
       const at = new Date().toISOString();
-      if (event.type === "agent_start") options.onActivity?.({ type: "agent_started", at });
-      if (event.type === "agent_end")
-        options.onActivity?.({
-          type: "agent_finished",
-          at,
-          status: event.willRetry ? "failed" : "completed",
-        });
       if (event.type === "tool_execution_start")
         options.onActivity?.({
           type: "tool_started",
@@ -300,6 +311,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         ? parseEnvelope(envelopeRole!, capture.value)
         : { ok: false, errors: ["submit_envelope tool was not called"] };
 
+    options.onActivity?.({ type: "agent_started", at: new Date().toISOString() });
     try {
       await session.prompt(options.prompt);
       if (envelopeRole && !timedOut) {
@@ -402,6 +414,13 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
     if (session) {
       receipt.sessionFile ??= session.sessionFile;
       receipt.stats ??= session.getSessionStats();
+      options.onActivity?.({
+        type: "agent_finished",
+        at: new Date().toISOString(),
+        status: receipt.status,
+      });
+      if (receipt.status === "completed")
+        options.onActivity?.(tokenUsageActivity(receipt.stats.tokens));
       session.dispose();
     }
     privatizeSessionFiles(artifacts.sessionsDir);

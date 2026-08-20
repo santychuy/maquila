@@ -24,6 +24,12 @@ test("status folds safe live activity and terminal evidence", () => {
       payload: {},
     });
     telemetry.append({
+      type: "agent_started",
+      actor: "worker",
+      phase: { id: "implementing:1", name: "implementing", attempt: 1 },
+      payload: {},
+    });
+    telemetry.append({
       type: "tool_started",
       actor: "worker",
       phase: { id: "implementing:1", name: "implementing", attempt: 1 },
