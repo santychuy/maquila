@@ -84,7 +84,7 @@ GitHub precedence is `GITHUB_TOKEN`, `GH_TOKEN`, then `gh auth token`. Linear pr
 ## Limits
 
 - One serial local controller; no fleet aggregation.
-- JSONL replay, not SQLite analytics or retention controls.
+- JSONL replay, not SQLite analytics or retention controls. See [SQLite storage research](sqlite-storage-research.md) for evidence and future migration candidates.
 - Runs created before canonical telemetry can be queried by known UUID as `legacy`, but are omitted from the run list.
 - Polling, not WebSocket or SSE.
 - No remote access/authentication.
