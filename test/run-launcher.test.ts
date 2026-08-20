@@ -29,6 +29,7 @@ function environment(): NodeJS.ProcessEnv {
   return {
     LINEAR_API_TOKEN: "linear-secret",
     GITHUB_TOKEN: "github-secret",
+    OPENROUTER_API_KEY: "openrouter-secret",
     FACTORY_EXE_IDENTITY: "/tmp/private-identity",
     PATH: "/usr/bin:/bin",
     HOME: "/tmp/home",
@@ -82,9 +83,13 @@ test("detached launch returns only after matching accepted handshake", async () 
     });
     assert.equal(unref, true);
     assert.equal(capturedArgs.includes(target.path), false);
-    assert.doesNotMatch(capturedArgs.join(" "), /linear-secret|github-secret|private-identity/);
+    assert.doesNotMatch(
+      capturedArgs.join(" "),
+      /linear-secret|github-secret|openrouter-secret|private-identity/,
+    );
     assert.equal(capturedEnv.UNRELATED_SECRET, undefined);
     assert.equal(capturedEnv.LINEAR_API_TOKEN, "linear-secret");
+    assert.equal(capturedEnv.OPENROUTER_API_KEY, "openrouter-secret");
     assert.equal(capturedEnv.FACTORY_EXE_IDENTITY, "/tmp/private-identity");
     assert.equal(capturedEnv.FACTORY_LAUNCH_INSTANCE_ID, instanceId);
     assert.equal(statSync(telemetryPath(factoryRoot, runId)).mode & 0o777, 0o600);
@@ -359,6 +364,7 @@ test("optional identity omits key path and copies host agent socket", async () =
       env: {
         LINEAR_API_TOKEN: "linear-secret",
         GITHUB_TOKEN: "github-secret",
+        OPENROUTER_API_KEY: "openrouter-secret",
         PATH: "/usr/bin:/bin",
         HOME: "/tmp/home",
         SSH_AUTH_SOCK: "/tmp/agent.sock",

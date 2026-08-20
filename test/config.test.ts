@@ -22,7 +22,11 @@ test("valid config loads and writes mode 0600", () => {
   const home = tempHome();
   try {
     const path = writeFactoryConfig(
-      { version: 1, linear: { tokenReference: "op://Vault/Item/field" } },
+      {
+        version: 1,
+        linear: { tokenReference: "op://Vault/Item/field" },
+        openrouter: { tokenReference: "op://Vault/OpenRouter/token" },
+      },
       { env: { XDG_CONFIG_HOME: home } },
     );
     assert.equal(statSync(path).mode & 0o777, 0o600);
@@ -30,8 +34,9 @@ test("valid config loads and writes mode 0600", () => {
     assert.deepEqual(loadFactoryConfig({ env: { XDG_CONFIG_HOME: home } }), {
       version: 1,
       linear: { tokenReference: "op://Vault/Item/field" },
+      openrouter: { tokenReference: "op://Vault/OpenRouter/token" },
     });
-    assert.doesNotMatch(readFileSync(path, "utf8"), /lin_|ghp_/);
+    assert.doesNotMatch(readFileSync(path, "utf8"), /lin_|ghp_|sk-or-/);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

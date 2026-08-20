@@ -8,7 +8,7 @@ export type AgentToolName = (typeof ALLOWED_AGENT_TOOLS)[number];
 
 const ALLOWED_TOOLS = new Set<string>(ALLOWED_AGENT_TOOLS);
 const MUTATING_TOOLS = new Set(["bash", "edit", "write"]);
-const ALLOWED_FIELDS = new Set(["name", "description", "tools", "thinking", "access"]);
+const ALLOWED_FIELDS = new Set(["name", "description", "tools", "thinking", "access", "model"]);
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 export type AgentThinking = (typeof THINKING_LEVELS)[number];
@@ -20,6 +20,7 @@ function isAgentThinking(value: string): value is AgentThinking {
 export interface AgentDefinition {
   name: string;
   description: string;
+  model: string;
   tools: string[];
   thinking: AgentThinking;
   access: "read-only" | "writer";
@@ -30,6 +31,7 @@ export interface AgentDefinition {
 interface AgentFrontmatter extends Record<string, unknown> {
   name?: unknown;
   description?: unknown;
+  model?: unknown;
   tools?: unknown;
   thinking?: unknown;
   access?: unknown;
@@ -44,6 +46,15 @@ function nonEmptyString(value: unknown, field: string, filePath: string): string
     throw new Error(`${filePath}: ${field} must be a non-empty string`);
   }
   return value.trim();
+}
+
+function parseModel(value: unknown, filePath: string): string {
+  const model = nonEmptyString(value, "model", filePath);
+  if (!/^openrouter\/[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/i.test(model))
+    throw new Error(`${filePath}: model must be a pinned OpenRouter identifier`);
+  if (/(?:^|\/)(?:latest|auto)(?:\/|$)/i.test(model))
+    throw new Error(`${filePath}: model must not use a latest or auto alias`);
+  return model;
 }
 
 function parseTools(value: unknown, filePath: string): string[] {
@@ -70,6 +81,7 @@ export function parseAgentDefinition(source: string, filePath: string): AgentDef
     throw new Error(`${filePath}: filename must match agent name '${name}'`);
 
   const description = nonEmptyString(frontmatter.description, "description", filePath);
+  const model = parseModel(frontmatter.model, filePath);
   const tools = parseTools(frontmatter.tools, filePath);
   const thinking =
     frontmatter.thinking === undefined
@@ -94,6 +106,7 @@ export function parseAgentDefinition(source: string, filePath: string): AgentDef
   return {
     name,
     description,
+    model,
     tools,
     thinking,
     access,

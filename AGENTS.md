@@ -30,7 +30,8 @@ Implemented now:
 - Strict host telemetry with streaming remote phase/activity frames, accepted detached `run start`, and read-only `run status`.
 - Managed loopback observer server/UI with replay/cursor polling, human `factory dashboard` startup alias, and factory-owned `.pi/skills/software-factory` command routing.
 - Global `factory` executable through a Bun-compiled binary and `bun link`, with cwd target inference, `--target` override, human output, and explicit `--json` mode.
-- `factory setup` and `factory doctor` for strict XDG config, optional Linear `op://` reference, optional user-scope Pi skill, credential checks, and remediation.
+- `factory setup` and `factory doctor` for strict XDG config, optional Linear and OpenRouter `op://` references, optional user-scope Pi skill, credential checks, and remediation.
+- OpenRouter execution for all three roles. Each `src/agents/*.md` definition must declare an authoritative pinned `openrouter/<provider>/<model>` identifier; current defaults are `openrouter/openai/gpt-5.6-terra`. No complete model catalog is bundled.
 - Controller-side credential precedence for GitHub (`GITHUB_TOKEN`, `GH_TOKEN`, `gh auth token`) and Linear (`LINEAR_API_TOKEN`, then `op read`); optional exe.dev identity with OpenSSH config/agent support and no agent forwarding.
 
 Not implemented yet:
@@ -49,7 +50,7 @@ Preserve these boundaries:
 - Controller owns orchestration and external authority.
 - Planner and reviewer are read-only.
 - Worker is sole writer.
-- Linear credentials and GitHub write credentials stay outside execution VM.
+- Linear credentials and GitHub write credentials stay outside execution VM. OpenRouter uses a dedicated capped key as deliberate transient VM exception; controller injects it into VM-local Pi config for agent calls.
 - No agent may commit, push, publish, merge, or make unapproved product or architecture decisions.
 - Human owns final merge or rejection.
 - Model claims never replace deterministic evidence.
@@ -103,7 +104,6 @@ bun run factory -- agents list
 bun run factory -- pi plan \
   --repo /absolute/path/to/repository \
   --issue ./examples/issue.md \
-  --model provider/model \
   --timeout-seconds 300
 factory setup
 factory doctor
@@ -138,6 +138,7 @@ Allowed frontmatter fields only:
 
 - `name`: lowercase kebab-case and identical to filename.
 - `description`: non-empty role summary.
+- `model`: pinned OpenRouter identifier in `openrouter/<provider>/<model>` form; `latest` and `auto` aliases are rejected. This field is authoritative per agent.
 - `tools`: non-empty, unique subset of `read`, `grep`, `find`, `ls`, `bash`, `edit`, `write`.
 - `thinking`: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; defaults to `medium`.
 - `access`: `read-only` or `writer`.

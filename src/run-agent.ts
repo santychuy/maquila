@@ -39,7 +39,6 @@ export interface AgentReceipt {
   status: AgentRunStatus;
   startedAt: string;
   finishedAt?: string;
-  model: string;
   timeoutSeconds: number;
   agent: {
     name: string;
@@ -107,7 +106,6 @@ export function tokenUsageActivity(
 export interface RunAgentOptions {
   agent: AgentDefinition;
   cwd: string;
-  model: string;
   timeoutSeconds: number;
   prompt: string;
   artifacts: RunArtifacts;
@@ -212,7 +210,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
     status: "failed",
     startedAt: new Date().toISOString(),
     ...options.receiptContext,
-    model: options.model,
+    model: agent.model,
     timeoutSeconds: options.timeoutSeconds,
     agent: {
       name: agent.name,
@@ -236,12 +234,12 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
   try {
     const modelRuntime = await ModelRuntime.create();
     const resolvedModel = resolveCliModel({
-      cliModel: options.model,
+      cliModel: agent.model,
       cliThinking: agent.thinking,
       modelRuntime,
     });
     if (!resolvedModel.model)
-      throw new Error(resolvedModel.error ?? `Unknown model: ${options.model}`);
+      throw new Error(resolvedModel.error ?? `Unknown model: ${agent.model}`);
     const thinkingLevel = resolvedModel.thinkingLevel ?? agent.thinking;
     receipt.agent.thinking = thinkingLevel;
     if (!(await modelRuntime.getAuth(resolvedModel.model))) {

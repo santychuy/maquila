@@ -44,14 +44,7 @@ import {
   type TelemetryInput,
   type TelemetryWriter,
 } from "./telemetry.js";
-import {
-  estimateReferenceNanoUsd,
-  EXECUTION_LIMITS,
-  EXECUTION_MODEL,
-  modelReference,
-} from "./model-reference.js";
 
-const MODEL = EXECUTION_MODEL;
 const REMOTE_FACTORY = "/home/exedev/factory";
 const REMOTE_WORK = "/home/exedev/work";
 const REMOTE_NODE = "/home/exedev/.local/node/bin/node";
@@ -66,6 +59,7 @@ const NODE_CHECKSUMS: Record<string, string> = {
   arm64: "f3d5a797b5d210ce8e2cb265544c8e482eaedcb8aa409a8b46da7e8595d0dda0",
 };
 const MAX_PATCH = 1_000_000;
+const MAX_EVIDENCE_ARCHIVE = 50 * 1024 * 1024;
 const REMOTE_RUN = `${REMOTE_FACTORY}/.factory/runs/`;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 type RemotePhase = RemoteEvent["phase"];
@@ -89,6 +83,7 @@ export interface ControllerOptions {
   timeoutSeconds: number;
   linearToken: string;
   githubToken: string;
+  openRouterKey: string;
   root?: string;
   factoryRoot?: string;
   exe?: ControllerExe;
@@ -168,6 +163,22 @@ function privatizeTree(path: string): void {
 }
 function readdirArtifacts(runDir: string): string[] {
   return readdirSync(runDir);
+}
+function assertSecretAbsent(value: string | Buffer, secrets: string[]): void {
+  if (secrets.some((secret) => secret && value.includes(secret)))
+    throw new Error("secret detected in retained artifact");
+}
+function assertArtifactSafe(path: string, secrets: string[], label: string): void {
+  if (statSync(path).size > MAX_EVIDENCE_ARCHIVE) {
+    rmSync(path, { force: true });
+    throw new Error(`${label} exceeds limit`);
+  }
+  try {
+    assertSecretAbsent(readFileSync(path), secrets);
+  } catch (error) {
+    rmSync(path, { force: true });
+    throw error;
+  }
 }
 export interface HarvestExpectations {
   baseSha: string;
@@ -519,6 +530,7 @@ export async function runController(options: ControllerOptions): Promise<Control
     throw new Error("timeoutSeconds must be an integer from 1 to 1800");
   if (!options.linearToken.trim()) throw new Error("Linear token missing");
   if (!options.githubToken.trim()) throw new Error("GitHub token missing");
+  if (!options.openRouterKey.trim()) throw new Error("OpenRouter key missing");
   if (options.identity) requireAbsolute(options.identity);
   safeRepo(options.owner, options.repo);
   const root = resolve(options.root ?? process.cwd());
@@ -745,29 +757,10 @@ export async function runController(options: ControllerOptions): Promise<Control
       reviewer: archivedRole("reviewer"),
     };
     const configDir = mkdtempSync(resolve(tmpdir(), "factory-pi-"));
-    const models = resolve(configDir, "models.json");
-    writeJson(models, {
-      providers: {
-        exe: {
-          baseUrl: "https://llm.int.exe.xyz",
-          api: "anthropic-messages",
-          apiKey: "implicit",
-          models: [
-            {
-              id: "claude-sonnet-4-6",
-              reasoning: true,
-              input: ["text"],
-              contextWindow: EXECUTION_LIMITS.contextTokens,
-              maxTokens: EXECUTION_LIMITS.maxOutputTokens,
-              // Host telemetry may add a non-billable reference estimate; SDK cost stays disabled.
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              compat: { forceAdaptiveThinking: true },
-            },
-          ],
-        },
-      },
-    });
     try {
+      const models = resolve(configDir, "models.json");
+      writeJson(models, { providers: { openrouter: { apiKey: options.openRouterKey } } });
+      chmodSync(models, 0o600);
       publicFailureMessage = "bootstrap architecture detection failed";
       const machine = (await remote(exe, vm.sshDest, ["uname", "-m"], 30_000)).trim();
       const nodeArch = machine === "x86_64" ? "x64" : machine === "aarch64" ? "arm64" : "";
@@ -840,6 +833,7 @@ export async function runController(options: ControllerOptions): Promise<Control
       publicFailureMessage = "runtime upload failed";
       await exe.copyTo(vm.sshDest, archive.path, "/home/exedev/runtime.tar");
       await exe.copyTo(vm.sshDest, models, "/home/exedev/.pi/agent/models.json");
+      await remote(exe, vm.sshDest, ["chmod", "600", "/home/exedev/.pi/agent/models.json"], 30_000);
       publicFailureMessage = "runtime installation failed";
       await remote(
         exe,
@@ -888,11 +882,11 @@ export async function runController(options: ControllerOptions): Promise<Control
         ],
         600_000,
       );
-      publicFailureMessage = "model endpoint readiness check failed";
+      publicFailureMessage = "OpenRouter readiness check failed";
       await remote(
         exe,
         vm.sshDest,
-        ["curl", "-fsS", "-o", "/dev/null", "https://llm.int.exe.xyz/v1/models"],
+        ["curl", "-fsS", "-o", "/dev/null", "https://openrouter.ai/api/v1/models"],
         30_000,
       );
       let nextPublicToolId = 1;
@@ -951,14 +945,12 @@ export async function runController(options: ControllerOptions): Promise<Control
                 actor: event.actor,
                 phase: telemetryPhase(event.phase),
                 payload: {
-                  model: MODEL,
+                  model: role.model,
                   description: role.description,
                   tools: [...role.tools, "submit_envelope"],
                   thinking: role.thinking,
                   access: role.access,
                   systemPromptSha256: createHash("sha256").update(role.systemPrompt).digest("hex"),
-                  executionLimits: EXECUTION_LIMITS,
-                  modelReference: modelReference(MODEL),
                 },
               });
               contextSeen.add(event.phase);
@@ -1034,10 +1026,6 @@ export async function runController(options: ControllerOptions): Promise<Control
                 sourceAt,
                 payload: {
                   ...event.tokens,
-                  referenceEstimateNanoUsd: estimateReferenceNanoUsd(
-                    event.tokens,
-                    modelReference(MODEL)!,
-                  ),
                 },
               });
               break;
@@ -1152,8 +1140,6 @@ export async function runController(options: ControllerOptions): Promise<Control
             REMOTE_WORK,
             "--issue",
             issue,
-            "--model",
-            MODEL,
             "--timeout-seconds",
             String(options.timeoutSeconds),
             "--machine",
@@ -1196,8 +1182,6 @@ export async function runController(options: ControllerOptions): Promise<Control
             `${plannerRun}/envelope.json`,
             "--base-sha",
             state.baseSha,
-            "--model",
-            MODEL,
             "--timeout-seconds",
             String(options.timeoutSeconds),
             "--machine",
@@ -1229,6 +1213,7 @@ export async function runController(options: ControllerOptions): Promise<Control
       );
       if (!patch || Buffer.byteLength(patch) > MAX_PATCH)
         throw new Error("change patch missing or exceeds limit");
+      assertSecretAbsent(patch, [options.openRouterKey]);
       writeFileSync(resolve(runDir, "change.patch"), patch, { mode: 0o600 });
       const patchSha256 = createHash("sha256").update(patch).digest("hex");
       reviewedPatchSha256 = patchSha256;
@@ -1245,8 +1230,11 @@ export async function runController(options: ControllerOptions): Promise<Control
       );
       await exe.copyFrom(vm.sshDest, "/home/exedev/evidence.tar", resolve(runDir, "evidence.tar"));
       chmodSync(resolve(runDir, "evidence.tar"), 0o600);
-      if (statSync(resolve(runDir, "evidence.tar")).size > 50 * 1024 * 1024)
-        throw new Error("evidence archive exceeds limit");
+      assertArtifactSafe(
+        resolve(runDir, "evidence.tar"),
+        [options.openRouterKey],
+        "evidence archive",
+      );
       const runIds = [plannerRun, workerRun, reviewerRun].map((path) => basename(path));
       harvest(resolve(runDir, "evidence.tar"), runDir, runIds, {
         baseSha: state.baseSha,
@@ -1279,6 +1267,7 @@ export async function runController(options: ControllerOptions): Promise<Control
     failure = sanitizeTelemetryText(error instanceof Error ? error.message : String(error), [
       options.linearToken,
       options.githubToken,
+      options.openRouterKey,
     ]);
     bestEffortEmit({
       type: "failure",
@@ -1298,10 +1287,7 @@ export async function runController(options: ControllerOptions): Promise<Control
       );
       await exe.copyFrom(state.vm.sshDest, "/home/exedev/evidence.tar", target);
       chmodSync(target, 0o600);
-      if (statSync(target).size > 50 * 1024 * 1024) {
-        rmSync(target, { force: true });
-        throw new Error("failure evidence archive exceeds limit");
-      }
+      assertArtifactSafe(target, [options.openRouterKey], "failure evidence archive");
       bestEffortEmit({
         type: "artifact_available",
         actor: "controller",
@@ -1322,6 +1308,16 @@ export async function runController(options: ControllerOptions): Promise<Control
   try {
     const cleanupRequired = state !== undefined && state.state !== "intake";
     if (state && cleanupRequired) {
+      if (state.vm) {
+        try {
+          await remote(
+            exe,
+            state.vm.sshDest,
+            ["rm", "-f", "/home/exedev/.pi/agent/models.json"],
+            30_000,
+          );
+        } catch {}
+      }
       const cleaned = await exe.destroyVm(state.vm?.name ?? vmName(state.runId));
       if (!cleaned.destroyed && !cleaned.notFound) throw new Error("VM cleanup failed");
       cleanupOutcome = "complete";
@@ -1356,7 +1352,8 @@ export async function runController(options: ControllerOptions): Promise<Control
         });
       } catch {}
     }
-    failure ??= error instanceof Error ? error.message : String(error);
+    const cleanupError = error instanceof Error ? error.message : String(error);
+    failure = `${failure ?? cleanupError}; revoke the dedicated OpenRouter key`;
   }
   try {
     archive?.cleanup();
@@ -1374,7 +1371,11 @@ export async function runController(options: ControllerOptions): Promise<Control
       } catch {
         telemetryBroken = true;
       }
-      const error = sanitizeTelemetryText(message, [options.linearToken, options.githubToken]);
+      const error = sanitizeTelemetryText(message, [
+        options.linearToken,
+        options.githubToken,
+        options.openRouterKey,
+      ]);
       if (state && !cleanupFailed && state.state !== "failed") {
         state = transitionControllerState(runDir, "failed");
         bestEffortEmit({

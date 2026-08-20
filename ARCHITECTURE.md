@@ -9,7 +9,7 @@ A validated Linear feature issue triggers a local controller. Controller runs bo
 - Controller owns workflow state, deadlines, budgets, approvals, cancellation, VM lifecycle, publication commits, and pull requests.
 - VM owns source checkout, Pi sessions, edits, verification, review, and raw evidence.
 - Planner and reviewer are read-only. Worker is sole writer.
-- Linear credentials and GitHub write credentials stay outside VM.
+- Linear credentials and GitHub write credentials stay outside VM. OpenRouter uses a dedicated capped key as deliberate transient exception, injected only into VM-local Pi config for agent calls, best-effort removed before VM destruction, and revoked if cleanup fails.
 - Agent output is a proposal. Deterministic code decides acceptance.
 
 ## Target flow
@@ -51,7 +51,7 @@ queued -> planning -> awaiting_approval? -> implementing -> verifying
 
 ## Current slice
 
-Remote controller composition, local observation, and GitHub publication are implemented. `factory run` snapshots a Linear `Todo` issue and GitHub base SHA, holds a single-host lock, reconciles abandoned VMs, bootstraps pinned runtimes in a fresh exe.dev VM, streams safe telemetry through deterministic phase boundaries, runs planner then sole-writer/verification/fresh-reviewer sessions, binds harvested evidence to the reviewed patch, and destroys the VM. The trusted controller then checks the pinned base, applies the patch in a temporary clone, creates a deterministic bot branch and commit, opens a ready-for-review pull request, and records publication metadata before completion.
+Remote controller composition, local observation, GitHub publication, and OpenRouter-backed role execution are implemented. Each agent definition owns its pinned `openrouter/<provider>/<model>` identifier; current defaults are `openrouter/openai/gpt-5.6-terra`. Runtime does not ship a complete model catalog, so model availability remains an OpenRouter concern. VM is not a security sandbox. `factory run` snapshots a Linear `Todo` issue and GitHub base SHA, holds a single-host lock, reconciles abandoned VMs, bootstraps pinned runtimes in a fresh exe.dev VM, streams safe telemetry through deterministic phase boundaries, runs planner then sole-writer/verification/fresh-reviewer sessions, binds harvested evidence to the reviewed patch, and destroys the VM. The trusted controller then checks the pinned base, applies the patch in a temporary clone, creates a deterministic bot branch and commit, opens a ready-for-review pull request, and records publication metadata before completion.
 
 `factory run start` returns accepted run identity before completion. Persistent on-demand observer binds loopback, replays canonical host JSONL, serves read-only run list/detail/event views, and links the completed pull request. Factory-owned Pi skill routes start/status requests through these commands. Observer and skill hold no workflow authority.
 

@@ -2,7 +2,12 @@ import { existsSync } from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { loadFactoryConfig, type FactoryConfig } from "./config.js";
-import { resolveGithubToken, resolveLinearToken, type CredentialRunner } from "./credentials.js";
+import {
+  resolveGithubToken,
+  resolveLinearToken,
+  resolveOpenRouterKey,
+  type CredentialRunner,
+} from "./credentials.js";
 import { resolveTargetRepository } from "./target.js";
 
 export type CheckStatus = "pass" | "fail" | "warn";
@@ -29,6 +34,11 @@ export interface DoctorOptions {
   resolveTarget?: typeof resolveTargetRepository;
   resolveGithub?: (env: NodeJS.ProcessEnv, runner?: CredentialRunner) => Promise<string>;
   resolveLinear?: (
+    env: NodeJS.ProcessEnv,
+    config: FactoryConfig | undefined,
+    runner?: CredentialRunner,
+  ) => Promise<string>;
+  resolveOpenRouter?: (
     env: NodeJS.ProcessEnv,
     config: FactoryConfig | undefined,
     runner?: CredentialRunner,
@@ -73,6 +83,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
   const resolveTarget = options.resolveTarget ?? resolveTargetRepository;
   const resolveGithub = options.resolveGithub ?? resolveGithubToken;
   const resolveLinear = options.resolveLinear ?? resolveLinearToken;
+  const resolveOpenRouter = options.resolveOpenRouter ?? resolveOpenRouterKey;
   const checks: DoctorCheck[] = [];
   let config: FactoryConfig | undefined;
   try {
@@ -105,9 +116,10 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
     );
   }
   if (config) {
-    const [github, linear] = await Promise.allSettled([
+    const [github, linear, openrouter] = await Promise.allSettled([
       resolveGithub(env),
       resolveLinear(env, config),
+      resolveOpenRouter(env, config),
     ]);
     checks.push(
       check(
@@ -127,12 +139,30 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
         "export LINEAR_API_TOKEN or factory setup --linear-token-reference op://Vault/Item/field",
       ),
     );
+    checks.push(
+      check(
+        "openrouter",
+        openrouter.status === "fulfilled",
+        "OpenRouter credential resolvable",
+        "OpenRouter credential unavailable",
+        "export OPENROUTER_API_KEY or factory setup --openrouter-token-reference op://Vault/Item/field",
+      ),
+    );
   } else {
     checks.push(
       check("github", false, "", "GitHub credential not checked", "fix factory config first"),
     );
     checks.push(
       check("linear", false, "", "Linear credential not checked", "fix factory config first"),
+    );
+    checks.push(
+      check(
+        "openrouter",
+        false,
+        "",
+        "OpenRouter credential not checked",
+        "fix factory config first",
+      ),
     );
   }
   const home = (options.homedir ?? defaultHomedir)();

@@ -13,7 +13,6 @@ export const MAX_TIMEOUT_SECONDS = 1800;
 export interface PlanOptions {
   repo: string;
   issue: string;
-  model: string;
   timeoutSeconds: number;
   machine?: boolean;
   onEvent?: RemoteEventSink;
@@ -99,7 +98,6 @@ export async function runPlan(options: PlanOptions): Promise<PlanResult> {
   const result = await runAgent({
     agent: planner,
     cwd: repo,
-    model: options.model,
     timeoutSeconds: options.timeoutSeconds,
     prompt: `Plan this issue. Do not modify the repository.\n\n${issue}`,
     artifacts,

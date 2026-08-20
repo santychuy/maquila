@@ -19,6 +19,7 @@ test("token usage activity copies finalized session token totals", () => {
 const planner: AgentDefinition = {
   name: "planner",
   description: "Test planner",
+  model: "bogus/not-a-model",
   tools: ["read", "grep", "find", "ls"],
   thinking: "medium",
   access: "read-only",
@@ -35,7 +36,6 @@ test("runAgent finalizes a failed receipt without completion artifacts when the 
     const result = await runAgent({
       agent: planner,
       cwd: root,
-      model: "bogus/not-a-model",
       timeoutSeconds: 60,
       prompt: "Plan this issue.\n\nissue text",
       artifacts,

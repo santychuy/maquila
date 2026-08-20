@@ -11,11 +11,12 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  truncateSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import {
   harvest,
   recoverAbandonedAttempts,
@@ -39,6 +40,38 @@ const ids = [
 const BASE_SHA = "a".repeat(40);
 const PATCH = "diff --git a/docs/a.md b/docs/a.md\n";
 const PATCH_SHA256 = createHash("sha256").update(PATCH).digest("hex");
+let factoryRoot: string | undefined;
+function testFactoryRoot(): string {
+  if (factoryRoot) return factoryRoot;
+  factoryRoot = mkdtempSync(join(tmpdir(), "factory-runtime-"));
+  mkdirSync(join(factoryRoot, "src", "agents"), { recursive: true });
+  for (const role of ["planner", "worker", "reviewer"]) {
+    copyFileSync(
+      join(process.cwd(), "src", "agents", `${role}.md`),
+      join(factoryRoot, "src", "agents", `${role}.md`),
+    );
+  }
+  execFileSync("git", ["init", "--quiet"], { cwd: factoryRoot });
+  execFileSync("git", ["add", "src"], { cwd: factoryRoot });
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=test",
+      "-c",
+      "user.email=test@example.invalid",
+      "commit",
+      "--quiet",
+      "-m",
+      "runtime",
+    ],
+    { cwd: factoryRoot },
+  );
+  return factoryRoot;
+}
+after(() => {
+  if (factoryRoot) rmSync(factoryRoot, { recursive: true, force: true });
+});
 
 test("recovery terminalizes an accepted child that died before intake state", () => {
   const root = mkdtempSync(join(tmpdir(), "factory-attempt-"));
@@ -611,6 +644,23 @@ class FakeExe implements ControllerExe {
   }
 }
 
+class OversizedEvidenceExe extends FakeExe {
+  override async copyFrom(destination: string, remotePath: string, localPath: string) {
+    await super.copyFrom(destination, remotePath, localPath);
+    truncateSync(localPath, 50 * 1024 * 1024 + 1);
+  }
+}
+
+class KeyRemovalFailingExe extends FakeExe {
+  override async exec(destination: string, argv: string[], timeoutMs?: number) {
+    if (argv[0] === "rm" && argv[2] === "/home/exedev/.pi/agent/models.json") {
+      await super.exec(destination, argv, timeoutMs);
+      throw new Error("key removal failed");
+    }
+    return super.exec(destination, argv, timeoutMs);
+  }
+}
+
 class OverflowExe extends FakeExe {
   override async execStream(
     destination: string,
@@ -667,8 +717,9 @@ function controllerOptions(root: string, exe: ControllerExe) {
     timeoutSeconds: 1,
     linearToken: "linear-secret-value",
     githubToken: "github-secret-value",
+    openRouterKey: "openrouter-secret-value",
     root,
-    factoryRoot: process.cwd(),
+    factoryRoot: testFactoryRoot(),
     exe,
     intake: async () => snapshot,
     publish,
@@ -689,6 +740,7 @@ test("controller reaches ready only after remote evidence and VM cleanup", async
   const exe = new FakeExe();
   const linearToken = "linear-secret-value";
   const githubToken = "github-secret-value";
+  const openRouterKey = "openrouter-secret-value";
   let accepted = false;
   try {
     const result = await runController({
@@ -701,8 +753,9 @@ test("controller reaches ready only after remote evidence and VM cleanup", async
       timeoutSeconds: 1,
       linearToken,
       githubToken,
+      openRouterKey: "openrouter-secret-value",
       root,
-      factoryRoot: process.cwd(),
+      factoryRoot: testFactoryRoot(),
       exe,
       intake: async () => snapshot,
       publish,
@@ -729,25 +782,33 @@ test("controller reaches ready only after remote evidence and VM cleanup", async
       JSON.stringify(exe.calls),
       /https:\/\/github\.int\.exe\.xyz\/santychuy\/bookbounce\.git/,
     );
-    assert.doesNotMatch(JSON.stringify(exe.calls), new RegExp(`${linearToken}|${githubToken}`));
+    assert.doesNotMatch(
+      JSON.stringify(exe.calls),
+      new RegExp(`${linearToken}|${githubToken}|${openRouterKey}`),
+    );
     assert.doesNotMatch(JSON.stringify(exe.calls), /factory\/\/home\/exedev\/factory/);
     assert.equal(contains(root, linearToken), false);
     assert.equal(contains(root, githubToken), false);
-    assert.deepEqual(exe.calls.filter((call) => call.operation === "destroy").length, 1);
+    assert.equal(contains(root, openRouterKey), false);
+    const removal = exe.calls.findIndex(
+      (call) =>
+        call.operation === "exec" &&
+        JSON.stringify(call.value).includes('"rm","-f","/home/exedev/.pi/agent/models.json"'),
+    );
+    const destroy = exe.calls.findIndex((call) => call.operation === "destroy");
+    assert.ok(removal >= 0);
+    assert.ok(removal < destroy);
+    const readiness = exe.calls.find((call) =>
+      JSON.stringify(call.value).includes("https://openrouter.ai/api/v1/models"),
+    );
+    assert.ok(readiness);
+    assert.doesNotMatch(JSON.stringify(readiness), new RegExp(openRouterKey));
     const events = readTelemetry(telemetryPath(root, state.runId));
     const contexts = events.filter((event) => event.type === "agent_context");
     assert.equal(contexts.length, 3);
     assert.ok(contexts.every((event) => /^[0-9a-f]{64}$/.test(event.payload.systemPromptSha256)));
-    assert.ok(contexts.every((event) => event.payload.model === "exe/claude-sonnet-4-6"));
-    assert.ok(
-      contexts.every(
-        (event) =>
-          event.payload.executionLimits?.contextTokens === 200_000 &&
-          event.payload.executionLimits.maxOutputTokens === 16_384 &&
-          event.payload.modelReference?.model === "anthropic/claude-sonnet-4-6" &&
-          event.payload.modelReference.source.commit === "eeffdfc0157a27e3abf6fdb75e52f91db3c8d29f",
-      ),
-    );
+    assert.ok(contexts.every((event) => event.payload.model === "openrouter/openai/gpt-5.6-terra"));
+    assert.ok(contexts.every((event) => event.payload.executionLimits === undefined));
     assert.ok(
       contexts.every((event) => !("prompt" in event.payload) && !("systemPrompt" in event.payload)),
     );
@@ -759,7 +820,7 @@ test("controller reaches ready only after remote evidence and VM cleanup", async
       events
         .filter((event) => event.type === "agent_usage")
         .map((event) => event.payload.referenceEstimateNanoUsd),
-      [70_950, 18_000, 39_000],
+      [undefined, undefined, undefined],
     );
     assert.deepEqual(
       events.filter((event) => event.type === "phase_started").map((event) => event.phase?.name),
@@ -851,8 +912,9 @@ test("controller emits periodic phase heartbeat and stops it before terminal", a
       timeoutSeconds: 1,
       linearToken: "linear-secret-value",
       githubToken: "github-secret-value",
+      openRouterKey: "openrouter-secret-value",
       root,
-      factoryRoot: process.cwd(),
+      factoryRoot: testFactoryRoot(),
       exe: new SlowFakeExe(),
       intake: async () => snapshot,
       publish,
@@ -887,8 +949,9 @@ test("controller planner failure destroys VM and records failed state", async ()
       timeoutSeconds: 1,
       linearToken: "linear-secret-value",
       githubToken: "github-secret-value",
+      openRouterKey: "openrouter-secret-value",
       root,
-      factoryRoot: process.cwd(),
+      factoryRoot: testFactoryRoot(),
       exe,
       intake: async () => snapshot,
       sleep: async () => {},
@@ -909,6 +972,39 @@ test("controller planner failure destroys VM and records failed state", async ()
   }
 });
 
+test("oversized evidence is deleted before secret scan", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
+  try {
+    const result = await runController(controllerOptions(root, new OversizedEvidenceExe()));
+    assert.equal(result.status, "failed");
+    assert.equal(existsSync(join(result.runDir, "evidence.tar")), false);
+    assert.equal(existsSync(join(result.runDir, "failure-evidence.tar")), false);
+    assert.ok(
+      readTelemetry(telemetryPath(root, readControllerState(result.runDir).runId)).some(
+        (event) => event.type === "failure" && event.payload.stage === "failure_evidence",
+      ),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("key removal failure does not prevent VM destruction", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
+  const exe = new KeyRemovalFailingExe();
+  try {
+    const result = await runController(controllerOptions(root, exe));
+    assert.equal(result.status, "completed", result.error);
+    const removal = exe.calls.findIndex(
+      (call) => call.operation === "exec" && JSON.stringify(call.value).includes('"rm","-f"'),
+    );
+    assert.ok(removal >= 0);
+    assert.ok(removal < exe.calls.findIndex((call) => call.operation === "destroy"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("controller exposes fixed bootstrap checkpoints without leaking raw errors", async () => {
   const cases = [
     {
@@ -921,6 +1017,12 @@ test("controller exposes fixed bootstrap checkpoints without leaking raw errors"
       matches: (argv: string[]) =>
         argv.some((arg) => arg.endsWith("/bun")) && argv.at(-1) === "build",
       expected: "Factory build failed",
+    },
+    {
+      name: "OpenRouter readiness",
+      matches: (argv: string[]) =>
+        argv[0] === "curl" && argv.at(-1) === "https://openrouter.ai/api/v1/models",
+      expected: "OpenRouter readiness check failed",
     },
   ];
   for (const item of cases) {
@@ -1014,6 +1116,7 @@ test("post-review patch mutation fails digest binding", async () => {
 test("next run reconciles cleanup failure before intake", async () => {
   const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
   try {
+    const failedCleanup = new FakeExe(false, true);
     const first = await runController({
       issue: "RIFF-39",
       owner: "santychuy",
@@ -1024,14 +1127,23 @@ test("next run reconciles cleanup failure before intake", async () => {
       timeoutSeconds: 1,
       linearToken: "linear-secret-value",
       githubToken: "github-secret-value",
+      openRouterKey: "openrouter-secret-value",
       root,
-      factoryRoot: process.cwd(),
-      exe: new FakeExe(false, true),
+      factoryRoot: testFactoryRoot(),
+      exe: failedCleanup,
       intake: async () => snapshot,
       sleep: async () => {},
     });
     assert.equal(first.status, "failed");
+    assert.match(first.error ?? "", /revoke the dedicated OpenRouter key/);
     assert.equal(readControllerState(first.runDir).cleanup, "failed");
+    assert.ok(
+      failedCleanup.calls.some(
+        (call) =>
+          call.operation === "exec" &&
+          JSON.stringify(call.value).includes('"rm","-f","/home/exedev/.pi/agent/models.json"'),
+      ),
+    );
     const firstState = readControllerState(first.runDir);
     writeFileSync(telemetryPath(root, firstState.runId), "{malformed}\n", { flag: "a" });
 
@@ -1046,8 +1158,9 @@ test("next run reconciles cleanup failure before intake", async () => {
       timeoutSeconds: 1,
       linearToken: "linear-secret-value",
       githubToken: "github-secret-value",
+      openRouterKey: "openrouter-secret-value",
       root,
-      factoryRoot: process.cwd(),
+      factoryRoot: testFactoryRoot(),
       exe: recovery,
       intake: async () => {
         throw new Error("stop after recovery");
@@ -1092,8 +1205,9 @@ test("recovery reports complete cleanup for a derived creating_vm name", async (
       timeoutSeconds: 1,
       linearToken: "linear-secret-value",
       githubToken: "github-secret-value",
+      openRouterKey: "openrouter-secret-value",
       root,
-      factoryRoot: process.cwd(),
+      factoryRoot: testFactoryRoot(),
       exe,
       intake: async () => {
         throw new Error("stop after recovery");
@@ -1144,8 +1258,9 @@ test("malformed remote stream fails closed and destroys VM", async () => {
       timeoutSeconds: 1,
       linearToken: "linear-secret-value",
       githubToken: "github-secret-value",
+      openRouterKey: "openrouter-secret-value",
       root,
-      factoryRoot: process.cwd(),
+      factoryRoot: testFactoryRoot(),
       exe,
       intake: async () => snapshot,
       sleep: async () => {},
@@ -1383,8 +1498,9 @@ test("remote command cannot select a future controller phase", async () => {
       timeoutSeconds: 1,
       linearToken: "linear-secret-value",
       githubToken: "github-secret-value",
+      openRouterKey: "openrouter-secret-value",
       root,
-      factoryRoot: process.cwd(),
+      factoryRoot: testFactoryRoot(),
       exe,
       intake: async () => snapshot,
       sleep: async () => {},
@@ -1411,8 +1527,9 @@ test("completed remote result requires deterministic gate evidence", async () =>
       timeoutSeconds: 1,
       linearToken: "linear-secret-value",
       githubToken: "github-secret-value",
+      openRouterKey: "openrouter-secret-value",
       root,
-      factoryRoot: process.cwd(),
+      factoryRoot: testFactoryRoot(),
       exe,
       intake: async () => snapshot,
       sleep: async () => {},
@@ -1440,8 +1557,9 @@ test("telemetry append failure after VM creation fails closed and destroys VM", 
       timeoutSeconds: 1,
       linearToken: "linear-secret-value",
       githubToken: "github-secret-value",
+      openRouterKey: "openrouter-secret-value",
       root,
-      factoryRoot: process.cwd(),
+      factoryRoot: testFactoryRoot(),
       exe,
       intake: async () => snapshot,
       sleep: async () => {},
@@ -1480,8 +1598,9 @@ test("controller preserves and redacts intake failure evidence", async () => {
       timeoutSeconds: 1,
       linearToken,
       githubToken: "github-secret-value",
+      openRouterKey: "openrouter-secret-value",
       root,
-      factoryRoot: process.cwd(),
+      factoryRoot: testFactoryRoot(),
       exe,
       intake: async () => {
         throw new Error(`request failed: ${linearToken}`);

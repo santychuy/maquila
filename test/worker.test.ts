@@ -93,7 +93,7 @@ function agentStub(
       status: response.status,
       startedAt: new Date(0).toISOString(),
       finishedAt: new Date(1).toISOString(),
-      model: runOptions.model,
+      model: runOptions.agent.model,
       timeoutSeconds: runOptions.timeoutSeconds,
       agent: {
         name: runOptions.agent.name,
@@ -150,7 +150,6 @@ function options(f: Fixture) {
     issue: f.issue,
     plannerEnvelope: f.envelope,
     baseSha: f.baseSha,
-    model: "test/model",
     timeoutSeconds: 60,
     root: f.root,
   };
@@ -248,6 +247,8 @@ test("successful worker invokes separate reviewer with untracked patch", async (
     assert.equal(result.status, "completed");
     assert.equal(verifyOptions?.commandTimeoutMs, 60_000);
     assert.equal(calls.length, 2);
+    assert.equal(calls[0]?.agent.model, "openrouter/openai/gpt-5.6-terra");
+    assert.equal(calls[1]?.agent.model, "openrouter/openai/gpt-5.6-terra");
     assert.notEqual(calls[0]?.artifacts.runDir, calls[1]?.artifacts.runDir);
     assert.match(calls[1]?.prompt ?? "", /new file mode/);
     assert.match(calls[1]?.prompt ?? "", /export const x = 1/);

@@ -1,6 +1,7 @@
 ---
 name: reviewer
 description: Independently reviews implementation against issue, plan, diff, and verification evidence
+model: openrouter/openai/gpt-5.6-terra
 tools:
   - read
   - grep

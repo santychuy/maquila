@@ -5,6 +5,32 @@ import { resolve } from "node:path";
 import { test } from "node:test";
 import { runSetup } from "../src/setup.js";
 
+test("setup preserves existing references when storing OpenRouter reference", async () => {
+  const root = mkdtempSync(resolve(tmpdir(), "factory-setup-openrouter-"));
+  try {
+    mkdirSync(resolve(root, "factory"), { recursive: true });
+    writeFileSync(
+      resolve(root, "factory/config.json"),
+      '{"version":1,"linear":{"tokenReference":"op://Vault/Linear/token"}}\n',
+    );
+    const result = await runSetup({
+      factoryRoot: root,
+      env: { XDG_CONFIG_HOME: root },
+      homedir: () => root,
+      stdinIsTTY: false,
+      runGh: async () => ({ ok: true }),
+      runOp: async () => ({ ok: true }),
+      openRouterTokenReference: "op://Vault/OpenRouter/token",
+      write: () => undefined,
+    });
+    assert.equal(result.openrouter.configured, true);
+    assert.match(readFileSync(resolve(root, "factory/config.json"), "utf8"), /Vault\/Linear/);
+    assert.match(readFileSync(resolve(root, "factory/config.json"), "utf8"), /Vault\/OpenRouter/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("setup stores only Linear secret references", async () => {
   const root = mkdtempSync(resolve(tmpdir(), "factory-setup-"));
   try {

@@ -10,6 +10,7 @@ const execFileAsync = promisify(execFile);
 export interface ControllerCredentials {
   linearToken: string;
   githubToken: string;
+  openRouterKey: string;
   identity?: string;
 }
 
@@ -85,18 +86,43 @@ export async function resolveLinearToken(
   throw new Error("1Password reference could not be read");
 }
 
+export async function resolveOpenRouterKey(
+  env: NodeJS.ProcessEnv,
+  config: FactoryConfig | undefined,
+  runOp: CredentialRunner = defaultRunner,
+): Promise<string> {
+  const fromEnv = nonBlank(env.OPENROUTER_API_KEY);
+  if (fromEnv) return fromEnv;
+  const reference = config?.openrouter?.tokenReference;
+  if (!reference) throw new Error("OPENROUTER_API_KEY is required");
+  const safe = parseTokenReference(reference, "OpenRouter");
+  try {
+    const key = nonBlank(
+      await runOp("op", ["read", "--no-newline", safe], externalCommandEnvironment(env)),
+    );
+    if (key) return key;
+  } catch (error) {
+    if (error instanceof Error && error.message === "invalid OpenRouter token reference")
+      throw error;
+    throw new Error("1Password OpenRouter reference could not be read", { cause: error });
+  }
+  throw new Error("1Password OpenRouter reference could not be read");
+}
+
 export async function resolveControllerCredentials(
   options: ResolveControllerCredentialsOptions = {},
 ): Promise<ControllerCredentials> {
   const env = options.env ?? process.env;
-  const [github, linear] = await Promise.all([
+  const [github, linear, openRouterKey] = await Promise.all([
     resolveGithubToken(env, options.runGh),
     resolveLinearToken(env, options.config, options.runOp),
+    resolveOpenRouterKey(env, options.config, options.runOp),
   ]);
   const identity = identityFrom(options.identityFlag ?? env.FACTORY_EXE_IDENTITY);
   return {
     linearToken: linear,
     githubToken: github,
+    openRouterKey,
     ...(identity ? { identity } : {}),
   };
 }
@@ -109,6 +135,7 @@ export function controllerChildEnvironment(
     ...externalCommandEnvironment(env),
     LINEAR_API_TOKEN: credentials.linearToken,
     GITHUB_TOKEN: credentials.githubToken,
+    OPENROUTER_API_KEY: credentials.openRouterKey,
   };
   if (credentials.identity) child.FACTORY_EXE_IDENTITY = credentials.identity;
   const sock = env.SSH_AUTH_SOCK;

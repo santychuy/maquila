@@ -24,6 +24,7 @@ export type SetupRunner = (
 export interface SetupOptions {
   json?: boolean;
   linearTokenReference?: string;
+  openRouterTokenReference?: string;
   installSkill?: boolean;
   stdinIsTTY?: boolean;
   env?: NodeJS.ProcessEnv;
@@ -41,6 +42,7 @@ export interface SetupResult {
   configPath: string;
   github: { available: boolean; remediation?: string };
   linear: { configured: boolean; remediation?: string };
+  openrouter: { configured: boolean; remediation?: string };
   ssh: { available: boolean; remediation?: string };
   skill: { installed: boolean; path?: string; remediation?: string };
 }
@@ -107,16 +109,24 @@ export async function runSetup(options: SetupOptions): Promise<SetupResult> {
   const sock = Boolean(env.SSH_AUTH_SOCK?.trim()) && !env.SSH_AUTH_SOCK?.includes("\0");
   const sshAvailable = sock || openSshConfigured(home);
   let config = loadFactoryConfig({ env, homedir: options.homedir });
-  let reference = options.linearTokenReference?.trim();
-  if (!reference && (options.stdinIsTTY ?? input.isTTY ?? false)) {
+  let linearReference = options.linearTokenReference?.trim();
+  let openRouterReference = options.openRouterTokenReference?.trim();
+  if (!linearReference && !openRouterReference && (options.stdinIsTTY ?? input.isTTY ?? false)) {
     const answer = await (options.prompt ?? defaultPrompt)(
       "Linear 1Password reference (op://Vault/Item/field, empty to skip): ",
     );
-    reference = answer.trim();
+    linearReference = answer.trim();
   }
-  if (reference) {
-    const safe = parseTokenReference(reference);
-    config = { version: 1, linear: { tokenReference: safe } };
+  if (linearReference || openRouterReference) {
+    config = {
+      ...config,
+      ...(linearReference
+        ? { linear: { tokenReference: parseTokenReference(linearReference) } }
+        : {}),
+      ...(openRouterReference
+        ? { openrouter: { tokenReference: parseTokenReference(openRouterReference, "OpenRouter") } }
+        : {}),
+    };
     writeFactoryConfig(config, { env, homedir: options.homedir ?? defaultHomedir });
   } else if (!existsSync(factoryConfigPath(env, options.homedir ?? defaultHomedir))) {
     writeFactoryConfig({ version: 1 }, { env, homedir: options.homedir ?? defaultHomedir });
@@ -148,6 +158,13 @@ export async function runSetup(options: SetupOptions): Promise<SetupResult> {
           remediation:
             "export LINEAR_API_TOKEN or factory setup --linear-token-reference op://Vault/Item/field",
         },
+    openrouter: config.openrouter
+      ? { configured: true }
+      : {
+          configured: false,
+          remediation:
+            "export OPENROUTER_API_KEY or factory setup --openrouter-token-reference op://Vault/Item/field",
+        },
     ssh: sshAvailable
       ? { available: true }
       : {
@@ -167,6 +184,7 @@ export async function runSetup(options: SetupOptions): Promise<SetupResult> {
     write(`Config: ${configPath}\n`);
     write(`GitHub: ${result.github.available ? "ok" : result.github.remediation}\n`);
     write(`Linear: ${result.linear.configured ? "ok" : result.linear.remediation}\n`);
+    write(`OpenRouter: ${result.openrouter.configured ? "ok" : result.openrouter.remediation}\n`);
     write(`SSH: ${result.ssh.available ? "ok" : result.ssh.remediation}\n`);
     write(`Skill: ${result.skill.installed ? result.skill.path : result.skill.remediation}\n`);
     if (!op.ok) write("Optional: install 1Password CLI to use op:// references\n");

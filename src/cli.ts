@@ -27,12 +27,12 @@ import {
 
 export const HELP = `Usage:
   factory agents list
-  factory setup [--linear-token-reference op://Vault/Item/field] [--install-skill] [--json]
+  factory setup [--linear-token-reference op://Vault/Item/field] [--openrouter-token-reference op://Vault/Item/field] [--install-skill] [--json]
   factory doctor [--target PATH] [--json]
-  factory pi plan --repo PATH --issue PATH --model PROVIDER/MODEL [--timeout-seconds 300]
+  factory pi plan --repo PATH --issue PATH [--timeout-seconds 300]
 
 Lists agents or runs planner, worker/reviewer, and remote controller workflows.
-  factory pi worker --repo PATH --issue PATH --planner PATH --base-sha SHA --model PROVIDER/MODEL [--timeout-seconds 300]
+  factory pi worker --repo PATH --issue PATH --planner PATH --base-sha SHA [--timeout-seconds 300]
   factory run --issue ID --owner OWNER --repo REPO --base-ref REF --tag TAG [--identity ABS] [--timeout-seconds 900]
   factory run start --issue ID [--target PATH] [--owner OWNER] [--repo REPO] [--base-ref REF] [--tag TAG] [--identity ABS] [--timeout-seconds 900] [--json]
   factory run status --run-id UUID [--json]
@@ -86,6 +86,7 @@ interface SetupCommand {
   timeoutSeconds?: undefined;
   json?: boolean;
   linearTokenReference?: string;
+  openRouterTokenReference?: string;
   installSkill?: boolean;
 }
 interface DoctorCommand {
@@ -140,7 +141,6 @@ export function parseCli(args: string[]): ParsedCli {
       help: { type: "boolean", short: "h" },
       repo: { type: "string" },
       issue: { type: "string" },
-      model: { type: "string" },
       planner: { type: "string" },
       "base-sha": { type: "string" },
       "timeout-seconds": { type: "string" },
@@ -154,6 +154,7 @@ export function parseCli(args: string[]): ParsedCli {
       json: { type: "boolean" },
       port: { type: "string" },
       "linear-token-reference": { type: "string" },
+      "openrouter-token-reference": { type: "string" },
       "install-skill": { type: "boolean" },
     },
   });
@@ -164,12 +165,20 @@ export function parseCli(args: string[]): ParsedCli {
   }
   const command = positionals.join(" ");
   if (command === "setup") {
-    rejectOptions(values, ["json", "linear-token-reference", "install-skill"]);
+    rejectOptions(values, [
+      "json",
+      "linear-token-reference",
+      "openrouter-token-reference",
+      "install-skill",
+    ]);
     return {
       command: "setup",
       ...(values.json ? { json: true } : {}),
       ...(values["linear-token-reference"]
         ? { linearTokenReference: values["linear-token-reference"] }
+        : {}),
+      ...(values["openrouter-token-reference"]
+        ? { openRouterTokenReference: values["openrouter-token-reference"] }
         : {}),
       ...(values["install-skill"] ? { installSkill: true } : {}),
     };
@@ -300,23 +309,14 @@ export function parseCli(args: string[]): ParsedCli {
     };
   }
   if (command === "pi worker") {
-    rejectOptions(values, [
-      "repo",
-      "issue",
-      "model",
-      "planner",
-      "base-sha",
-      "timeout-seconds",
-      "machine",
-    ]);
-    if (!values.repo || !values.issue || !values.model || !values.planner || !values["base-sha"])
-      throw new Error("--repo, --issue, --planner, --base-sha, and --model are required");
+    rejectOptions(values, ["repo", "issue", "planner", "base-sha", "timeout-seconds", "machine"]);
+    if (!values.repo || !values.issue || !values.planner || !values["base-sha"])
+      throw new Error("--repo, --issue, --planner, --base-sha are required");
     return {
       repo: values.repo,
       issue: values.issue,
       plannerEnvelope: values.planner,
       baseSha: values["base-sha"],
-      model: values.model,
       timeoutSeconds: timeout(values["timeout-seconds"], "300"),
       ...(values.machine ? { machine: true } : {}),
     };
@@ -325,13 +325,11 @@ export function parseCli(args: string[]): ParsedCli {
     throw new Error(
       "Expected command: agents list, setup, doctor, pi plan, pi worker, run, run start, run status, dashboard, or observer",
     );
-  rejectOptions(values, ["repo", "issue", "model", "timeout-seconds", "machine"]);
-  if (!values.repo || !values.issue || !values.model)
-    throw new Error("--repo, --issue, and --model are required");
+  rejectOptions(values, ["repo", "issue", "timeout-seconds", "machine"]);
+  if (!values.repo || !values.issue) throw new Error("--repo, --issue are required");
   return {
     repo: values.repo,
     issue: values.issue,
-    model: values.model,
     timeoutSeconds: timeout(values["timeout-seconds"], "300"),
     ...(values.machine ? { machine: true } : {}),
   };
@@ -377,18 +375,21 @@ function writeHumanStatus(status: RunStatusSummary): void {
 function takeControllerEnvironment(): {
   linearToken: string | undefined;
   githubToken: string | undefined;
+  openRouterKey: string | undefined;
   identity: string | undefined;
   instanceId: string | undefined;
 } {
   const result = {
     linearToken: process.env.LINEAR_API_TOKEN,
     githubToken: process.env.GITHUB_TOKEN,
+    openRouterKey: process.env.OPENROUTER_API_KEY,
     identity: process.env.FACTORY_EXE_IDENTITY,
     instanceId: process.env.FACTORY_LAUNCH_INSTANCE_ID,
   };
   delete process.env.LINEAR_API_TOKEN;
   delete process.env.GITHUB_TOKEN;
   delete process.env.GH_TOKEN;
+  delete process.env.OPENROUTER_API_KEY;
   delete process.env.FACTORY_EXE_IDENTITY;
   delete process.env.FACTORY_LAUNCH_INSTANCE_ID;
   return result;
@@ -403,6 +404,9 @@ function publicJsonError(message: string): string {
     /^cannot inspect target Git repository$/,
     /^LINEAR_API_TOKEN(?: and GITHUB_TOKEN are required| is required)$/,
     /^GITHUB_TOKEN is required$/,
+    /^OPENROUTER_API_KEY is required$/,
+    /^1Password OpenRouter reference could not be read$/,
+    /^invalid OpenRouter token reference$/,
     /^GitHub CLI auth is unavailable$/,
     /^1Password reference could not be read$/,
     /^invalid Linear token reference$/,
@@ -437,6 +441,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         const result = await runSetup({
           json: options.json,
           linearTokenReference: options.linearTokenReference,
+          openRouterTokenReference: options.openRouterTokenReference,
           installSkill: options.installSkill,
           factoryRoot: root,
         });
@@ -495,6 +500,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
             ...launchEnv,
             LINEAR_API_TOKEN: credentials.linearToken,
             GITHUB_TOKEN: credentials.githubToken,
+            OPENROUTER_API_KEY: credentials.openRouterKey,
             ...(credentials.identity ? { FACTORY_EXE_IDENTITY: credentials.identity } : {}),
           },
           ...(credentials.identity ? { identity: credentials.identity } : { identity: undefined }),
@@ -502,6 +508,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         delete process.env.LINEAR_API_TOKEN;
         delete process.env.GITHUB_TOKEN;
         delete process.env.GH_TOKEN;
+        delete process.env.OPENROUTER_API_KEY;
         delete process.env.FACTORY_EXE_IDENTITY;
         if (options.json) json(result);
         else await writeHumanStart(root, result.runId);
@@ -519,8 +526,9 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         return 0;
       }
       if (options.command !== "run-execute") throw new Error("invalid observer command");
-      const { linearToken, githubToken, identity, instanceId } = takeControllerEnvironment();
-      if (!linearToken || !githubToken || !instanceId)
+      const { linearToken, githubToken, openRouterKey, identity, instanceId } =
+        takeControllerEnvironment();
+      if (!linearToken || !githubToken || !openRouterKey || !instanceId)
         throw new Error("controller child environment is incomplete");
       const target = validateResolvedTarget({
         owner: options.owner,
@@ -537,6 +545,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         timeoutSeconds: options.timeoutSeconds,
         linearToken,
         githubToken,
+        openRouterKey,
         root,
         factoryRoot: root,
         runId: options.runId,
@@ -557,6 +566,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         ...options,
         linearToken: credentials.linearToken,
         githubToken: credentials.githubToken,
+        openRouterKey: credentials.openRouterKey,
         ...(credentials.identity ? { identity: credentials.identity } : {}),
       });
       process.stdout.write(`\nController evidence: ${result.runDir}\n`);
@@ -572,7 +582,6 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
             issue: options.issue,
             plannerEnvelope: options.plannerEnvelope,
             baseSha: options.baseSha,
-            model: options.model,
             timeoutSeconds: options.timeoutSeconds,
             onEvent: protocol ? (event) => protocol.event(event) : undefined,
           })

@@ -23,7 +23,6 @@ export interface WorkerLifecycleOptions {
   issue: string;
   plannerEnvelope: string;
   baseSha: string;
-  model: string;
   timeoutSeconds: number;
   root?: string;
   runAgent?: typeof runAgent;
@@ -197,7 +196,6 @@ export async function runWorkerLifecycle(
     worker = await run({
       agent: loadAgent("worker"),
       cwd: options.repo,
-      model: options.model,
       timeoutSeconds: options.timeoutSeconds,
       prompt: promptIssue(issue, plan),
       artifacts: workerArtifacts,
@@ -312,7 +310,6 @@ export async function runWorkerLifecycle(
     reviewer = await run({
       agent: loadAgent("reviewer"),
       cwd: options.repo,
-      model: options.model,
       timeoutSeconds: options.timeoutSeconds,
       prompt: reviewPrompt,
       artifacts: reviewerArtifacts,

@@ -1,12 +1,12 @@
 ---
 name: software-factory
 description: Start and observe this repository's deterministic software-factory workflow for a Linear issue against the current Git repository. Use whenever the user asks to run the factory, build a Linear issue in a sandbox, start an observed factory run, or check a factory run's live status.
-compatibility: Requires the factory CLI on PATH, Node.js, and controller credentials.
+compatibility: Requires the factory CLI on PATH, Node.js, controller credentials, and a configured OpenRouter key.
 ---
 
 # Software Factory
 
-Route user intent through checked-in deterministic commands. Controller owns workflow state, acceptance, VM lifecycle, and cleanup; skill only starts or reads a run.
+Route user intent through checked-in deterministic commands. Controller owns workflow state, acceptance, VM lifecycle, and cleanup; skill only starts or reads a run. Planner, worker, and reviewer use their per-agent authoritative pinned OpenRouter models. Model catalog is not bundled. Linear/GitHub credentials stay outside VM; dedicated capped OpenRouter key is transient VM exception. VM is not a security sandbox.
 
 ## Start a run
 
@@ -41,7 +41,7 @@ Report status, phase, current safe tool name, last activity, cleanup, failure, p
 
 Explain only actionable public errors:
 
-- missing Linear or GitHub credentials: run `factory doctor` and configure `LINEAR_API_TOKEN` or `GITHUB_TOKEN`
+- missing Linear, GitHub, or OpenRouter credentials: run `factory doctor` and configure `LINEAR_API_TOKEN`, `GITHUB_TOKEN`, or `OPENROUTER_API_KEY` (or setup an `op://` reference)
 - GitHub publication `403`: use a fine-grained token for the target repository with Contents and Pull requests write permissions
 - invalid `FACTORY_EXE_IDENTITY`: configure an absolute exe.dev identity path only when OpenSSH defaults are insufficient
 - target ambiguity: provide supported GitHub origin and resolvable remote default branch, or explicit safe overrides

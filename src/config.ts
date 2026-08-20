@@ -18,6 +18,14 @@ const FactoryConfigSchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    openrouter: Type.Optional(
+      Type.Object(
+        {
+          tokenReference: Type.String({ pattern: OP_TOKEN_REFERENCE.source }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
@@ -33,9 +41,9 @@ export function factoryConfigPath(
   return resolve(root, "factory", "config.json");
 }
 
-export function parseTokenReference(value: string): string {
+export function parseTokenReference(value: string, label = "Linear"): string {
   const trimmed = value.trim();
-  if (!OP_TOKEN_REFERENCE.test(trimmed)) throw new Error("invalid Linear token reference");
+  if (!OP_TOKEN_REFERENCE.test(trimmed)) throw new Error(`invalid ${label} token reference`);
   return trimmed;
 }
 
@@ -48,6 +56,7 @@ export function parseFactoryConfig(text: string): FactoryConfig {
   }
   if (!Value.Check(FactoryConfigSchema, value)) throw new Error("invalid factory config");
   if (value.linear) parseTokenReference(value.linear.tokenReference);
+  if (value.openrouter) parseTokenReference(value.openrouter.tokenReference, "OpenRouter");
   return value;
 }
 
@@ -67,7 +76,8 @@ export function loadFactoryConfig(options: LoadFactoryConfigOptions = {}): Facto
     if (
       error instanceof Error &&
       (error.message === "invalid factory config" ||
-        error.message === "invalid Linear token reference")
+        error.message === "invalid Linear token reference" ||
+        error.message === "invalid OpenRouter token reference")
     )
       throw error;
     throw new Error("invalid factory config", { cause: error });

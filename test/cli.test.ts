@@ -16,15 +16,12 @@ test("planner command accepts required inputs and safe timeout", () => {
       "/tmp/repo",
       "--issue",
       "/tmp/issue.md",
-      "--model",
-      "anthropic/example",
       "--timeout-seconds",
       "60",
     ]),
     {
       repo: "/tmp/repo",
       issue: "/tmp/issue.md",
-      model: "anthropic/example",
       timeoutSeconds: 60,
     },
   );
@@ -244,7 +241,7 @@ test("machine terminal frames own failed and timed-out process outcomes", () => 
   assert.equal(agentExitCode("timed_out", false), 124);
 });
 
-test("machine mode is explicit on internal remote commands", () => {
+test("machine mode is explicit and model overrides are rejected", () => {
   const parsed = parseCli([
     "pi",
     "plan",
@@ -252,13 +249,25 @@ test("machine mode is explicit on internal remote commands", () => {
     "/tmp/repo",
     "--issue",
     "/tmp/issue.md",
-    "--model",
-    "anthropic/example",
     "--machine",
   ]);
   assert.equal(
     typeof parsed === "object" && "machine" in parsed ? parsed.machine : undefined,
     true,
+  );
+  assert.throws(
+    () =>
+      parseCli([
+        "pi",
+        "plan",
+        "--repo",
+        "/tmp/repo",
+        "--issue",
+        "/tmp/issue.md",
+        "--model",
+        "anthropic/example",
+      ]),
+    /--model/,
   );
 });
 
@@ -275,8 +284,6 @@ test("worker lifecycle command parses immutable inputs", () => {
       "/tmp/planner.json",
       "--base-sha",
       "a".repeat(40),
-      "--model",
-      "anthropic/example",
       "--timeout-seconds",
       "60",
     ]),
@@ -285,7 +292,6 @@ test("worker lifecycle command parses immutable inputs", () => {
       issue: "/tmp/issue.md",
       plannerEnvelope: "/tmp/planner.json",
       baseSha: "a".repeat(40),
-      model: "anthropic/example",
       timeoutSeconds: 60,
     },
   );
@@ -305,8 +311,6 @@ test("planner rejects missing input and timeouts beyond run ceiling", () => {
         "/tmp/repo",
         "--issue",
         "/tmp/issue.md",
-        "--model",
-        "anthropic/example",
         "--timeout-seconds",
         String(MAX_TIMEOUT_SECONDS + 1),
       ]),
@@ -317,6 +321,14 @@ test("planner rejects missing input and timeouts beyond run ceiling", () => {
 test("specialized agents load with explicit capability boundaries", () => {
   const agents = Object.fromEntries(listAgents().map((agent) => [agent.name, agent]));
   assert.deepEqual(Object.keys(agents), ["planner", "reviewer", "worker"]);
+  assert.deepEqual(
+    Object.values(agents).map((agent) => agent?.model),
+    [
+      "openrouter/openai/gpt-5.6-terra",
+      "openrouter/openai/gpt-5.6-terra",
+      "openrouter/openai/gpt-5.6-terra",
+    ],
+  );
   assert.equal(agents.planner?.access, "read-only");
   assert.deepEqual(agents.planner?.tools, ["read", "grep", "find", "ls"]);
   assert.equal(agents.reviewer?.access, "read-only");
@@ -330,17 +342,23 @@ test("agent definitions fail closed on schema and access violations", () => {
   const directory = mkdtempSync(resolve(tmpdir(), "factory-agent-"));
   const unknownField = resolve(directory, "unknown-field.md");
   const unsafeReader = resolve(directory, "unsafe-reader.md");
+  const unpinnedModel = resolve(directory, "unpinned-model.md");
   writeFileSync(
     unknownField,
-    "---\nname: unknown-field\ndescription: Bad definition\ntools: [read]\naccess: read-only\ntypo: true\n---\nPrompt\n",
+    "---\nname: unknown-field\ndescription: Bad definition\nmodel: openrouter/openai/gpt-5.6-terra\ntools: [read]\naccess: read-only\ntypo: true\n---\nPrompt\n",
   );
   writeFileSync(
     unsafeReader,
-    "---\nname: unsafe-reader\ndescription: Unsafe reader\ntools: [read, write]\naccess: read-only\n---\nPrompt\n",
+    "---\nname: unsafe-reader\ndescription: Unsafe reader\nmodel: openrouter/openai/gpt-5.6-terra\ntools: [read, write]\naccess: read-only\n---\nPrompt\n",
+  );
+  writeFileSync(
+    unpinnedModel,
+    "---\nname: unpinned-model\ndescription: Unpinned model\nmodel: openrouter/openai/latest\ntools: [read]\naccess: read-only\n---\nPrompt\n",
   );
   try {
     assert.throws(() => loadAgentFile(unknownField), /unknown fields: typo/);
     assert.throws(() => loadAgentFile(unsafeReader), /read-only agent cannot use: write/);
+    assert.throws(() => loadAgentFile(unpinnedModel), /must not use a latest or auto alias/);
   } finally {
     rmSync(directory, { recursive: true });
   }

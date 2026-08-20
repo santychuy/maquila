@@ -22,8 +22,10 @@ test("doctor reports redacted readiness checks", async () => {
       }),
       resolveGithub: async () => "github-secret",
       resolveLinear: async () => "secret-token",
+      resolveOpenRouter: async () => "openrouter-secret",
       write: () => undefined,
     });
+    assert.equal(result.checks.find((item) => item.id === "openrouter")?.status, "pass");
     assert.equal(result.ok, false);
     assert.equal(JSON.stringify(result).includes("secret-token"), false);
     assert.equal(JSON.stringify(result).includes("github-secret"), false);
@@ -55,10 +57,12 @@ test("doctor checks credentials independently and recognizes OpenSSH config", as
         throw new Error("secret GitHub failure");
       },
       resolveLinear: async () => "linear-secret",
+      resolveOpenRouter: async () => "openrouter-secret",
       write: () => undefined,
     });
     assert.equal(result.checks.find((item) => item.id === "github")?.status, "fail");
     assert.equal(result.checks.find((item) => item.id === "linear")?.status, "pass");
+    assert.equal(result.checks.find((item) => item.id === "openrouter")?.status, "pass");
     assert.equal(result.checks.find((item) => item.id === "ssh")?.status, "pass");
     assert.equal(JSON.stringify(result).includes("secret"), false);
   } finally {

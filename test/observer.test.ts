@@ -246,12 +246,6 @@ test("observer UI renders accessible safe actor timeline and raw drill-down", ()
   assert.match(OBSERVER_JS, /button\.type='button'/);
   assert.match(OBSERVER_JS, /aria-pressed/);
   assert.match(OBSERVER_JS, /Prompt body','Unavailable by design/);
-  assert.match(OBSERVER_JS, /Reference list rates \(\$\/1M tokens\)/);
-  assert.match(OBSERVER_JS, /Estimated total \(not invoice\)/);
-  assert.match(OBSERVER_JS, /not an exe\.dev bill/);
-  assert.match(OBSERVER_JS, /no controller-pinned compatible estimate recorded/);
-  assert.match(OBSERVER_JS, /token usage not reported yet/);
-  assert.match(OBSERVER_JS, /padStart\(9,'0'\)\.replace\(\/0\+\$\//);
   assert.match(OBSERVER_JS, /while\(page\.hasMore\)/);
   assert.match(OBSERVER_JS, /scrollIntoView/);
   assert.doesNotMatch(OBSERVER_HTML, /segment-detail[^>]+aria-live/);

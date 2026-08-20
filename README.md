@@ -9,6 +9,7 @@ Software Factory takes a Linear issue, works on it inside a fresh exe.dev VM, ve
 - An exe.dev account
 - GitHub CLI (`gh`) authenticated to the target repository
 - A Linear personal API key or 1Password secret reference
+- A dedicated, capped OpenRouter API key (or an `op://` reference)
 
 ## Install once
 
@@ -38,6 +39,24 @@ gh auth login
 ```
 
 Factory reuses this login. For CI, `GITHUB_TOKEN` or `GH_TOKEN` also works.
+
+## Connect OpenRouter
+
+Remote planner, worker, and reviewer sessions use the model pinned in each agent definition. Current defaults are `openrouter/openai/gpt-5.6-terra`; the definition is authoritative, not a run-time `--model` override. The runtime does not maintain or validate a complete OpenRouter model catalog, so use a valid pinned identifier and configure model access at OpenRouter.
+
+Export a key for local commands:
+
+```bash
+export OPENROUTER_API_KEY=...
+```
+
+Or store only a 1Password reference in Factory config:
+
+```bash
+factory setup --openrouter-token-reference op://Vault/OpenRouter/api-key
+```
+
+Use a dedicated key with a spend/request cap. During `factory run`, controller writes this key to a mode-`0600` Pi provider file in the VM, best-effort removes that file before VM destruction, then destroys VM. If cleanup fails, revoke dedicated key. This is deliberate transient exception to host-only credential handling; VM is not a security sandbox.
 
 ## Connect Linear
 
@@ -237,7 +256,7 @@ factory observer stop --json
 
 ## Security and evidence
 
-Linear and GitHub credentials stay in the host controller. The target repository and exe.dev VM do not receive them. Runtime evidence remains under the Factory checkout:
+Linear and GitHub credentials stay in the host controller. OpenRouter uses a dedicated capped key as deliberate transient exception: controller passes it into VM-local Pi configuration for agent calls, best-effort removes it before VM destruction, then destroys VM. If cleanup fails, revoke dedicated key. VM is not a security sandbox. Runtime evidence remains under the Factory checkout:
 
 - `.factory/telemetry/<run-id>.jsonl` — safe live event ledger
 - `.factory/controllers/<run-id>/` — controller state, patch, and harvested evidence

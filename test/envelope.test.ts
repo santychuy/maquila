@@ -210,6 +210,7 @@ test("submit_envelope tool captures the value and terminates the run", async () 
 const plannerAgent: AgentDefinition = {
   name: "planner",
   description: "Test planner",
+  model: "bogus/not-a-model",
   tools: ["read", "grep", "find", "ls"],
   thinking: "medium",
   access: "read-only",
@@ -225,7 +226,6 @@ test("envelope mode fails before the model without correction and receipt advert
     const result = await runAgent({
       agent: plannerAgent,
       cwd: root,
-      model: "bogus/not-a-model",
       timeoutSeconds: 60,
       prompt: "Plan this issue.\n\nissue text",
       artifacts,

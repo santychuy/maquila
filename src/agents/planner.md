@@ -1,6 +1,7 @@
 ---
 name: planner
 description: Produces an evidence-backed implementation plan without changing repository
+model: openrouter/openai/gpt-5.6-terra
 tools:
   - read
   - grep
