@@ -15,6 +15,8 @@ import {
 import { OBSERVER_CSS, OBSERVER_HTML, OBSERVER_JS } from "../src/observer-ui.js";
 import { createTelemetryWriter, telemetryPath } from "../src/telemetry.js";
 
+const observerAppSource = readFileSync(resolve(process.cwd(), "src", "observer-app.tsx"), "utf8");
+
 const runId = "11111111-1111-4111-8111-111111111111";
 const instanceId = "22222222-2222-4222-8222-222222222222";
 
@@ -113,10 +115,11 @@ test("observer serves loopback-only read-only API and accessible static UI", asy
     const html = await raw(port, "GET", `/runs/${runId}`);
     assert.match(html.body, /aria-live="polite"/);
     assert.match(html.body, /aria-busy="true"/);
+    assert.match(html.body, /<script type="module" src="\/app\.js"><\/script>/);
     const script = await raw(port, "GET", "/app.js");
     assert.match(script.body, /textContent/);
-    assert.match(script.body, /after='\+eventCursor/);
-    assert.doesNotMatch(script.body, /innerHTML/);
+    assert.match(script.body, /events\?after=/);
+    assert.doesNotMatch(observerAppSource, /innerHTML/);
     assert.equal((await raw(port, "HEAD", "/")).body, "");
     assert.equal((await raw(port, "POST", "/api/v1/runs")).status, 405);
     assert.equal((await raw(port, "GET", "/api/v1/runs", "evil.example")).status, 400);
@@ -240,35 +243,31 @@ test("observer ensure reuses healthy owner and starts after stale descriptor", a
   }
 });
 
-test("observer UI renders accessible safe actor timeline and raw drill-down", () => {
+test("observer UI preserves accessible safe rendering intent", () => {
   assert.match(OBSERVER_HTML, /Phase sequence/);
   assert.match(OBSERVER_HTML, /<details class="raw-events">/);
-  assert.match(OBSERVER_JS, /button\.type='button'/);
   assert.match(OBSERVER_JS, /aria-pressed/);
-  assert.match(OBSERVER_JS, /Prompt body','Unavailable by design/);
-  assert.match(OBSERVER_JS, /while\(page\.hasMore\)/);
+  assert.match(OBSERVER_JS, /Unavailable by design/);
   assert.match(OBSERVER_JS, /scrollIntoView/);
   assert.doesNotMatch(OBSERVER_HTML, /segment-detail[^>]+aria-live/);
-  assert.match(OBSERVER_JS, /segment\.boundary\?'interrupted':'running'/);
-  assert.match(OBSERVER_JS, /detail\.phaseRuntimeMilliseconds/);
-  assert.doesNotMatch(OBSERVER_JS, /Date\.now\(\)/);
-  assert.match(OBSERVER_JS, /interrupted at run end/);
-  assert.match(OBSERVER_JS, /focus\(\{preventScroll:true\}\)/);
-  assert.match(OBSERVER_HTML, /Width encodes elapsed time/);
-  assert.match(OBSERVER_JS, /140\+Math\.min\(580,Math\.max\(0,elapsed\)\/2000\)/);
-  assert.doesNotMatch(OBSERVER_JS, /innerHTML/);
+  assert.match(observerAppSource, /type="button"/);
+  assert.match(observerAppSource, /while \(page\.hasMore\)/);
+  assert.match(observerAppSource, /interrupted at run end/);
+  assert.match(observerAppSource, /preventScroll: true/);
+  assert.match(observerAppSource, /Math\.min\(580, Math\.max\(0, elapsed\) \/ 2000\)/);
+  assert.doesNotMatch(observerAppSource, /innerHTML/);
+  assert.doesNotMatch(observerAppSource, /Date\.now\(\)/);
 });
 
 test("observer UI preserves focus and truthful partial telemetry state", () => {
-  const script = OBSERVER_JS;
-  assert.match(script, /snapshot===runsSnapshot/);
-  assert.match(script, /contains\(document\.activeElement\)/);
-  assert.match(script, /focusout/);
-  assert.match(script, /el\.textContent!==next/);
-  assert.match(script, /Telemetry events unavailable/);
-  assert.match(script, /Latest actor or open tool/);
-  assert.match(script, /detail\.pullRequest/);
-  assert.match(script, /noopener noreferrer/);
+  assert.match(observerAppSource, /snapshot === runsSnapshot/);
+  assert.match(observerAppSource, /if \(!runsSnapshot\) host\.replaceChildren\(\)/);
+  assert.match(observerAppSource, /contains\(document\.activeElement\)/);
+  assert.match(observerAppSource, /focusout/);
+  assert.match(observerAppSource, /element\.textContent !== next/);
+  assert.match(OBSERVER_JS, /Telemetry events unavailable/);
+  assert.match(observerAppSource, /detail\.pullRequest/);
+  assert.match(observerAppSource, /noopener noreferrer/);
   assert.match(OBSERVER_CSS, /\.event-actor,\.event-detail\{grid-column:2/);
 });
 

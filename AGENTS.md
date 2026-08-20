@@ -69,7 +69,7 @@ Current execution is not a security sandbox. Read-only tools stop mutation but d
 - `src/run-state.ts` and `src/exe.ts` — atomic PoC state plus tested exe.dev SSH/SCP command boundaries.
 - `src/controller-lock.ts` and `src/controller.ts` — serial controller ownership, restart reconciliation, remote execution, harvest, and cleanup.
 - `src/telemetry.ts`, `src/remote-protocol.ts`, `src/run-launcher.ts`, and `src/run-status.ts` — bounded live event contract, detached accepted start, and safe status replay.
-- `src/observer.ts` and `src/observer-ui.ts` — loopback-only read API, managed server ownership, and accessible polling dashboard.
+- `src/observer.ts`, `src/observer-ui.ts`, and `src/observer-app.tsx` — loopback-only read API, managed server ownership, and Preact polling dashboard bundled by Bun.
 - `src/cli.ts` — `agents list`, setup/doctor, local Pi commands, remote run commands, human dashboard alias, observer machine commands, and exit-code handling.
 - `factory.verify.json` — this repository's argv verification commands.
 - `src/agents/*.md` — role metadata in YAML frontmatter and role system prompt in Markdown body.

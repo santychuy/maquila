@@ -7,20 +7,22 @@
   },
   "type": "module",
   "scripts": {
-    "build": "bun run build:js && bun run build:binary",
+    "build": "bun run build:observer && bun run build:js && bun run build:binary",
     "build:js": "tsc",
     "build:binary": "bun build ./src/cli.ts --compile --outfile ./dist/factory",
     "lint": "oxlint --type-aware --deny-warnings .",
     "lint:fix": "oxlint --type-aware --fix .",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "test": "bun run build:js && node --test dist/test/*.test.js",
-    "check": "bun run lint && bun run format:check && tsc --noEmit && bun run test && bun run build:binary && ./dist/factory --help >/dev/null",
+    "test": "bun run build:observer && bun run build:js && node --test dist/test/*.test.js",
+    "check": "bun run lint && bun run format:check && bun run build:observer && tsc --noEmit && git diff --exit-code -- src/observer-bundle.generated.ts && bun run test && bun run build:binary && ./dist/factory --help >/dev/null",
     "factory": "./dist/factory",
-    "prepare": "husky"
+    "prepare": "husky",
+    "build:observer": "bun scripts/build-observer-ui.ts"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.84.2",
+    "preact": "10.29.8",
     "typebox": "1.3.7"
   },
   "devDependencies": {
