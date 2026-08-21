@@ -553,6 +553,10 @@ test("harvest rejects symbolic links", () => {
 
 class FakeExe implements ControllerExe {
   readonly calls: Array<{ operation: string; value: unknown }> = [];
+  normalFailedDocumenter = false;
+  documenterLifecycleStatus: "completed" | "failed" = "failed";
+  documenterFailure =
+    "documenter blocked: missing approved path docs/native-architecture-assessment.md";
 
   constructor(
     private readonly failPlanner = false,
@@ -726,9 +730,17 @@ class FakeExe implements ControllerExe {
         type: "phase_finished",
         actor: "documenter",
         phase: "documenting",
-        status: "completed",
+        status: this.normalFailedDocumenter ? "failed" : "completed",
         sourceAt,
       });
+      if (this.normalFailedDocumenter) {
+        protocol.result({
+          status: "failed",
+          runDir: `/home/exedev/factory/.factory/runs/${ids[1]}`,
+        });
+        onStdout(Buffer.from(output.join("")));
+        return { stderr: "" };
+      }
       protocol.event({ type: "phase_started", actor: "verifier", phase: "verifying", sourceAt });
       if (!this.missingGate)
         protocol.event({
@@ -836,9 +848,15 @@ class FakeExe implements ControllerExe {
     }
     if (argv[0] === "cat" && argv[1]?.endsWith("/lifecycle.json")) {
       return {
-        stdout: JSON.stringify({
-          documenterRunDir: `/home/exedev/factory/.factory/runs/${ids[2]}`,
-        }),
+        stdout: JSON.stringify(
+          this.normalFailedDocumenter
+            ? {
+                status: this.documenterLifecycleStatus,
+                stage: "documenter",
+                error: this.documenterFailure,
+              }
+            : { documenterRunDir: `/home/exedev/factory/.factory/runs/${ids[2]}` },
+        ),
         stderr: "",
       };
     }
@@ -879,6 +897,26 @@ class FakeExe implements ControllerExe {
     } finally {
       rmSync(source, { recursive: true, force: true });
     }
+  }
+}
+
+class BlockedPlannerExe extends FakeExe {
+  override async exec(destination: string, argv: string[], timeoutMs?: number) {
+    if (argv[0] === "cat" && argv[1]?.endsWith("/envelope.json")) {
+      this.calls.push({ operation: "exec", value: { destination, argv, timeoutMs } });
+      return {
+        stdout: JSON.stringify({
+          summary: "Blocked plan",
+          evidence: ["Issue contains an unresolved product decision"],
+          changes: [],
+          verification: [],
+          risks: [],
+          decisionsNeeded: ["Choose preserved or unified behavior"],
+        }),
+        stderr: "",
+      };
+    }
+    return super.exec(destination, argv, timeoutMs);
   }
 }
 
@@ -1053,6 +1091,11 @@ const snapshot = {
     title: "Assess architecture",
     description: "Document assessment only.",
     url: "https://linear.app/riff/issue/RIFF-39",
+    assignee: {
+      id: "user-1",
+      name: "Santiago",
+      url: "https://linear.app/riff/profiles/santiago",
+    },
     team: { id: "team", name: "Riffmark", key: "RIFF" },
     state: { id: "todo", name: "Todo", type: "unstarted" },
     labels: [],
@@ -1086,6 +1129,10 @@ function controllerOptions(root: string, exe: ControllerExe) {
     factoryRoot: testFactoryRoot(),
     exe,
     intake: async () => snapshot,
+    createDecisionComment: async () => ({
+      commentId: "decision-comment-1",
+      commentUrl: "https://linear.app/riff/comment/decision-comment-1",
+    }),
     publish,
     sleep: async () => {},
   };
@@ -1098,6 +1145,55 @@ function contains(root: string, secret: string): boolean {
     return statSync(path).size < 5_000_000 && readFileSync(path).includes(Buffer.from(secret));
   });
 }
+
+test("controller requests an assigned engineer decision without failing", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
+  try {
+    const result = await runController(controllerOptions(root, new BlockedPlannerExe()));
+    assert.equal(result.status, "awaiting_decision");
+    assert.equal(result.decisionRequest?.commentId, "decision-comment-1");
+    const state = readControllerState(result.runDir);
+    assert.equal(state.state, "awaiting_decision");
+    const requested = readTelemetry(telemetryPath(root, state.runId)).find(
+      (event) => event.type === "decision_requested",
+    );
+    assert.ok(requested?.type === "decision_requested");
+    assert.equal(requested.payload.count, 1);
+    assert.equal(readTelemetry(telemetryPath(root, state.runId)).at(-1)?.type, "run_finished");
+    assert.equal(state.cleanup, "complete");
+    assert.ok(existsSync(join(result.runDir, "decision-request.json")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("controller binds a Linear decision into fresh intake", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
+  const body = "Keep the sign-in card";
+  const commentId = "reply-1";
+  const createdAt = "2026-01-02T00:00:00.000Z";
+  try {
+    const result = await runController({
+      ...controllerOptions(root, new FakeExe()),
+      runId: "55555555-5555-4555-8555-555555555555",
+      decision: {
+        previousRunId: "44444444-4444-4444-8444-444444444444",
+        requestCommentId: "decision-comment-1",
+        commentId,
+        body,
+        createdAt,
+        sha256: createHash("sha256")
+          .update(JSON.stringify({ commentId, body, createdAt }))
+          .digest("hex"),
+      },
+    });
+    assert.equal(result.status, "completed", result.error);
+    assert.match(readFileSync(join(result.runDir, "issue.md"), "utf8"), /Keep the sign-in card/);
+    assert.notEqual(readControllerState(result.runDir).idempotencyKey, snapshot.idempotencyKey);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("controller reaches ready only after remote evidence and VM cleanup", async () => {
   const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
@@ -1875,6 +1971,77 @@ test("normal failed gate and review streams close phases before failed terminal 
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  }
+});
+
+test("controller surfaces bounded remote lifecycle failure evidence", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
+  const exe = new FakeExe();
+  exe.normalFailedDocumenter = true;
+  try {
+    const result = await runController(controllerOptions(root, exe));
+    assert.equal(result.status, "failed");
+    const detail =
+      /documenter blocked: missing approved path docs\/native-architecture-assessment\.md/;
+    assert.match(result.error ?? "", detail);
+    const receiptRecord = JSON.parse(readFileSync(join(result.runDir, "receipt.json"), "utf8")) as {
+      error?: string;
+    };
+    assert.match(receiptRecord.error ?? "", detail);
+    const events = readTelemetry(telemetryPath(root, readControllerState(result.runDir).runId));
+    const failure = events.find((event) => event.type === "failure");
+    assert.ok(failure?.type === "failure");
+    assert.equal(failure.payload.stage, "documenting");
+    assert.equal(
+      failure.payload.message,
+      "remote documenter phase failed (documenter blocked: missing approved path docs/native-architecture-assessment.md)",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("controller redacts, strips controls, and bounds remote lifecycle evidence", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
+  const exe = new FakeExe();
+  exe.normalFailedDocumenter = true;
+  exe.documenterFailure = `documenter blocked: linear-secret-value\u001B]8;;https://evil.example\u0007link${"x".repeat(1200)}`;
+  try {
+    const result = await runController(controllerOptions(root, exe));
+    assert.equal(result.status, "failed");
+    assert.ok((result.error?.length ?? 0) <= 1000);
+    assert.match(result.error ?? "", /\[REDACTED\]/);
+    assert.doesNotMatch(result.error ?? "", /linear-secret-value/);
+    assert.equal(result.error?.includes("\u001B"), false);
+    assert.equal(result.error?.includes("\u0007"), false);
+    const events = readTelemetry(telemetryPath(root, readControllerState(result.runDir).runId));
+    const failure = events.find((event) => event.type === "failure");
+    assert.ok(failure?.type === "failure");
+    assert.ok(failure.payload.message.length <= 1000);
+    assert.match(failure.payload.message, /\[REDACTED\]/);
+    assert.doesNotMatch(failure.payload.message, /linear-secret-value/);
+    assert.equal(failure.payload.message.includes("\u001B"), false);
+    assert.equal(failure.payload.message.includes("\u0007"), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("controller rejects inconsistent remote lifecycle failure evidence", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
+  const exe = new FakeExe();
+  exe.normalFailedDocumenter = true;
+  exe.documenterLifecycleStatus = "completed";
+  try {
+    const result = await runController(controllerOptions(root, exe));
+    assert.equal(result.status, "failed");
+    assert.equal(result.error, "remote worker lifecycle failed");
+    const events = readTelemetry(telemetryPath(root, readControllerState(result.runDir).runId));
+    const failure = events.find((event) => event.type === "failure");
+    assert.ok(failure?.type === "failure");
+    assert.equal(failure.payload.message, "controller stage failed");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

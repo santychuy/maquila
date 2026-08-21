@@ -126,6 +126,8 @@ function eventDetail(event: TelemetryRecord): string {
       return event.payload.cleanup;
     case "failure":
       return event.payload.message;
+    case "decision_requested":
+      return `${event.payload.count} unresolved · ${event.payload.commentUrl}`;
     case "artifact_available":
       return `${event.payload.name} · ${event.payload.size} bytes`;
     case "publication_completed":
@@ -365,6 +367,15 @@ function SummaryGrid({ detail }: { detail: RunStatusSummary }) {
           <strong>Failure: {detail.failure.code}</strong>
           <br />
           {detail.failure.message}
+        </div>
+      )}
+      {detail.decision && (
+        <div class="error" role="status">
+          <strong>Engineer decision required</strong>
+          <br />
+          <a href={detail.decision.commentUrl} target="_blank" rel="noopener noreferrer">
+            Reply in Linear
+          </a>
         </div>
       )}
     </>

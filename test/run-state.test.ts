@@ -133,6 +133,17 @@ test("duplicate active and completed inputs are rejected; failed and legacy read
     transitionControllerState(first, "failed");
     createControllerState(runDir(root, "run-2"), input("run-2"));
 
+    const decisionRoot = mkdtempSync(join(tmpdir(), "factory-state-decision-"));
+    try {
+      const decisionDir = runDir(decisionRoot, "run-1");
+      createControllerState(decisionDir, input("run-1"));
+      for (const next of ["creating_vm", "bootstrapping", "planning", "awaiting_decision"] as const)
+        transitionControllerState(decisionDir, next);
+      createControllerState(runDir(decisionRoot, "run-2"), input("run-2"));
+    } finally {
+      rmSync(decisionRoot, { recursive: true, force: true });
+    }
+
     const readyRoot = mkdtempSync(join(tmpdir(), "factory-state-ready-"));
     try {
       const readyDir = runDir(readyRoot, "run-1");

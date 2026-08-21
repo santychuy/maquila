@@ -403,5 +403,11 @@ test("telemetry ledger rejects aggregate size overflow before replay and append"
 });
 
 test("telemetry failure text redacts longest overlapping secrets and control characters", () => {
-  assert.equal(sanitizeTelemetryText("bad\nabcdef", ["abc", "abcdef"]), "bad [REDACTED]");
+  assert.equal(
+    sanitizeTelemetryText("bad\nabcdef\u001B]8;;https://evil.example\u0007link\u0085", [
+      "abc",
+      "abcdef",
+    ]),
+    "bad [REDACTED] ]8;;https://evil.example link",
+  );
 });

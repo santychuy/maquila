@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { listAgents } from "../agents/index.js";
 import { runPlan } from "../workflows/plan.js";
 import { runWorkerLifecycle } from "../workflows/worker.js";
-import { runController } from "../controller.js";
+import { runControllerChain } from "../controller-chain.js";
 import { createRemoteProtocolWriter } from "../remote-protocol.js";
 import { loadFactoryConfig } from "../config.js";
 import { resolveControllerCredentials } from "../credentials.js";
@@ -54,6 +54,7 @@ function writeHumanStatus(status: RunStatusSummary): void {
       `Cleanup: ${status.cleanup ?? "-"}`,
       `Last activity: ${status.lastActivity ?? "-"}`,
       status.failure ? `Failure: ${status.failure.code} ${status.failure.message}` : undefined,
+      status.decision ? `Decision: ${status.decision.commentUrl}` : undefined,
       status.pullRequest ? `Pull request: ${status.pullRequest.url}` : undefined,
     ]
       .filter((line): line is string => Boolean(line))
@@ -230,7 +231,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         baseRef: options.baseRef,
         tag: options.tag,
       });
-      const result = await runController({
+      const result = await runControllerChain({
         issue: options.issue,
         owner: target.owner,
         repo: target.repo,
@@ -256,7 +257,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         identityFlag: options.identity,
         config: loadFactoryConfig({ env: launchEnv }),
       });
-      const result = await runController({
+      const result = await runControllerChain({
         ...options,
         linearToken: credentials.linearToken,
         githubToken: credentials.githubToken,

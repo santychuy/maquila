@@ -1,6 +1,6 @@
 # Foundation checkpoint
 
-Verified snapshot updated 2026-08-19. This page describes current code and evidence. See [ARCHITECTURE.md](../ARCHITECTURE.md), [envelopes](envelopes.md), and [local observer](observer.md).
+Verified snapshot updated 2026-08-21. This page describes current code and evidence. See [ARCHITECTURE.md](../ARCHITECTURE.md), [envelopes](envelopes.md), and [local observer](observer.md).
 
 ## Current boundary
 
@@ -21,10 +21,10 @@ All four role schemas run locally and through `factory run` in a fresh exe.dev V
 - `src/run-artifacts.ts` creates `.factory/runs/<run-id>/`, snapshots input, appends JSONL events, and writes JSON artifacts.
 - `src/verify.ts` loads `factory.verify.json`, executes repository checks, and evaluates the exact Git diff gate.
 - `src/workflows/worker.ts` runs sequential disjoint worker/documenter writers, deterministic verification, and a separate reviewer with aggregate lifecycle evidence.
-- `src/integrations/linear.ts`, `src/integrations/github.ts`, and `src/intake.ts` validate and hash immutable external inputs; `src/integrations/github.ts` also publishes an idempotent controller-side branch and ready-for-review pull request without storing credentials.
+- `src/integrations/linear.ts`, `src/integrations/github.ts`, and `src/intake.ts` validate and hash immutable external inputs; Linear intake requires an assignee, can create an assignee-mentioned decision thread, and accepts only current-assignee replies beginning with `Decision:`; `src/integrations/github.ts` publishes an idempotent controller-side branch and ready-for-review pull request without storing credentials.
 - `src/run-state.ts` atomically stores fail-closed controller state with transition validation, idempotency checks, and orphan VM lookup.
 - `src/integrations/exe.ts` provides tested command construction for exe.dev SSH, SCP, and retryable deletion without retaining credentials. Integration boundaries live together under `src/integrations/`.
-- `src/controller-lock.ts` and `src/controller.ts` provide single-host ownership, restart cleanup, remote bootstrap/lifecycle, fail-closed evidence harvest, and unconditional cleanup.
+- `src/controller-lock.ts`, `src/controller.ts`, and `src/controller-chain.ts` provide single-host ownership, restart cleanup, remote bootstrap/lifecycle, fail-closed evidence harvest, unconditional cleanup, bounded decision-thread polling, and fresh linked continuation runs.
 - `src/telemetry.ts` adds a strict append-only host event ledger with gap-free sequencing, safe replay, bounded public fields, and terminal cleanup reconciliation.
 - `src/remote-protocol.ts` plus streaming exe.dev SSH expose deterministic live phase, agent/tool, gate, and review activity without prompts, tool arguments/results, or raw output. Controller code still owns state transitions and acceptance.
 - `src/target.ts`, `src/run-launcher.ts`, and `src/run-status.ts` add target-repository inference, accepted detached controller startup with a preallocated run ID, and read-only telemetry status folding.
@@ -39,7 +39,7 @@ Telemetry/streaming, detached launcher, local observer server/UI, factory-owned 
 
 ## Controller limitations
 
-The lock and recovery model is single-host and serial. A timed-out SSH command may continue remotely until VM destruction succeeds; cleanup cannot be guaranteed while exe.dev control-plane deletion is unavailable. The controller restarts failed runs rather than resuming in-flight agent sessions. Publication fails closed if the target base branch moves after intake or if a deterministic factory branch already contains different content. Success currently requires a non-empty repository diff, so a planning outcome delivered only to Linear or another controller-owned external surface needs a later delivery contract. Agents still have OS-level access inside the VM; use trusted, non-sensitive repositories.
+The lock and recovery model is single-host and serial. A timed-out SSH command may continue remotely until VM destruction succeeds; cleanup cannot be guaranteed while exe.dev control-plane deletion is unavailable. The controller starts a fresh linked run after an assigned engineer decision rather than resuming an in-flight agent session. Its local poller requires the detached controller process to remain alive; no hosted webhook or reboot recovery exists yet. Publication fails closed if the target base branch moves after intake or if a deterministic factory branch already contains different content. Successful publication still requires a non-empty repository diff; only unresolved engineer decisions currently have a Linear delivery contract. Agents still have OS-level access inside the VM; use trusted, non-sensitive repositories.
 
 ## CLI architecture decision
 
@@ -69,14 +69,14 @@ An empty `trustedDependencies` list keeps dependency lifecycle scripts blocked u
 
 ## Tests
 
-The verified DX checkpoint passes 185 tests (`bun run check`). This count records this checkpoint; it is not an evergreen promise.
+The verified DX checkpoint passes 196 tests (`bun run check`). This count records this checkpoint; it is not an evergreen promise.
 
 `bun run test` covers role boundaries, envelopes, local worker/reviewer lifecycle failures, controller lock/recovery and fake remote lifecycle paths, tar and patch trust boundaries, artifact safety, verification and Git gates, Linear/GitHub input validation and publication, credential redaction, deterministic intake and publication identities, detached startup, telemetry replay, observer ownership, read-only HTTP boundaries, UI routes, and skill wiring.
 
 ## Failure and security limits
 
-Agent timeout is cooperative: the runner calls `session.abort()` and records `deadline_reached`. The controller then destroys its VM, which is the hard cancellation boundary when exe.dev deletion is available. Read-only tools do not prevent reads outside the repository, and source is sent to the configured model provider. VM isolation keeps Linear and GitHub write credentials controller-side, but no restrictive in-VM network or filesystem sandbox exists.
+Bounded remote lifecycle errors are redacted and copied into controller receipts and public failure telemetry when available; full transcripts remain in failure evidence. Agent timeout is cooperative: the runner calls `session.abort()` and records `deadline_reached`. The controller then destroys its VM, which is the hard cancellation boundary when exe.dev deletion is available. Read-only tools do not prevent reads outside the repository, and source is sent to the configured model provider. VM isolation keeps Linear and GitHub write credentials controller-side, but no restrictive in-VM network or filesystem sandbox exists.
 
 ## Next
 
-Run one credentialed end-to-end publication smoke test. Then define a planning-output/delivery contract so the planner can choose repository changes versus controller-owned external artifacts. Fix pass and in-flight session resume remain out of scope.
+Run one credentialed end-to-end publication smoke test and one assigned-engineer decision continuation smoke test. Then define the broader planning-output/delivery contract. Fix pass, hosted decision delivery, poller reboot recovery, and in-flight session resume remain out of scope.

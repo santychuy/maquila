@@ -17,7 +17,7 @@ import {
 } from "../src/observer.js";
 import { OBSERVER_CSS, OBSERVER_HTML, OBSERVER_JS } from "../src/observer-ui.js";
 import { formatTokens } from "../src/observer-app.js";
-import { loadAgent } from "../src/agents/index.js";
+import { parseAgentDefinition } from "../src/agents/index.js";
 import { createTelemetryWriter, telemetryPath } from "../src/telemetry.js";
 
 const observerAppSource = readFileSync(resolve(process.cwd(), "src", "observer-app.tsx"), "utf8");
@@ -146,8 +146,11 @@ test("observer serves loopback-only read-only API and accessible static UI", asy
 test("archived prompt retrieval binds run, actor, Factory SHA, and telemetry fingerprint", () => {
   const root = mkdtempSync(resolve(tmpdir(), "factory-observer-prompt-"));
   try {
-    const planner = loadAgent("planner");
     const sha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    const planner = parseAgentDefinition(
+      execFileSync("git", ["show", `${sha}:src/agents/planner.md`], { encoding: "utf8" }),
+      "src/agents/planner.md",
+    );
     mkdirSync(resolve(root, ".factory", "controllers", runId), { recursive: true });
     writeFileSync(
       resolve(root, ".factory", "controllers", runId, "runtime.json"),
@@ -329,6 +332,8 @@ test("observer UI preserves focus and truthful partial telemetry state", () => {
   assert.match(observerAppSource, /element\.textContent !== next/);
   assert.match(OBSERVER_JS, /Telemetry events unavailable/);
   assert.match(observerAppSource, /detail\.pullRequest/);
+  assert.match(observerAppSource, /Engineer decision required/);
+  assert.match(observerAppSource, /Reply in Linear/);
   assert.match(observerAppSource, /noopener noreferrer/);
   assert.match(OBSERVER_CSS, /\.event-actor,\.event-detail\{grid-column:2/);
   assert.deepEqual([999, 1_000, 12_400, 1_000_000].map(formatTokens), ["999", "1K", "12.4K", "1M"]);

@@ -56,7 +56,9 @@ Remote controller composition, local observation, GitHub publication, and OpenRo
 
 `factory run start` returns accepted run identity before completion. Persistent on-demand observer binds loopback, replays canonical host JSONL, serves read-only run list/detail/event views, and links the completed pull request. Factory-owned Pi skill routes start/status requests through these commands. Observer and skill hold no workflow authority.
 
-RIFF-39 proved pre-publication remote composition live. Publication and observer paths have deterministic local coverage; a credentialed end-to-end publication smoke proof remains pending. Fix pass, in-flight session resume, and controller-owned external-only delivery remain absent.
+Assigned Linear issues also support one controller-owned decision path. A planner envelope with `decisionsNeeded` ends as `awaiting_decision` after VM cleanup, creates a Linear thread mentioning the assignee, and leaves the detached controller polling only that thread. A current-assignee reply beginning with `Decision:` is snapshotted and starts a fresh linked run. This is local polling, not in-flight session resume or hosted webhook infrastructure.
+
+RIFF-39 proved pre-publication remote composition live. Publication and observer paths have deterministic local coverage; a credentialed end-to-end publication smoke proof remains pending. Fix pass, in-flight session resume, and general controller-owned external-only delivery remain absent.
 
 ## Non-goals for v1
 

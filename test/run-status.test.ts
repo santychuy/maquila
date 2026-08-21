@@ -95,6 +95,40 @@ test("status folds safe live activity and terminal evidence", () => {
   }
 });
 
+test("status exposes an awaiting Linear decision", () => {
+  const root = temporary();
+  try {
+    const telemetry = createTelemetryWriter(root, runId);
+    telemetry.append({ type: "run_created", actor: "controller", payload: { status: "created" } });
+    telemetry.append({
+      type: "decision_requested",
+      actor: "controller",
+      payload: {
+        count: 1,
+        commentId: "comment-1",
+        commentUrl: "https://linear.app/example/comment-1",
+        continuationRunId: "22222222-2222-4222-8222-222222222222",
+      },
+    });
+    telemetry.append({
+      type: "cleanup_updated",
+      actor: "controller",
+      payload: { cleanup: "complete" },
+    });
+    telemetry.append({
+      type: "run_finished",
+      actor: "controller",
+      payload: { status: "awaiting_decision", cleanup: "complete" },
+    });
+    const status = foldRunStatus({ root, runId });
+    assert.equal(status.status, "awaiting_decision");
+    assert.equal(status.failure, null);
+    assert.equal(status.decision?.commentId, "comment-1");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("status preserves the primary failure when evidence collection also fails", () => {
   const root = temporary();
   try {

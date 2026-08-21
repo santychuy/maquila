@@ -14,6 +14,7 @@ export const controllerStates = [
   "creating_vm",
   "bootstrapping",
   "planning",
+  "awaiting_decision",
   "implementing",
   "documenting",
   "verifying",
@@ -65,8 +66,14 @@ export type ControllerStateInput = Pick<
   | "baseSha"
 >;
 
-const terminal = new Set<ControllerStateName>(["completed", "failed", "cancelled"]);
+const terminal = new Set<ControllerStateName>([
+  "awaiting_decision",
+  "completed",
+  "failed",
+  "cancelled",
+]);
 const retryableClaim = new Set<ControllerStateName>([
+  "awaiting_decision",
   "failed",
   "cancelled",
   "ready_for_publication",
@@ -75,7 +82,8 @@ const transitions: Record<ControllerStateName, ControllerStateName[]> = {
   intake: ["creating_vm", "failed", "cancelled"],
   creating_vm: ["bootstrapping", "failed", "cancelled"],
   bootstrapping: ["planning", "failed", "cancelled"],
-  planning: ["implementing", "documenting", "failed", "cancelled"],
+  planning: ["awaiting_decision", "implementing", "documenting", "failed", "cancelled"],
+  awaiting_decision: [],
   implementing: ["documenting", "verifying", "failed", "cancelled"],
   documenting: ["verifying", "fixing", "failed", "cancelled"],
   verifying: ["reviewing", "fixing", "failed", "cancelled"],
@@ -165,7 +173,9 @@ function isControllerState(value: unknown): value is ControllerState {
     return false;
   if (value.vm !== undefined && value.cleanup === "not-needed") return false;
   if (
-    (value.state === "completed" || value.state === "ready_for_publication") &&
+    (value.state === "awaiting_decision" ||
+      value.state === "completed" ||
+      value.state === "ready_for_publication") &&
     !["complete", "not-needed"].includes(String(value.cleanup))
   ) {
     return false;
@@ -290,7 +300,8 @@ export function transitionControllerState(
   }
   const state = { ...current, state: next, updatedAt: new Date().toISOString() };
   writeControllerState(runDir, state);
-  if (next === "failed" || next === "cancelled") releaseClaim(resolve(runDir, ".."), state);
+  if (next === "awaiting_decision" || next === "failed" || next === "cancelled")
+    releaseClaim(resolve(runDir, ".."), state);
   return state;
 }
 

@@ -7,6 +7,7 @@ export type RunStatusName =
   | "invalid"
   | "running"
   | "activity_unknown"
+  | "awaiting_decision"
   | "ready_for_publication"
   | "completed"
   | "failed";
@@ -23,6 +24,12 @@ export interface RunStatusSummary {
   runtimeMilliseconds: number | null;
   phaseRuntimeMilliseconds: number | null;
   failure: { code: string; message: string } | null;
+  decision: {
+    count: number;
+    commentId: string;
+    commentUrl: string;
+    continuationRunId: string;
+  } | null;
   pullRequest: { number: number; url: string; branch: string; commitSha: string } | null;
   artifacts: Array<{ name: string; size: number; sha256?: string }>;
 }
@@ -48,6 +55,7 @@ function base(runId: string, status: RunStatusName): RunStatusSummary {
     runtimeMilliseconds: null,
     phaseRuntimeMilliseconds: null,
     failure: null,
+    decision: null,
     pullRequest: null,
     artifacts: [],
   };
@@ -121,6 +129,9 @@ export function foldRunStatus(options: FoldRunStatusOptions): RunStatusSummary {
         break;
       case "failure":
         summary.failure ??= { code: record.payload.stage, message: record.payload.message };
+        break;
+      case "decision_requested":
+        summary.decision = record.payload;
         break;
       case "artifact_available":
         if (summary.artifacts.length < 100) summary.artifacts.push(record.payload);

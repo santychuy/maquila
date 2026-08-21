@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fetchGitHubSnapshot, publishGitHubPullRequest } from "../src/integrations/github.js";
 import { createIntake } from "../src/intake.js";
-import { fetchLinearIssue } from "../src/integrations/linear.js";
+import {
+  createLinearDecisionComment,
+  fetchLinearDecisionReply,
+  fetchLinearIssue,
+} from "../src/integrations/linear.js";
 
 interface FetchReply {
   body?: unknown;
@@ -41,6 +45,11 @@ function linearIssue(state = "Todo") {
         title: "Assess native components",
         description: "Map current architecture.",
         url: "https://linear.app/example/RIFF-39",
+        assignee: {
+          id: "user-1",
+          name: "Santiago",
+          url: "https://linear.app/example/profiles/santiago",
+        },
         team: { id: "team-1", name: "Riffmark", key: "RIFF" },
         state: { id: "state-1", name: state, type: state === "Todo" ? "unstarted" : "backlog" },
         project: null,
@@ -76,6 +85,7 @@ test("Linear key and UUID produce stable Todo snapshots", async () => {
   });
   assert.equal(byKey.snapshotSha256, byUuid.snapshotSha256);
   assert.equal(byKey.identifier, "RIFF-39");
+  assert.equal(byKey.assignee.id, "user-1");
   const requestBody = keyFetch.calls[0]?.init?.body;
   if (typeof requestBody !== "string") assert.fail("expected JSON request body");
   const request = JSON.parse(requestBody) as { variables: { id: string } };
@@ -133,6 +143,88 @@ test("Linear rejects non-Todo, GraphQL errors, and malformed partial data", asyn
       }),
     /description must be non-blank/,
   );
+  const unassigned = linearIssue();
+  unassigned.data.issue.assignee = null as never;
+  await assert.rejects(
+    () =>
+      fetchLinearIssue({
+        fetch: sequence([{ body: unassigned }]).fetch,
+        token: "x",
+        issue: "RIFF-39",
+      }),
+    /must have an assignee/,
+  );
+});
+
+test("Linear decision comments mention assignee and accept latest assigned Decision reply", async () => {
+  const created = sequence([
+    {
+      body: {
+        data: {
+          commentCreate: {
+            success: true,
+            comment: { id: "comment-1", url: "https://linear.app/example/comment-1" },
+          },
+        },
+      },
+    },
+  ]);
+  assert.deepEqual(
+    await createLinearDecisionComment({
+      fetch: created.fetch,
+      token: "secret",
+      issueId: "issue-1",
+      assigneeUrl: "https://linear.app/example/profiles/santiago",
+      runId: "11111111-1111-4111-8111-111111111111",
+      decisions: ["Keep the sign-in card?"],
+    }),
+    { commentId: "comment-1", commentUrl: "https://linear.app/example/comment-1" },
+  );
+  const rawCreateBody = created.calls[0]?.init?.body;
+  if (typeof rawCreateBody !== "string") assert.fail("expected decision comment request body");
+  const createBody = JSON.parse(rawCreateBody) as {
+    variables: { input: { body: string } };
+  };
+  assert.match(createBody.variables.input.body, /profiles\/santiago/);
+  assert.match(createBody.variables.input.body, /Decision:/);
+
+  const replies = sequence([
+    {
+      body: {
+        data: {
+          comment: {
+            id: "comment-1",
+            issue: { assignee: { id: "user-1" } },
+            children: {
+              nodes: [
+                {
+                  id: "reply-ignored",
+                  body: "Decision: redirect",
+                  createdAt: "2026-01-01T00:00:00.000Z",
+                  user: { id: "other-user" },
+                },
+                {
+                  id: "reply-1",
+                  body: "Decision: Keep the sign-in card",
+                  createdAt: "2026-01-02T00:00:00.000Z",
+                  user: { id: "user-1" },
+                },
+              ],
+              pageInfo: { hasNextPage: false },
+            },
+          },
+        },
+      },
+    },
+  ]);
+  const reply = await fetchLinearDecisionReply({
+    fetch: replies.fetch,
+    token: "secret",
+    commentId: "comment-1",
+  });
+  assert.equal(reply?.commentId, "reply-1");
+  assert.equal(reply?.body, "Keep the sign-in card");
+  assert.match(reply?.sha256 ?? "", /^[0-9a-f]{64}$/);
 });
 
 test("Linear transport failures never expose token", async () => {

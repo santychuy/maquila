@@ -10,7 +10,7 @@ Route user intent through checked-in deterministic commands. Controller owns wor
 
 ## Start a run
 
-Require a Linear issue identifier, such as `RIFF-52`. Infer the target from the current working directory. If the issue is missing, ask for it.
+Require an assigned Linear issue identifier, such as `RIFF-52`. Infer the target from the current working directory. If the issue is missing, ask for it.
 
 ```bash
 factory observer ensure --json
@@ -35,12 +35,13 @@ Use run ID returned by start:
 factory run status --run-id "<run-id>" --json
 ```
 
-Report status, phase, current safe tool name, last activity, cleanup, failure, pull-request metadata, and safe artifact metadata exactly as command returns. A later controller failure is run outcome, not skill execution failure. A completed run must include the ready-for-review pull-request URL.
+Report status, phase, current safe tool name, last activity, cleanup, decision request, failure, pull-request metadata, and safe artifact metadata exactly as command returns. `awaiting_decision` means the assigned engineer must reply to the linked Linear thread with `Decision:`; the detached local controller then starts a fresh linked run automatically. A later controller failure is run outcome, not skill execution failure. A completed run must include the ready-for-review pull-request URL.
 
 ## Safe failures
 
 Explain only actionable public errors:
 
+- unassigned Linear issue: assign a responsible engineer before starting the run
 - missing Linear, GitHub, or OpenRouter credentials: run `factory doctor` and configure `LINEAR_API_TOKEN`, `GITHUB_TOKEN`, or `OPENROUTER_API_KEY` (or setup an `op://` reference)
 - GitHub publication `403`: use a fine-grained token for the target repository with Contents and Pull requests write permissions
 - invalid `FACTORY_EXE_IDENTITY`: configure an absolute exe.dev identity path only when OpenSSH defaults are insufficient

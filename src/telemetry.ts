@@ -33,6 +33,7 @@ const PhaseNameSchema = Type.Union([
   Type.Literal("creating_vm"),
   Type.Literal("bootstrapping"),
   Type.Literal("planning"),
+  Type.Literal("awaiting_decision"),
   Type.Literal("implementing"),
   Type.Literal("documenting"),
   Type.Literal("verifying"),
@@ -283,6 +284,18 @@ export const TelemetryRecordSchema = Type.Union([
     ),
   ),
   eventSchema(
+    "decision_requested",
+    Type.Object(
+      {
+        count: Type.Integer({ minimum: 1, maximum: 10 }),
+        commentId: Type.String({ minLength: 1, maxLength: 100 }),
+        commentUrl: Type.String({ pattern: "^https://linear\\.app/", maxLength: 500 }),
+        continuationRunId: Type.String({ pattern: RUN_ID }),
+      },
+      { additionalProperties: false },
+    ),
+  ),
+  eventSchema(
     "failure",
     Type.Object(
       {
@@ -311,6 +324,7 @@ export const TelemetryRecordSchema = Type.Union([
     Type.Object(
       {
         status: Type.Union([
+          Type.Literal("awaiting_decision"),
           Type.Literal("ready_for_publication"),
           Type.Literal("completed"),
           Type.Literal("failed"),
@@ -403,7 +417,9 @@ export function parseTelemetryRecord(value: unknown): TelemetryRecord {
     throw new Error("invalid telemetry token total");
   if (
     record.type === "run_finished" &&
-    (record.payload.status === "ready_for_publication" || record.payload.status === "completed") &&
+    (record.payload.status === "awaiting_decision" ||
+      record.payload.status === "ready_for_publication" ||
+      record.payload.status === "completed") &&
     !["complete", "not-needed"].includes(record.payload.cleanup)
   )
     throw new Error("successful telemetry requires cleanup");
@@ -761,7 +777,7 @@ export function sanitizeTelemetryText(value: string, secrets: string[]): string 
     .reduce((text, secret) => text.replaceAll(secret, "[REDACTED]"), value);
   return (
     redacted
-      .replaceAll(/[\r\n\0]/g, " ")
+      .replaceAll(/\p{Cc}/gu, " ")
       .slice(0, 1000)
       .trim() || "unknown failure"
   );

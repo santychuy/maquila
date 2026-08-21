@@ -176,15 +176,17 @@ Observer: http://127.0.0.1:4600/runs/<run-id>
 
 Open that URL to watch progress.
 
-Factory will:
+Factory requires the Linear issue to be `Todo` and assigned. It will:
 
-1. Read the Linear issue.
+1. Read the Linear issue and assignee.
 2. Create a fresh exe.dev VM.
 3. Plan and implement the change.
 4. Run deterministic verification.
 5. Run an independent review.
 6. Destroy the VM.
 7. Open a ready-for-review GitHub pull request.
+
+If planning needs a human decision, Factory cleans up the VM, comments on the issue mentioning its assignee, and reports `awaiting_decision`. The detached local controller polls that one comment thread every 30 seconds. A reply from the current assignee beginning with `Decision:` starts a fresh linked run with the reply snapshotted into its intake. Keep the local controller process running while waiting; no hosted webhook or in-flight agent-session resume is involved.
 
 The dashboard is read-only. It shows progress, verification, review, cleanup, failures, and pull-request status. It cannot start, cancel, approve, or merge work.
 

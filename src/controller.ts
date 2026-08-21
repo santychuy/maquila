@@ -16,6 +16,11 @@ import { tmpdir } from "node:os";
 import { basename, isAbsolute, resolve } from "node:path";
 import { parseAgentDefinition } from "./agents/index.js";
 import { createIntake } from "./intake.js";
+import {
+  createLinearDecisionComment,
+  LinearIssueValidationError,
+  type LinearDecisionReply,
+} from "./integrations/linear.js";
 import { publishGitHubPullRequest, type GitHubPublication } from "./integrations/github.js";
 import { parseEnvelope } from "./envelope.js";
 import { assertSafeRepoPath } from "./verify.js";
@@ -108,6 +113,24 @@ export interface ControllerOptions {
   publish?: typeof publishGitHubPullRequest;
   onAccepted?: () => void;
   heartbeatMilliseconds?: number;
+  decision?: ControllerDecisionContext;
+  createDecisionComment?: typeof createLinearDecisionComment;
+}
+export interface ControllerDecisionContext extends LinearDecisionReply {
+  previousRunId: string;
+  requestCommentId: string;
+}
+export interface ControllerDecisionRequest {
+  runId: string;
+  commentId: string;
+  commentUrl: string;
+  continuationRunId: string;
+  issue: string;
+  owner: string;
+  repo: string;
+  baseRef: string;
+  tag: string;
+  timeoutSeconds: number;
 }
 export interface ControllerExe {
   createVm(options: {
@@ -131,9 +154,10 @@ export interface ControllerExe {
   copyFrom(destination: string, remotePath: string, localPath: string): Promise<unknown>;
 }
 export interface ControllerResult {
-  status: "completed" | "failed";
+  status: "awaiting_decision" | "completed" | "failed";
   runDir: string;
   pullRequest?: GitHubPublication;
+  decisionRequest?: ControllerDecisionRequest;
   error?: string;
 }
 
@@ -469,7 +493,68 @@ export function archiveFactory(factoryRoot: string): {
   }
 }
 
+class PlannerDecisionRequired extends Error {
+  constructor(readonly request: ControllerDecisionRequest) {
+    super("planner decision required");
+  }
+}
+
+class RemoteLifecycleFailure extends Error {}
+
+const remoteLifecycleStages = new Set([
+  "planner",
+  "baseline",
+  "worker",
+  "documenter",
+  "verification",
+  "review_snapshot",
+  "reviewer",
+]);
+
+function remoteLifecycleFailure(
+  value: unknown,
+  secrets: string[],
+): { stage: string; detail: string } | undefined {
+  if (
+    !isRecord(value) ||
+    (value.status !== "failed" && value.status !== "timed_out") ||
+    typeof value.stage !== "string" ||
+    !remoteLifecycleStages.has(value.stage)
+  )
+    return undefined;
+  const detail =
+    typeof value.error === "string" && value.error.trim()
+      ? value.error
+      : `${value.stage} returned ${value.status === "timed_out" ? "timed_out" : "failed"}`;
+  return { stage: value.stage, detail: sanitizeTelemetryText(detail, secrets) };
+}
+
+function validateDecision(value: ControllerDecisionContext | undefined): void {
+  if (!value) return;
+  if (
+    !UUID.test(value.previousRunId) ||
+    !value.requestCommentId.trim() ||
+    !value.commentId.trim() ||
+    !value.body.trim() ||
+    value.body.length > 4000 ||
+    !Number.isFinite(Date.parse(value.createdAt)) ||
+    !/^[0-9a-f]{64}$/.test(value.sha256) ||
+    createHash("sha256")
+      .update(
+        JSON.stringify({
+          commentId: value.commentId,
+          body: value.body,
+          createdAt: value.createdAt,
+        }),
+      )
+      .digest("hex") !== value.sha256
+  )
+    throw new Error("invalid controller decision context");
+}
+
 function publicFailureDetail(error: unknown): string | undefined {
+  if (error instanceof LinearIssueValidationError || error instanceof RemoteLifecycleFailure)
+    return error.message;
   if (error instanceof ExeCommandError) {
     if (error.timedOut) return `${error.operation} timed out`;
     return error.exitCode === null
@@ -639,6 +724,7 @@ export async function runController(options: ControllerOptions): Promise<Control
   if (!options.githubToken.trim()) throw new Error("GitHub token missing");
   if (!options.openRouterKey.trim()) throw new Error("OpenRouter key missing");
   if (options.identity) requireAbsolute(options.identity);
+  validateDecision(options.decision);
   safeRepo(options.owner, options.repo);
   const root = resolve(options.root ?? process.cwd());
   const factoryRoot = resolve(options.factoryRoot ?? process.cwd());
@@ -679,6 +765,7 @@ export async function runController(options: ControllerOptions): Promise<Control
   let state: ControllerState | undefined;
   let archive: ReturnType<typeof archiveFactory> | undefined;
   let intakeSnapshot: Awaited<ReturnType<typeof createIntake>> | undefined;
+  let decisionRequest: ControllerDecisionRequest | undefined;
   let reviewedPatchSha256: string | undefined;
   let cleanupFailed = false;
   let cleanupOutcome: CleanupState = "not-needed";
@@ -778,22 +865,31 @@ export async function runController(options: ControllerOptions): Promise<Control
         baseRef: options.baseRef,
       },
     );
-    intakeSnapshot = intake;
+    const idempotencyKey = options.decision
+      ? createHash("sha256")
+          .update(`${intake.idempotencyKey}:${options.decision.sha256}`)
+          .digest("hex")
+      : intake.idempotencyKey;
+    intakeSnapshot = { ...intake, idempotencyKey };
     const runDir = resolve(root, ".factory", "controllers", runId);
+    const decisionContext = options.decision
+      ? `\n\n## Human decision\n\nLinear reply ${options.decision.commentId}:\n${options.decision.body}\n`
+      : "";
     writeFileSync(
       resolve(provisional, "issue.md"),
-      `${intake.issue.title}\n\n${intake.issue.description}\n`,
+      `${intake.issue.title}\n\n${intake.issue.description}${decisionContext}\n`,
       { mode: 0o600 },
     );
     writeJson(resolve(provisional, "intake.json"), {
       issue: intake.issue,
       repository: intake.repository,
-      idempotencyKey: intake.idempotencyKey,
+      idempotencyKey,
+      ...(options.decision ? { decision: options.decision } : {}),
     });
     stage = "state";
     state = createControllerState(runDir, {
       runId: basename(runDir),
-      idempotencyKey: intake.idempotencyKey,
+      idempotencyKey,
       issueUuid: intake.issue.uuid,
       issueSnapshotSha256: intake.issue.snapshotSha256,
       repositoryId: intake.repository.repositoryId,
@@ -1264,14 +1360,60 @@ export async function runController(options: ControllerOptions): Promise<Control
         plannerSequence.closeOpen();
         throw error;
       }
+      stage = "planning_result";
+      publicFailureMessage = "planner result is invalid";
       const plannerRun = outputPath(plannerResult.runDir, "Run evidence");
       if (plannerResult.status !== "completed") throw new Error("remote planner failed");
+      publicFailureMessage = "planner envelope retrieval failed";
       const plannerEnvelope = JSON.parse(
         await remote(exe, vm.sshDest, ["cat", `${plannerRun}/envelope.json`], 30_000),
       ) as unknown;
+      stage = "planning_envelope";
+      publicFailureMessage = "planner envelope validation failed";
       const parsedPlan = parseEnvelope("planner", plannerEnvelope);
-      if (!parsedPlan.ok || parsedPlan.envelope.decisionsNeeded.length)
-        throw new Error("remote planner envelope is blocked");
+      if (!parsedPlan.ok) throw new Error("remote planner envelope is invalid");
+      if (parsedPlan.envelope.decisionsNeeded.length) {
+        if (!intakeSnapshot) throw new Error("planner intake snapshot missing");
+        const continuationRunId = randomUUID();
+        stage = "planning_decision_comment";
+        publicFailureMessage = "Linear decision comment creation failed";
+        const comment = await (options.createDecisionComment ?? createLinearDecisionComment)({
+          token: options.linearToken,
+          issueId: intakeSnapshot.issue.uuid,
+          assigneeUrl: intakeSnapshot.issue.assignee.url,
+          runId: state.runId,
+          decisions: parsedPlan.envelope.decisionsNeeded,
+        });
+        decisionRequest = {
+          runId: state.runId,
+          ...comment,
+          continuationRunId,
+          issue: options.issue,
+          owner: options.owner,
+          repo: options.repo,
+          baseRef: options.baseRef,
+          tag: options.tag,
+          timeoutSeconds: options.timeoutSeconds,
+        };
+        writeJson(resolve(runDir, "decision-request.json"), {
+          version: 1,
+          ...decisionRequest,
+          count: parsedPlan.envelope.decisionsNeeded.length,
+          decisions: parsedPlan.envelope.decisionsNeeded,
+        });
+        emit({
+          type: "decision_requested",
+          actor: "controller",
+          payload: {
+            count: parsedPlan.envelope.decisionsNeeded.length,
+            commentId: comment.commentId,
+            commentUrl: comment.commentUrl,
+            continuationRunId,
+          },
+        });
+        throw new PlannerDecisionRequired(decisionRequest);
+      }
+      publicFailureMessage = "planner change path validation failed";
       const hasWorker = parsedPlan.envelope.changes.some((change) => {
         const path = assertSafeRepoPath(change.path);
         return path !== "docs" && !path.startsWith("docs/");
@@ -1316,10 +1458,26 @@ export async function runController(options: ControllerOptions): Promise<Control
         throw error;
       }
       const workerRun = outputPath(workerResult.runDir, "Run evidence");
-      if (workerResult.status !== "completed") throw new Error("remote worker lifecycle failed");
-      const lifecycle: unknown = JSON.parse(
-        await remote(exe, vm.sshDest, ["cat", `${workerRun}/lifecycle.json`], 30_000),
-      );
+      let lifecycle: unknown;
+      try {
+        lifecycle = JSON.parse(
+          await remote(exe, vm.sshDest, ["cat", `${workerRun}/lifecycle.json`], 30_000),
+        );
+      } catch (error) {
+        if (workerResult.status === "completed") throw error;
+      }
+      if (workerResult.status !== "completed") {
+        const remoteFailure = remoteLifecycleFailure(lifecycle, [
+          options.linearToken,
+          options.githubToken,
+          options.openRouterKey,
+        ]);
+        if (remoteFailure) {
+          publicFailureMessage = `remote ${remoteFailure.stage} phase failed`;
+          throw new RemoteLifecycleFailure(remoteFailure.detail);
+        }
+        throw new Error("remote worker lifecycle failed");
+      }
       const documenterRun = outputPath(
         isRecord(lifecycle) && typeof lifecycle.documenterRunDir === "string"
           ? lifecycle.documenterRunDir
@@ -1395,29 +1553,36 @@ export async function runController(options: ControllerOptions): Promise<Control
       rmSync(configDir, { recursive: true, force: true });
     }
   } catch (error) {
-    try {
-      closeHostPhase("failed");
-    } catch {
-      telemetryBroken = true;
+    if (error instanceof PlannerDecisionRequired) {
+      decisionRequest = error.request;
+    } else {
+      try {
+        closeHostPhase("failed");
+      } catch {
+        telemetryBroken = true;
+      }
+      if (!state && evidenceDir !== provisional && existsSync(evidenceDir)) {
+        renameSync(evidenceDir, provisional);
+        evidenceDir = provisional;
+      }
+      failure = sanitizeTelemetryText(error instanceof Error ? error.message : String(error), [
+        options.linearToken,
+        options.githubToken,
+        options.openRouterKey,
+      ]);
+      const detail = publicFailureDetail(error);
+      bestEffortEmit({
+        type: "failure",
+        actor: "controller",
+        payload: {
+          stage,
+          message: sanitizeTelemetryText(
+            detail ? `${publicFailureMessage} (${detail})` : publicFailureMessage,
+            [options.linearToken, options.githubToken, options.openRouterKey],
+          ),
+        },
+      });
     }
-    if (!state && evidenceDir !== provisional && existsSync(evidenceDir)) {
-      renameSync(evidenceDir, provisional);
-      evidenceDir = provisional;
-    }
-    failure = sanitizeTelemetryText(error instanceof Error ? error.message : String(error), [
-      options.linearToken,
-      options.githubToken,
-      options.openRouterKey,
-    ]);
-    const detail = publicFailureDetail(error);
-    bestEffortEmit({
-      type: "failure",
-      actor: "controller",
-      payload: {
-        stage,
-        message: detail ? `${publicFailureMessage} (${detail})` : publicFailureMessage,
-      },
-    });
   }
   if (failure && state?.vm) {
     const runDir = resolve(root, ".factory", "controllers", state.runId);
@@ -1552,6 +1717,31 @@ export async function runController(options: ControllerOptions): Promise<Control
 
     if (!state || failure) {
       result = failedResult(failure ?? "intake failed");
+    } else if (decisionRequest) {
+      state = transitionControllerState(runDir, "awaiting_decision");
+      bestEffortEmit({
+        type: "phase_started",
+        actor: "controller",
+        phase: { id: "awaiting_decision:1", name: "awaiting_decision", attempt: 1 },
+        payload: {},
+      });
+      stopHeartbeat();
+      writeJson(resolve(runDir, "receipt.json"), {
+        kind: "controller",
+        status: "awaiting_decision",
+        stage: "planning_decision",
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        cleanup: cleanupOutcome,
+        artifacts: readdirArtifacts(runDir),
+        decisionRequest,
+      });
+      bestEffortEmit({
+        type: "run_finished",
+        actor: "controller",
+        payload: { status: "awaiting_decision", cleanup: cleanupOutcome },
+      });
+      result = { status: "awaiting_decision", runDir, decisionRequest };
     } else {
       try {
         if (!intakeSnapshot || !reviewedPatchSha256)
