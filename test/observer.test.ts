@@ -390,7 +390,8 @@ test("observer UI preserves focus and truthful partial telemetry state", () => {
   assert.equal(sumReportedCosts([154_518_890, undefined, 1_359_636_000]), 1_514_154_890);
   assert.equal(sumReportedCosts([undefined]), undefined);
   assert.equal(formatRelativeTime(new Date(Date.now() - 5 * 60_000).toISOString()), "5 min ago");
-  assert.match(formatTimestamp("2026-04-01T13:14:00.000Z"), /2026.+ · /);
+  assert.match(formatTimestamp("2026-04-01T13:14:00.000Z"), /2026/);
+  assert.doesNotMatch(formatTimestamp("2026-04-01T13:14:00.000Z"), / · /);
   assert.equal(formatTimestamp("invalid"), "—");
   assert.match(observerAppSource, /formatDuration\(Math\.max\(0, elapsed\)\)/);
   assert.doesNotMatch(observerAppSource, /label="Elapsed"/);

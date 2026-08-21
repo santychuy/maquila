@@ -70,8 +70,7 @@ export function formatTimestamp(value: string | null | undefined): string {
   if (!value) return "—";
   const date = dayjs(value);
   if (!date.isValid()) return "—";
-  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  return `${date.format("LLL")} · ${zone || `UTC${date.format("Z")}`}`;
+  return date.format("LLL");
 }
 export function formatRelativeTime(value: string): string {
   const date = dayjs(value);
