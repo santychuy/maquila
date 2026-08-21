@@ -32,7 +32,7 @@ Implemented now:
 - Managed loopback observer server/UI with replay/cursor polling, human `factory dashboard` startup alias, and factory-owned `.pi/skills/software-factory` command routing.
 - Global `factory` executable through a Bun-compiled binary and `bun link`, with cwd target inference, `--target` override, human output, and explicit `--json` mode.
 - `factory setup` and `factory doctor` for strict XDG config, optional Linear and OpenRouter `op://` references, optional user-scope Pi skill, credential checks, and remediation.
-- OpenRouter execution for all four roles. Each `src/agents/*.md` definition must declare an authoritative pinned `openrouter/<provider>/<model>` identifier; current defaults are `openrouter/google/gemini-3.7-flash` for documenter/reviewer, `openrouter/z-ai/glm-5.3` for planner, and `openrouter/x-ai/grok-4.6` for worker. No complete model catalog is bundled; doctor and remote bootstrap validate against OpenRouter's live catalog. Agent requests cap maximum output at 16,384 tokens.
+- OpenRouter execution for all four roles. Each `src/agents/*.md` definition must declare an authoritative pinned `openrouter/<provider>/<model>` identifier; current defaults are `openrouter/google/gemini-3.7-flash` for worker/documenter/reviewer and `openrouter/z-ai/glm-5.3` for planner. No complete model catalog is bundled; doctor and remote bootstrap validate against OpenRouter's live catalog. Agent requests cap maximum output at 16,384 tokens.
 - Controller-side credential precedence for GitHub (`GITHUB_TOKEN`, `GH_TOKEN`, `gh auth token`) and Linear (`LINEAR_API_TOKEN`, then `op read`); optional exe.dev identity with OpenSSH config/agent support and no agent forwarding.
 
 Not implemented yet:

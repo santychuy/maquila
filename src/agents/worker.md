@@ -1,7 +1,7 @@
 ---
 name: worker
 description: Implements approved plan as sole writer and runs focused validation
-model: openrouter/x-ai/grok-4.6
+model: openrouter/google/gemini-3.7-flash
 tools:
   - read
   - grep

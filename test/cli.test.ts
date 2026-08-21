@@ -357,7 +357,7 @@ test("specialized agents load with explicit capability boundaries", () => {
       "openrouter/google/gemini-3.7-flash",
       "openrouter/z-ai/glm-5.3",
       "openrouter/google/gemini-3.7-flash",
-      "openrouter/x-ai/grok-4.6",
+      "openrouter/google/gemini-3.7-flash",
     ],
   );
   assert.equal(agents.documenter?.access, "writer");

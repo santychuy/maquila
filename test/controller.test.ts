@@ -1481,7 +1481,7 @@ test("controller reaches ready only after remote evidence and VM cleanup", async
       contexts.map((event) => event.payload.model),
       [
         "openrouter/z-ai/glm-5.3",
-        "openrouter/x-ai/grok-4.6",
+        "openrouter/google/gemini-3.7-flash",
         "openrouter/google/gemini-3.7-flash",
         "openrouter/google/gemini-3.7-flash",
       ],
