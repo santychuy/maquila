@@ -302,10 +302,19 @@ test("observer ensure reuses healthy owner and starts after stale descriptor", a
 test("observer UI preserves accessible safe rendering intent", () => {
   assert.match(OBSERVER_HTML, /Phase sequence/);
   assert.match(OBSERVER_HTML, /<details class="raw-events">/);
-  assert.match(OBSERVER_JS, /aria-pressed/);
+  assert.match(OBSERVER_JS, /aria-expanded/);
+  assert.match(observerAppSource, /aria-controls=\{selected \? ids\.detail : undefined\}/);
+  assert.match(observerAppSource, /aria-current=\{status === "running" \? "step" : undefined\}/);
   assert.match(OBSERVER_JS, /System prompt/);
   assert.match(OBSERVER_JS, /scrollIntoView/);
-  assert.doesNotMatch(OBSERVER_HTML, /segment-detail[^>]+aria-live/);
+  assert.match(
+    OBSERVER_HTML,
+    /<ol id="timeline" class="phase-timeline"[^>]+aria-describedby="timeline-note">/,
+  );
+  assert.match(OBSERVER_HTML, /Loading phase telemetry…/);
+  assert.doesNotMatch(OBSERVER_HTML, /id="segment-detail"/);
+  assert.doesNotMatch(OBSERVER_JS, /Latest actor or open tool/);
+  assert.doesNotMatch(OBSERVER_HTML, /Width encodes elapsed time/);
   assert.match(observerAppSource, /type="button"/);
   assert.match(observerAppSource, /while \(page\.hasMore\)/);
   assert.match(observerAppSource, /interrupted at run end/);
@@ -319,7 +328,12 @@ test("observer UI preserves accessible safe rendering intent", () => {
   assert.doesNotMatch(observerAppSource, /Prompt fingerprint/);
   assert.doesNotMatch(observerAppSource, /Unavailable by design/);
   assert.match(observerAppSource, /preventScroll: true/);
-  assert.match(observerAppSource, /Math\.min\(580, Math\.max\(0, elapsed\) \/ 2000\)/);
+  assert.match(observerAppSource, /\{selected && \(/);
+  assert.match(observerAppSource, /role="region" aria-labelledby=\{ids\.button\}/);
+  assert.match(observerAppSource, /phaseStatus\(segment\)\.replaceAll\("_", " "\)/);
+  assert.match(observerAppSource, /segment\.start\.phase\.attempt > 1/);
+  assert.match(observerAppSource, /No phase telemetry recorded yet\.<\/li>/);
+  assert.doesNotMatch(observerAppSource, /style=\{\{ width:/);
   assert.doesNotMatch(observerAppSource, /innerHTML/);
   assert.doesNotMatch(observerAppSource, /Date\.now\(\)/);
 });
@@ -335,6 +349,13 @@ test("observer UI preserves focus and truthful partial telemetry state", () => {
   assert.match(observerAppSource, /Engineer decision required/);
   assert.match(observerAppSource, /Reply in Linear/);
   assert.match(observerAppSource, /noopener noreferrer/);
+  assert.match(OBSERVER_CSS, /grid-template-columns:repeat\(5,minmax\(0,1fr\)\)/);
+  assert.match(OBSERVER_CSS, /\.phase-timeline:before/);
+  assert.match(OBSERVER_CSS, /\.segment\[aria-expanded=true\]/);
+  assert.match(OBSERVER_CSS, /\.segment\[aria-current=step\]/);
+  assert.match(OBSERVER_CSS, /\.segment\{[^}]+overflow-wrap:anywhere/);
+  assert.match(OBSERVER_CSS, /\.segment-detail dl\{grid-template-columns:1fr/);
+  assert.doesNotMatch(OBSERVER_CSS, /overflow-x:auto/);
   assert.match(OBSERVER_CSS, /\.event-actor,\.event-detail\{grid-column:2/);
   assert.deepEqual([999, 1_000, 12_400, 1_000_000].map(formatTokens), ["999", "1K", "12.4K", "1M"]);
   assert.deepEqual([null, 0, 46_999, 60_000, 106_000].map(formatDuration), [
@@ -346,7 +367,7 @@ test("observer UI preserves focus and truthful partial telemetry state", () => {
   ]);
   assert.equal(sumReportedCosts([154_518_890, undefined, 1_359_636_000]), 1_514_154_890);
   assert.equal(sumReportedCosts([undefined]), undefined);
-  assert.match(observerAppSource, /<small>\{formatDuration\(Math\.max\(0, elapsed\)\)\}<\/small>/);
+  assert.match(observerAppSource, /formatDuration\(Math\.max\(0, elapsed\)\)/);
   assert.doesNotMatch(observerAppSource, /label="Elapsed"/);
   assert.match(observerAppSource, /label="Total reported cost"/);
 });

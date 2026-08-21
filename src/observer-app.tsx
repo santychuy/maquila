@@ -219,43 +219,9 @@ function PromptDisclosure({ segment }: { segment: PhaseSegment }) {
     </details>
   );
 }
-function SegmentButton({
-  segment,
-  selected,
-  select,
-}: {
-  segment: PhaseSegment;
-  selected: boolean;
-  select: () => void;
-}) {
-  const elapsed =
-    (segment.boundary ? Date.parse(segment.boundary.recordedAt) : segment.effectiveEnd) -
-    Date.parse(segment.start.recordedAt);
-  const status = phaseStatus(segment);
-  return (
-    <li>
-      <button
-        type="button"
-        class="segment"
-        data-segment={segment.id}
-        aria-controls="segment-detail"
-        aria-pressed={selected ? "true" : "false"}
-        style={{ width: `${140 + Math.min(580, Math.max(0, elapsed) / 2000)}px` }}
-        onClick={select}
-      >
-        <strong>
-          {segment.start.phase.name.replaceAll("_", " ")} · {status}
-        </strong>
-        <small>{formatDuration(Math.max(0, elapsed))}</small>
-      </button>
-    </li>
-  );
-}
-function SegmentDetailPanel({ segment }: { segment: PhaseSegment | undefined }) {
-  if (!segment) return <p class="empty">No phase telemetry recorded yet.</p>;
-  const end = segment.boundary;
-  const context = segment.context?.payload;
-  const usage = segment.usage?.payload;
+function toolGroups(
+  segment: PhaseSegment,
+): Map<string, { count: number; running: boolean; error: boolean }> {
   const calls = new Map<string, { name: string; running: boolean; error: boolean }>();
   for (const event of segment.tools) {
     const call = calls.get(event.payload.toolCallId) ?? {
@@ -270,15 +236,84 @@ function SegmentDetailPanel({ segment }: { segment: PhaseSegment | undefined }) 
     }
     calls.set(event.payload.toolCallId, call);
   }
-  const toolGroups = new Map<string, { count: number; running: boolean; error: boolean }>();
+  const groups = new Map<string, { count: number; running: boolean; error: boolean }>();
   for (const call of calls.values()) {
-    const group = toolGroups.get(call.name) ?? { count: 0, running: false, error: false };
+    const group = groups.get(call.name) ?? { count: 0, running: false, error: false };
     group.count += 1;
     group.running ||= call.running;
     group.error ||= call.error;
-    toolGroups.set(call.name, group);
+    groups.set(call.name, group);
   }
-  const status = phaseStatus(segment);
+  return groups;
+}
+function segmentIds(segment: PhaseSegment): { button: string; detail: string } {
+  const prefix = `phase-${segment.start.seq}`;
+  return { button: `${prefix}-button`, detail: `${prefix}-detail` };
+}
+function SegmentButton({
+  segment,
+  selected,
+  select,
+}: {
+  segment: PhaseSegment;
+  selected: boolean;
+  select: () => void;
+}) {
+  const elapsed =
+    (segment.boundary ? Date.parse(segment.boundary.recordedAt) : segment.effectiveEnd) -
+    Date.parse(segment.start.recordedAt);
+  const status = phaseStatus(segment).replaceAll("_", " ");
+  const groups = toolGroups(segment);
+  const running = [...groups.entries()].find(([, group]) => group.running);
+  const usage = segment.usage?.payload;
+  const preview = [
+    running
+      ? `${running[0]} running`
+      : groups.size
+        ? `${[...groups.values()].reduce((count, group) => count + group.count, 0)} tool calls`
+        : "",
+    usage ? `${formatTokens(usage.total)} tokens` : "",
+    usage?.reportedCostNanoUsd === undefined ? "" : money(usage.reportedCostNanoUsd),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const ids = segmentIds(segment);
+  return (
+    <li class="phase-item">
+      <span class={`phase-node ${status.replaceAll(" ", "_")}`} aria-hidden="true" />
+      <button
+        type="button"
+        id={ids.button}
+        class="segment"
+        data-segment={segment.id}
+        aria-controls={selected ? ids.detail : undefined}
+        aria-expanded={selected ? "true" : "false"}
+        aria-current={status === "running" ? "step" : undefined}
+        onClick={select}
+      >
+        <strong>
+          {segment.start.phase.name.replaceAll("_", " ")} · {status}
+        </strong>
+        <small>
+          {segment.start.actor} · {formatDuration(Math.max(0, elapsed))}
+          {segment.start.phase.attempt > 1 ? ` · Attempt ${segment.start.phase.attempt}` : ""}
+        </small>
+        {preview && <small>{preview}</small>}
+      </button>
+      {selected && (
+        <section id={ids.detail} class="segment-detail" role="region" aria-labelledby={ids.button}>
+          <SegmentDetailPanel segment={segment} />
+        </section>
+      )}
+    </li>
+  );
+}
+function SegmentDetailPanel({ segment }: { segment: PhaseSegment }) {
+  const end = segment.boundary;
+  const context = segment.context?.payload;
+  const usage = segment.usage?.payload;
+  const groups = toolGroups(segment);
+  const status = phaseStatus(segment).replaceAll("_", " ");
   return (
     <>
       <h3>
@@ -329,11 +364,11 @@ function SegmentDetailPanel({ segment }: { segment: PhaseSegment | undefined }) 
         </dl>
       </details>
       {context && <PromptDisclosure key={segment.id} segment={segment} />}
-      {toolGroups.size > 0 && (
+      {groups.size > 0 && (
         <>
           <h4>Tool activity</h4>
           <ul class="tools">
-            {[...toolGroups.entries()].map(([name, group]) => (
+            {[...groups.entries()].map(([name, group]) => (
               <li key={name}>
                 {name}
                 {group.count > 1 ? ` ×${group.count}` : ""} ·{" "}
@@ -363,10 +398,6 @@ function SummaryGrid({
         <MetricField
           label="Total reported cost"
           value={totalReportedCost === undefined ? "—" : money(totalReportedCost)}
-        />
-        <MetricField
-          label="Latest actor or open tool"
-          value={detail.currentTool || detail.actor || "None"}
         />
         <MetricField label="Cleanup" value={detail.cleanup || "Not started"} />
       </div>
@@ -410,28 +441,44 @@ function EventLog({ events }: { events: TelemetryRecord[] }) {
     <li class="empty">No telemetry events recorded yet.</li>
   );
 }
-function selectSegment(segment: PhaseSegment): void {
-  selectedSegmentId = segment.id;
+function renderTimeline(): void {
   render(
-    <>
-      {currentSegments.map((item) => (
-        <SegmentButton
-          key={item.id}
-          segment={item}
-          selected={item.id === selectedSegmentId}
-          select={() => selectSegment(item)}
-        />
-      ))}
-    </>,
+    currentSegments.length ? (
+      <>
+        {currentSegments.map((segment) => (
+          <SegmentButton
+            key={segment.id}
+            segment={segment}
+            selected={segment.id === selectedSegmentId}
+            select={() => selectSegment(segment)}
+          />
+        ))}
+      </>
+    ) : (
+      <li class="empty">No phase telemetry recorded yet.</li>
+    ),
     $("timeline"),
   );
-  render(<SegmentDetailPanel segment={segment} />, $("segment-detail"));
 }
-function renderDetail(detail: RunStatusSummary, events: TelemetryRecord[]): void {
+function selectSegment(segment: PhaseSegment): void {
+  selectedSegmentId = segment.id;
+  renderTimeline();
+}
+function renderDetail(
+  detail: RunStatusSummary,
+  events: TelemetryRecord[],
+  integrity: EventPage["integrity"],
+): void {
   $("run-list").classList.add("hidden");
   $("run-detail").classList.remove("hidden");
   text($("crumb"), detail.runId.slice(0, 8));
   text($("detail-id"), detail.runId);
+  text(
+    $("timeline-note"),
+    integrity === "invalid"
+      ? "Partial phase sequence. Valid recorded phases shown."
+      : "Select a phase to view details.",
+  );
   render(
     detail.pullRequest ? (
       <a
@@ -477,20 +524,7 @@ function renderDetail(detail: RunStatusSummary, events: TelemetryRecord[]): void
     />,
     $("summary"),
   );
-  render(
-    <>
-      {phases.map((segment) => (
-        <SegmentButton
-          key={segment.id}
-          segment={segment}
-          selected={segment.id === selectedSegmentId}
-          select={() => selectSegment(segment)}
-        />
-      ))}
-    </>,
-    $("timeline"),
-  );
-  render(<SegmentDetailPanel segment={selected} />, $("segment-detail"));
+  renderTimeline();
   render(<EventLog events={events} />, $("events"));
   if (focused)
     $("timeline")
@@ -539,7 +573,7 @@ async function tick(): Promise<void> {
       } catch {
         page = { events: [], cursor: eventCursor, hasMore: false, integrity: "invalid" };
       }
-      renderDetail(detail, eventRows);
+      renderDetail(detail, eventRows, page.integrity);
       if (page.integrity === "invalid") {
         showError("Telemetry events unavailable. Run summary remains available.");
         setConnection("Partial telemetry", false);
