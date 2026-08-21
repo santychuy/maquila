@@ -1,6 +1,14 @@
 import { createHash } from "node:crypto";
-import { fetchLinearIssue, type LinearOptions, type LinearSnapshot } from "./linear.js";
-import { fetchGitHubSnapshot, type GitHubOptions, type GitHubSnapshot } from "./github.js";
+import {
+  fetchLinearIssue,
+  type LinearOptions,
+  type LinearSnapshot,
+} from "./integrations/linear.js";
+import {
+  fetchGitHubSnapshot,
+  type GitHubOptions,
+  type GitHubSnapshot,
+} from "./integrations/github.js";
 export interface Intake {
   issue: LinearSnapshot;
   repository: GitHubSnapshot;

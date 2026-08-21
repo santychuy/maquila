@@ -9,7 +9,7 @@ import {
   type ExeRunner,
   type ExeStreamRunner,
   type ExecResult,
-} from "../src/exe.js";
+} from "../src/integrations/exe.js";
 
 interface Call {
   file: string;

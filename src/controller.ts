@@ -16,10 +16,10 @@ import { tmpdir } from "node:os";
 import { basename, isAbsolute, resolve } from "node:path";
 import { parseAgentDefinition } from "./agents/index.js";
 import { createIntake } from "./intake.js";
-import { publishGitHubPullRequest, type GitHubPublication } from "./github.js";
+import { publishGitHubPullRequest, type GitHubPublication } from "./integrations/github.js";
 import { parseEnvelope } from "./envelope.js";
 import { assertSafeRepoPath } from "./verify.js";
-import { ExeClient } from "./exe.js";
+import { ExeClient } from "./integrations/exe.js";
 import {
   createControllerState,
   recordControllerCleanup,

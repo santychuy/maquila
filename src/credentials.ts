@@ -3,7 +3,7 @@ import { isAbsolute } from "node:path";
 import { promisify } from "node:util";
 import type { FactoryConfig } from "./config.js";
 import { parseTokenReference } from "./config.js";
-import { externalCommandEnvironment } from "./exe.js";
+import { externalCommandEnvironment } from "./integrations/exe.js";
 
 const execFileAsync = promisify(execFile);
 
