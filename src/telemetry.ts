@@ -203,6 +203,7 @@ export const TelemetryRecordSchema = Type.Union([
         cacheRead: SafeInteger,
         cacheWrite: SafeInteger,
         total: SafeInteger,
+        reportedCostNanoUsd: Type.Optional(SafeInteger),
         referenceEstimateNanoUsd: Type.Optional(SafeInteger),
       },
       { additionalProperties: false },

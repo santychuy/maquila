@@ -1,6 +1,12 @@
 # Local observer
 
-Observer is read-only local view over controller-owned telemetry. It does not launch, retry, cancel, approve, publish, merge, clean up, or mutate workflow state.
+Observer is read-only local view over controller-owned telemetry. It helps an engineer understand a run; it does not launch, retry, cancel, approve, publish, merge, clean up, or mutate workflow state.
+
+Three responsibilities stay separate:
+
+- **Engineer:** owns human authority. Engineer starts work and decides whether to merge or reject proposed changes.
+- **Agent roles:** reason, plan, write, and review. Their output is a proposal or report, not an acceptance decision.
+- **Code roles:** controller, verifier, and related deterministic code orchestrate work, enforce gates and limits, and record evidence. Model claims do not replace these checks.
 
 ## Daily workflow
 
@@ -44,11 +50,15 @@ factory observer serve --port 4600
 
 Controller is sole writer of `.factory/telemetry/<run-id>.jsonl`. Each strict event has host-assigned gap-free sequence. Ledger contains phase boundaries, safe agent/tool names, deterministic gate summary, reviewer verdict/count, failure, cleanup, heartbeat, terminal result, and safe artifact metadata. Remote commands are capped at 20,000 frames and 8 MiB; each host ledger is capped at 32 MiB before append or replay. Exceeding a cap fails the run and still attempts cleanup.
 
-It never contains prompt bodies, transcripts, assistant text/reasoning, tool arguments/results, stdout/stderr, credentials, SSH destination, identity path, repository files, artifact content, or billed/actual cost. Agent phases include immutable archived role metadata, exact model identifier, declared tools, access/thinking settings, SHA-256 system-prompt fingerprint, and final reported token totals only. Prompt bodies remain unavailable by design. Token counts are informational VM instrumentation, not acceptance evidence. VM frame validation and harvested evidence checks prove structural consistency, not cryptographic authenticity against process with VM OS access.
+Ledger never contains prompt bodies, transcripts, assistant text/reasoning, tool arguments/results, stdout/stderr, credentials, SSH destination, identity path, repository files, or artifact content. Agent phases include archived role metadata, exact model identifier, declared tools, access/thinking settings, SHA-256 system-prompt fingerprint, final reported token totals, and optional provider-reported cost. Reported cost comes from finalized Pi session statistics and is stored as integer nano-USD. It is informational provenance, not independently checked billing, an estimate produced by Factory, acceptance evidence, or proof of actual charges. VM frame validation and harvested evidence checks prove structural consistency, not cryptographic authenticity against a process with VM OS access.
 
-Each agent phase records its authoritative pinned OpenRouter model identifier, role metadata, and reported token totals. Current role defaults are `openrouter/openai/gpt-5.6-terra`. Runtime does not provide a complete model catalog or billing estimate; model availability, pricing, and limits remain OpenRouter concerns. Old runs are not backfilled. Token counts are informational, not acceptance or billing evidence.
+Each agent phase records its authoritative pinned OpenRouter model identifier. Current role defaults are `openrouter/openai/gpt-5.6-terra`. Model availability, pricing, and limits remain OpenRouter concerns. Old runs are not backfilled, so metadata, token totals, or reported cost can be absent.
 
-Run detail presents horizontally scrollable actor/phase buttons from host `recordedAt` phase boundaries. Open segments grow each poll; completed segments freeze at host finish time. Keyboard or pointer selection shows actor, status, timing, safe role/model metadata, tools, reported tokens, and prompt fingerprint. Raw events remain a collapsed drill-down. Polling preserves focused and selected segments and drains bounded cursor pages without overlapping ticks. Old runs remain usable with unavailable metadata fields.
+Run detail uses progressive disclosure. Phase buttons first show phase, status, and elapsed time. Selecting one shows core timing and usage plus an **Agent** label when archived agent context exists; controller and other deterministic phases instead show **Code**. Role, model, access, and available-tool count appear only for Agent phases. Exact timestamps, token breakdown, execution limits, and declared tools stay under **Phase metadata**. Repeated tool calls are grouped by tool name and count. Active work takes priority, a prior error remains visible, and a call left open when its phase or run closes appears interrupted. Arguments, results, and per-call detail remain excluded. Raw events remain a collapsed drill-down.
+
+Agent system prompts load only when **System prompt** is opened. Observer reads the role definition from the Factory commit recorded for that run, extracts the prompt body, and returns it only when its SHA-256 hash matches the fingerprint recorded in telemetry. A missing or malformed runtime record, missing commit or role context, or hash mismatch makes retrieval fail. Failure leaves the disclosure available for retry. Prompt bodies are served on demand but are not added to the telemetry ledger. This hash match checks consistency between two run records; it does not establish provenance against a process with Factory checkout or VM OS access.
+
+Open segments grow each poll; completed segments freeze at host finish time. Polling preserves focused and selected segments and drains bounded cursor pages without overlapping ticks. Old runs remain usable when optional fields are absent.
 
 Observer replays same ledger used for live polling. Incomplete trailing line waits for completion. Malformed ledger becomes fixed `invalid` status without raw error disclosure. Browser polls every second and does not overlap requests.
 
@@ -61,11 +71,12 @@ GET /api/v1/health
 GET /api/v1/runs?limit=100
 GET /api/v1/runs/:runId
 GET /api/v1/runs/:runId/events?after=0&limit=500
+GET /api/v1/runs/:runId/prompts/:actor
 GET /
 GET /runs/:runId
 ```
 
-Run summaries include `runtimeMilliseconds` and `phaseRuntimeMilliseconds`, calculated only from host `recordedAt` timestamps. Terminal runs retain total runtime and report no current phase duration. Cursor and limits are bounded. There is no ingest, artifact download, archive, or workflow control route.
+Run summaries include `runtimeMilliseconds` and `phaseRuntimeMilliseconds`, calculated only from host `recordedAt` timestamps. Terminal runs retain total runtime and report no current phase duration. Cursor and limits are bounded. Prompt actor is restricted to `planner`, `worker`, `documenter`, or `reviewer`. There is no ingest, artifact download, archive, or workflow control route.
 
 ## Process ownership
 
@@ -87,6 +98,6 @@ GitHub precedence is `GITHUB_TOKEN`, `GH_TOKEN`, then `gh auth token`. Linear pr
 - JSONL replay, not SQLite analytics or retention controls. See [SQLite storage research](sqlite-storage-research.md) for evidence and future migration candidates.
 - Runs created before canonical telemetry can be queried by known UUID as `legacy`, but are omitted from the run list.
 - Polling, not WebSocket or SSE.
-- No remote access/authentication.
+- No remote access or authentication. Loopback reduces network exposure but does not protect prompt bodies from other local processes or users that can reach the observer.
 - No raw artifact downloads.
 - No credentialed exe.dev smoke proof for observer slice yet.

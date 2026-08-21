@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, mkdirSync } from "node:fs";
 import { request } from "node:http";
 import { createConnection } from "node:net";
@@ -6,6 +8,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { test } from "node:test";
 import {
+  archivedSystemPrompt,
   createObserverServer,
   ensureObserver,
   observerDescriptorPath,
@@ -13,6 +16,8 @@ import {
   type ObserverDescriptor,
 } from "../src/observer.js";
 import { OBSERVER_CSS, OBSERVER_HTML, OBSERVER_JS } from "../src/observer-ui.js";
+import { formatTokens } from "../src/observer-app.js";
+import { loadAgent } from "../src/agents/index.js";
 import { createTelemetryWriter, telemetryPath } from "../src/telemetry.js";
 
 const observerAppSource = readFileSync(resolve(process.cwd(), "src", "observer-app.tsx"), "utf8");
@@ -138,6 +143,54 @@ test("observer serves loopback-only read-only API and accessible static UI", asy
   }
 });
 
+test("archived prompt retrieval binds run, actor, Factory SHA, and telemetry fingerprint", () => {
+  const root = mkdtempSync(resolve(tmpdir(), "factory-observer-prompt-"));
+  try {
+    const planner = loadAgent("planner");
+    const sha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    mkdirSync(resolve(root, ".factory", "controllers", runId), { recursive: true });
+    writeFileSync(
+      resolve(root, ".factory", "controllers", runId, "runtime.json"),
+      JSON.stringify({ factorySha: sha, sha256: "0".repeat(64) }),
+    );
+    const writer = createTelemetryWriter(root, runId);
+    writer.append({ type: "run_created", actor: "controller", payload: { status: "created" } });
+    writer.append({
+      type: "phase_started",
+      actor: "planner",
+      phase: { id: "planning:1", name: "planning", attempt: 1 },
+      payload: {},
+    });
+    writer.append({
+      type: "agent_context",
+      actor: "planner",
+      phase: { id: "planning:1", name: "planning", attempt: 1 },
+      payload: {
+        model: planner.model,
+        description: planner.description,
+        tools: planner.tools,
+        thinking: planner.thinking,
+        access: planner.access,
+        systemPromptSha256: createHash("sha256").update(planner.systemPrompt).digest("hex"),
+      },
+    });
+    assert.equal(archivedSystemPrompt(root, runId, "planner"), planner.systemPrompt);
+    assert.throws(() => archivedSystemPrompt(root, runId, "controller"), /invalid prompt request/);
+    const runtimePath = resolve(root, ".factory", "controllers", runId, "runtime.json");
+    for (const runtime of [
+      { factorySha: sha, extra: true },
+      { factorySha: sha },
+      { factorySha: sha, sha256: "not-a-hash" },
+      { factorySha: sha, sha256: "A".repeat(64) },
+    ]) {
+      writeFileSync(runtimePath, JSON.stringify(runtime));
+      assert.throws(() => archivedSystemPrompt(root, runId, "planner"), /invalid runtime data/);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("observer replay tolerates partial tail and reports malformed telemetry safely", async () => {
   const root = mkdtempSync(resolve(tmpdir(), "factory-observer-"));
   try {
@@ -247,12 +300,21 @@ test("observer UI preserves accessible safe rendering intent", () => {
   assert.match(OBSERVER_HTML, /Phase sequence/);
   assert.match(OBSERVER_HTML, /<details class="raw-events">/);
   assert.match(OBSERVER_JS, /aria-pressed/);
-  assert.match(OBSERVER_JS, /Unavailable by design/);
+  assert.match(OBSERVER_JS, /System prompt/);
   assert.match(OBSERVER_JS, /scrollIntoView/);
   assert.doesNotMatch(OBSERVER_HTML, /segment-detail[^>]+aria-live/);
   assert.match(observerAppSource, /type="button"/);
   assert.match(observerAppSource, /while \(page\.hasMore\)/);
   assert.match(observerAppSource, /interrupted at run end/);
+  assert.match(observerAppSource, /reportedCostNanoUsd/);
+  assert.match(observerAppSource, /group\.count > 1/);
+  assert.match(observerAppSource, /key=\{segment\.id\}/);
+  assert.match(observerAppSource, /Loading archived prompt/);
+  assert.match(observerAppSource, /delete output\.dataset\.loading/);
+  assert.match(observerAppSource, /segment\.boundary \? "interrupted" : "running"/);
+  assert.match(observerAppSource, /previous error/);
+  assert.doesNotMatch(observerAppSource, /Prompt fingerprint/);
+  assert.doesNotMatch(observerAppSource, /Unavailable by design/);
   assert.match(observerAppSource, /preventScroll: true/);
   assert.match(observerAppSource, /Math\.min\(580, Math\.max\(0, elapsed\) \/ 2000\)/);
   assert.doesNotMatch(observerAppSource, /innerHTML/);
@@ -269,6 +331,8 @@ test("observer UI preserves focus and truthful partial telemetry state", () => {
   assert.match(observerAppSource, /detail\.pullRequest/);
   assert.match(observerAppSource, /noopener noreferrer/);
   assert.match(OBSERVER_CSS, /\.event-actor,\.event-detail\{grid-column:2/);
+  assert.deepEqual([999, 1_000, 12_400, 1_000_000].map(formatTokens), ["999", "1K", "12.4K", "1M"]);
+  assert.match(observerAppSource, /<small>\{duration\(Math\.max\(0, elapsed\)\)\}<\/small>/);
 });
 
 test("observer readiness failure terminates owned child before rejection", async () => {

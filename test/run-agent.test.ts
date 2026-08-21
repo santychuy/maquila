@@ -9,11 +9,13 @@ import { createRunArtifacts } from "../src/run-artifacts.js";
 
 test("token usage activity copies finalized session token totals", () => {
   const tokens = { input: 2, output: 3, cacheRead: 5, cacheWrite: 7, total: 17 };
-  assert.deepEqual(tokenUsageActivity(tokens, "2026-01-01T00:00:00.000Z"), {
+  assert.deepEqual(tokenUsageActivity(tokens, "2026-01-01T00:00:00.000Z", 0.000_001_234), {
     type: "agent_usage",
     at: "2026-01-01T00:00:00.000Z",
     tokens,
+    reportedCostNanoUsd: 1234,
   });
+  assert.equal(tokenUsageActivity(tokens, undefined, Number.NaN).reportedCostNanoUsd, undefined);
 });
 
 const planner: AgentDefinition = {

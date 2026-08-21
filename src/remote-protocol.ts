@@ -117,6 +117,9 @@ const RemoteEventSchema = Type.Union([
         Type.Literal("reviewing"),
       ]),
       tokens: TokenSchema,
+      reportedCostNanoUsd: Type.Optional(
+        Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+      ),
       sourceAt: Type.String({ minLength: 1 }),
     },
     { additionalProperties: false },
