@@ -18,12 +18,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import {
+  archiveFactory,
   harvest,
   recoverAbandonedAttempts,
   runController,
   type ControllerExe,
 } from "../src/controller.js";
 import { acquireControllerLock } from "../src/controller-lock.js";
+import { ExeCommandError } from "../src/integrations/exe.js";
 import {
   createControllerState,
   readControllerState,
@@ -91,6 +93,35 @@ function testFactoryRoot(): string {
 }
 after(() => {
   if (factoryRoot) rmSync(factoryRoot, { recursive: true, force: true });
+});
+
+test("runtime archive writes large repositories without buffering stdout", () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-large-runtime-"));
+  let archive: ReturnType<typeof archiveFactory> | undefined;
+  try {
+    execFileSync("git", ["init", "--quiet"], { cwd: root });
+    writeFileSync(join(root, "large.bin"), Buffer.alloc(1_100_000));
+    execFileSync("git", ["add", "large.bin"], { cwd: root });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "--quiet",
+        "-m",
+        "large runtime",
+      ],
+      { cwd: root },
+    );
+    archive = archiveFactory(root);
+    assert.ok(statSync(archive.path).size > 1_000_000);
+  } finally {
+    archive?.cleanup();
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("recovery terminalizes an accepted child that died before intake state", () => {
@@ -1410,6 +1441,32 @@ test("controller exposes fixed bootstrap checkpoints without leaking raw errors"
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  }
+});
+
+test("controller exposes safe command diagnostics", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
+  class BootstrapFailingExe extends FakeExe {
+    override async exec(destination: string, argv: string[], timeoutMs?: number) {
+      if (argv[0] === "git" && argv[1] === "clone")
+        throw new ExeCommandError("remote command", false, 128);
+      return super.exec(destination, argv, timeoutMs);
+    }
+  }
+  try {
+    const result = await runController(controllerOptions(root, new BootstrapFailingExe()));
+    assert.equal(result.status, "failed");
+    const state = readControllerState(result.runDir);
+    const failure = readTelemetry(telemetryPath(root, state.runId)).find(
+      (event) => event.type === "failure" && event.payload.stage === "bootstrapping",
+    );
+    assert.ok(failure?.type === "failure");
+    assert.equal(
+      failure.payload.message,
+      "repository clone failed (remote command exited with code 128)",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

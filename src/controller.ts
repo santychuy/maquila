@@ -19,7 +19,7 @@ import { createIntake } from "./intake.js";
 import { publishGitHubPullRequest, type GitHubPublication } from "./integrations/github.js";
 import { parseEnvelope } from "./envelope.js";
 import { assertSafeRepoPath } from "./verify.js";
-import { ExeClient } from "./integrations/exe.js";
+import { ExeClient, ExeCommandError } from "./integrations/exe.js";
 import {
   createControllerState,
   recordControllerCleanup,
@@ -446,16 +446,41 @@ export function harvest(
   }
   writeJson(resolve(runDir, "evidence-manifest.json"), manifest);
 }
-function archiveFactory(factoryRoot: string): { path: string; sha: string; cleanup(): void } {
+export function archiveFactory(factoryRoot: string): {
+  path: string;
+  sha: string;
+  cleanup(): void;
+} {
   const directory = mkdtempSync(resolve(tmpdir(), "factory-runtime-"));
   const path = resolve(directory, "runtime.tar");
-  const sha = execFileSync("git", ["rev-parse", "HEAD"], {
-    cwd: factoryRoot,
-    encoding: "utf8",
-  }).trim();
-  const data = execFileSync("git", ["archive", "--format=tar", "HEAD"], { cwd: factoryRoot });
-  writeFileSync(path, data, { mode: 0o600 });
-  return { path, sha, cleanup: () => rmSync(directory, { recursive: true, force: true }) };
+  try {
+    const sha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: factoryRoot,
+      encoding: "utf8",
+    }).trim();
+    execFileSync("git", ["archive", "--format=tar", `--output=${path}`, "HEAD"], {
+      cwd: factoryRoot,
+    });
+    chmodSync(path, 0o600);
+    return { path, sha, cleanup: () => rmSync(directory, { recursive: true, force: true }) };
+  } catch (error) {
+    rmSync(directory, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function publicFailureDetail(error: unknown): string | undefined {
+  if (error instanceof ExeCommandError) {
+    if (error.timedOut) return `${error.operation} timed out`;
+    return error.exitCode === null
+      ? `${error.operation} failed`
+      : `${error.operation} exited with code ${error.exitCode}`;
+  }
+  if (error && typeof error === "object" && "code" in error) {
+    const code = error.code;
+    if (typeof code === "string" && /^E[A-Z0-9_]+$/.test(code)) return `local error ${code}`;
+  }
+  return undefined;
 }
 
 async function remote(
@@ -1384,10 +1409,14 @@ export async function runController(options: ControllerOptions): Promise<Control
       options.githubToken,
       options.openRouterKey,
     ]);
+    const detail = publicFailureDetail(error);
     bestEffortEmit({
       type: "failure",
       actor: "controller",
-      payload: { stage, message: publicFailureMessage },
+      payload: {
+        stage,
+        message: detail ? `${publicFailureMessage} (${detail})` : publicFailureMessage,
+      },
     });
   }
   if (failure && state?.vm) {
