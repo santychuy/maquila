@@ -16,7 +16,13 @@ import {
   type ObserverDescriptor,
 } from "../src/observer.js";
 import { OBSERVER_CSS, OBSERVER_HTML, OBSERVER_JS } from "../src/observer-ui.js";
-import { formatDuration, formatTokens, sumReportedCosts } from "../src/observer-app.js";
+import {
+  formatDuration,
+  formatRelativeTime,
+  formatTimestamp,
+  formatTokens,
+  sumReportedCosts,
+} from "../src/observer-app.js";
 import { parseAgentDefinition } from "../src/agents/index.js";
 import { createTelemetryWriter, telemetryPath } from "../src/telemetry.js";
 
@@ -306,7 +312,7 @@ test("observer UI preserves accessible safe rendering intent", () => {
   assert.match(observerAppSource, /aria-controls=\{selected \? ids\.detail : undefined\}/);
   assert.match(observerAppSource, /aria-current=\{status === "running" \? "step" : undefined\}/);
   assert.match(OBSERVER_JS, /System prompt/);
-  assert.match(OBSERVER_JS, /scrollIntoView/);
+  assert.doesNotMatch(OBSERVER_JS, /scrollIntoView/);
   assert.match(
     OBSERVER_HTML,
     /<ol id="timeline" class="phase-timeline"[^>]+aria-describedby="timeline-note">/,
@@ -328,6 +334,17 @@ test("observer UI preserves accessible safe rendering intent", () => {
   assert.doesNotMatch(observerAppSource, /Prompt fingerprint/);
   assert.doesNotMatch(observerAppSource, /Unavailable by design/);
   assert.match(observerAppSource, /preventScroll: true/);
+  assert.match(observerAppSource, /segments\(events\)\.toReversed\(\)/);
+  assert.match(
+    observerAppSource,
+    /selectedSegmentId = segment\.id === selectedSegmentId \? null : segment\.id/,
+  );
+  assert.doesNotMatch(observerAppSource, /findLast\(\(segment\) => !segment\.boundary\)/);
+  assert.match(observerAppSource, /formatRelativeTime\(segment\.start\.recordedAt\)/);
+  assert.match(observerAppSource, /formatTimestamp\(segment\.start\.recordedAt\)/);
+  assert.match(observerAppSource, /type PhaseKind = "agent" \| "code" \| "engineer"/);
+  assert.match(observerAppSource, /aria-label=\{`\$\{kind\} phase`\}/);
+  assert.match(observerAppSource, /class="phase-chevron"/);
   assert.match(observerAppSource, /\{selected && \(/);
   assert.match(observerAppSource, /role="region" aria-labelledby=\{ids\.button\}/);
   assert.match(observerAppSource, /phaseStatus\(segment\)\.replaceAll\("_", " "\)/);
@@ -353,6 +370,11 @@ test("observer UI preserves focus and truthful partial telemetry state", () => {
   assert.match(OBSERVER_CSS, /\.phase-timeline:before/);
   assert.match(OBSERVER_CSS, /\.segment\[aria-expanded=true\]/);
   assert.match(OBSERVER_CSS, /\.segment\[aria-current=step\]/);
+  assert.match(OBSERVER_CSS, /\.segment\{[^}]+border:0[^}]+background:transparent/);
+  assert.match(OBSERVER_CSS, /\.segment-detail\{[^}]+background:transparent/);
+  assert.match(OBSERVER_CSS, /\.phase-node\.agent/);
+  assert.match(OBSERVER_CSS, /\.phase-node\.engineer/);
+  assert.match(OBSERVER_CSS, /\.phase-chevron/);
   assert.match(OBSERVER_CSS, /\.segment\{[^}]+overflow-wrap:anywhere/);
   assert.match(OBSERVER_CSS, /\.segment-detail dl\{grid-template-columns:1fr/);
   assert.doesNotMatch(OBSERVER_CSS, /overflow-x:auto/);
@@ -367,6 +389,9 @@ test("observer UI preserves focus and truthful partial telemetry state", () => {
   ]);
   assert.equal(sumReportedCosts([154_518_890, undefined, 1_359_636_000]), 1_514_154_890);
   assert.equal(sumReportedCosts([undefined]), undefined);
+  assert.equal(formatRelativeTime(new Date(Date.now() - 5 * 60_000).toISOString()), "5 min ago");
+  assert.match(formatTimestamp("2026-04-01T13:14:00.000Z"), /2026.+ · /);
+  assert.equal(formatTimestamp("invalid"), "—");
   assert.match(observerAppSource, /formatDuration\(Math\.max\(0, elapsed\)\)/);
   assert.doesNotMatch(observerAppSource, /label="Elapsed"/);
   assert.match(observerAppSource, /label="Total reported cost"/);

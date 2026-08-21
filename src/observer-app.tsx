@@ -1,6 +1,31 @@
+import dayjs from "dayjs";
+import localizedFormat from "dayjs/plugin/localizedFormat.js";
+import relativeTime from "dayjs/plugin/relativeTime.js";
+import updateLocale from "dayjs/plugin/updateLocale.js";
 import { render } from "preact";
 import type { RunStatusSummary } from "./run-status.js";
 import type { TelemetryRecord } from "./telemetry.js";
+
+dayjs.extend(localizedFormat);
+dayjs.extend(relativeTime);
+dayjs.extend(updateLocale);
+dayjs.updateLocale("en", {
+  relativeTime: {
+    future: "in %s",
+    past: "%s ago",
+    s: "a few sec",
+    m: "1 min",
+    mm: "%d min",
+    h: "1 hr",
+    hh: "%d hr",
+    d: "1 day",
+    dd: "%d days",
+    M: "1 mo",
+    MM: "%d mo",
+    y: "1 yr",
+    yy: "%d yr",
+  },
+});
 
 type PhaseStarted = Extract<TelemetryRecord, { type: "phase_started" }> & {
   phase: NonNullable<TelemetryRecord["phase"]>;
@@ -41,8 +66,19 @@ function text(element: HTMLElement, value: string | null | undefined): void {
   const next = value ?? "—";
   if (element.textContent !== next) element.textContent = next;
 }
+export function formatTimestamp(value: string | null | undefined): string {
+  if (!value) return "—";
+  const date = dayjs(value);
+  if (!date.isValid()) return "—";
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return `${date.format("LLL")} · ${zone || `UTC${date.format("Z")}`}`;
+}
+export function formatRelativeTime(value: string): string {
+  const date = dayjs(value);
+  return date.isValid() ? date.fromNow() : "—";
+}
 function time(value: string | null | undefined): string {
-  return value ? new Date(value).toLocaleString() : "No activity";
+  return value ? formatTimestamp(value) : "No activity";
 }
 export function formatDuration(value: number | null | undefined): string {
   if (value == null) return "—";
@@ -250,6 +286,31 @@ function segmentIds(segment: PhaseSegment): { button: string; detail: string } {
   const prefix = `phase-${segment.start.seq}`;
   return { button: `${prefix}-button`, detail: `${prefix}-detail` };
 }
+type PhaseKind = "agent" | "code" | "engineer";
+function phaseKind(segment: PhaseSegment): PhaseKind {
+  if (segment.start.phase.name === "awaiting_decision") return "engineer";
+  if (["planner", "worker", "documenter", "reviewer"].includes(segment.start.actor)) return "agent";
+  return "code";
+}
+function PhaseIcon({ kind }: { kind: PhaseKind }) {
+  if (kind === "agent")
+    return (
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M8 1v2M5 3h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm1 4h.01M10 7h.01M5.5 11h5" />
+      </svg>
+    );
+  if (kind === "engineer")
+    return (
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M5 6a3 3 0 1 1 6 0M3 6h10M4 14v-1a4 4 0 0 1 8 0v1" />
+      </svg>
+    );
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="m5 3-3 5 3 5M11 3l3 5-3 5M9.5 2l-3 12" />
+    </svg>
+  );
+}
 function SegmentButton({
   segment,
   selected,
@@ -278,9 +339,16 @@ function SegmentButton({
     .filter(Boolean)
     .join(" · ");
   const ids = segmentIds(segment);
+  const kind = phaseKind(segment);
   return (
     <li class="phase-item">
-      <span class={`phase-node ${status.replaceAll(" ", "_")}`} aria-hidden="true" />
+      <span
+        class={`phase-node ${kind} ${status.replaceAll(" ", "_")}`}
+        role="img"
+        aria-label={`${kind} phase`}
+      >
+        <PhaseIcon kind={kind} />
+      </span>
       <button
         type="button"
         id={ids.button}
@@ -291,14 +359,25 @@ function SegmentButton({
         aria-current={status === "running" ? "step" : undefined}
         onClick={select}
       >
-        <strong>
-          {segment.start.phase.name.replaceAll("_", " ")} · {status}
-        </strong>
+        <span class="phase-title">
+          <strong>
+            {segment.start.phase.name.replaceAll("_", " ")} · {status}
+          </strong>
+          <time
+            dateTime={segment.start.recordedAt}
+            title={formatTimestamp(segment.start.recordedAt)}
+          >
+            {formatRelativeTime(segment.start.recordedAt)}
+          </time>
+        </span>
         <small>
           {segment.start.actor} · {formatDuration(Math.max(0, elapsed))}
           {segment.start.phase.attempt > 1 ? ` · Attempt ${segment.start.phase.attempt}` : ""}
         </small>
         {preview && <small>{preview}</small>}
+        <svg class="phase-chevron" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="m5 6 3 3 3-3" />
+        </svg>
       </button>
       {selected && (
         <section id={ids.detail} class="segment-detail" role="region" aria-labelledby={ids.button}>
@@ -334,9 +413,19 @@ function SegmentDetailPanel({ segment }: { segment: PhaseSegment }) {
         <summary>Phase metadata</summary>
         <dl>
           <dt>Started</dt>
-          <dd>{segment.start.recordedAt}</dd>
+          <dd>
+            <time dateTime={segment.start.recordedAt}>
+              {formatTimestamp(segment.start.recordedAt)}
+            </time>
+          </dd>
           <dt>Ended</dt>
-          <dd>{end?.recordedAt ?? "In progress"}</dd>
+          <dd>
+            {end ? (
+              <time dateTime={end.recordedAt}>{formatTimestamp(end.recordedAt)}</time>
+            ) : (
+              "In progress"
+            )}
+          </dd>
           {usage && (
             <>
               <dt>Token breakdown</dt>
@@ -461,7 +550,7 @@ function renderTimeline(): void {
   );
 }
 function selectSegment(segment: PhaseSegment): void {
-  selectedSegmentId = segment.id;
+  selectedSegmentId = segment.id === selectedSegmentId ? null : segment.id;
   renderTimeline();
 }
 function renderDetail(
@@ -499,8 +588,7 @@ function renderDetail(
     ) : null,
     $("pull-request-link"),
   );
-  const phases = segments(events);
-  const previous = selectedSegmentId;
+  const phases = segments(events).toReversed();
   const active = document.activeElement;
   const focused = active instanceof HTMLElement ? active.dataset.segment : undefined;
   for (const segment of phases)
@@ -508,12 +596,8 @@ function renderDetail(
       segment.effectiveEnd =
         Date.parse(segment.start.recordedAt) +
         (detail.phase === segment.start.phase.name ? detail.phaseRuntimeMilliseconds || 0 : 0);
-  const selected =
-    phases.find((segment) => segment.id === previous) ||
-    phases.findLast((segment) => !segment.boundary) ||
-    phases.at(-1);
-  const automatic = selected?.id !== previous;
-  selectedSegmentId = selected?.id || null;
+  if (selectedSegmentId && !phases.some((segment) => segment.id === selectedSegmentId))
+    selectedSegmentId = null;
   currentSegments = phases;
   render(
     <SummaryGrid
@@ -530,10 +614,6 @@ function renderDetail(
     $("timeline")
       .querySelector<HTMLElement>(`[data-segment="${CSS.escape(focused)}"]`)
       ?.focus({ preventScroll: true });
-  else if (automatic)
-    $("timeline")
-      .querySelector<HTMLElement>(`[data-segment="${CSS.escape(selectedSegmentId || "")}"]`)
-      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 function updateRuns(runs: RunStatusSummary[]): void {
   const snapshot = JSON.stringify(runs);
