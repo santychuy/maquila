@@ -12,7 +12,7 @@ import { loadFactoryConfig } from "../config.js";
 import { resolveControllerCredentials } from "../credentials.js";
 import { runDoctor } from "../doctor.js";
 import { runSetup } from "../setup.js";
-import { startDetachedRun, writeLaunchHandshake } from "../run-launcher.js";
+import { LAUNCH_INSTANCE_ENV, startDetachedRun, writeLaunchHandshake } from "../run-launcher.js";
 import { foldRunStatus, type RunStatusSummary } from "../run-status.js";
 import { factoryRoot, isMain } from "../runtime.js";
 import { validateResolvedTarget } from "../target.js";
@@ -72,13 +72,13 @@ function takeControllerEnvironment(): {
   const githubToken = process.env.GITHUB_TOKEN;
   const openRouterKey = process.env.OPENROUTER_API_KEY;
   const identity = process.env.FACTORY_EXE_IDENTITY;
-  const instanceId = process.env.FACTORY_RUN_INSTANCE_ID;
+  const instanceId = process.env[LAUNCH_INSTANCE_ENV];
   delete process.env.LINEAR_API_TOKEN;
   delete process.env.GITHUB_TOKEN;
   delete process.env.GH_TOKEN;
   delete process.env.OPENROUTER_API_KEY;
   delete process.env.FACTORY_EXE_IDENTITY;
-  delete process.env.FACTORY_RUN_INSTANCE_ID;
+  delete process.env[LAUNCH_INSTANCE_ENV];
   return { linearToken, githubToken, openRouterKey, identity, instanceId };
 }
 

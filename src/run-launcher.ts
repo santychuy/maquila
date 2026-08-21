@@ -18,6 +18,7 @@ import { cliInvocation } from "./runtime.js";
 import { resolveTargetRepository, type TargetRepository } from "./target.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export const LAUNCH_INSTANCE_ENV = "FACTORY_LAUNCH_INSTANCE_ID";
 
 export interface LaunchHandshake {
   version: 1;
@@ -219,7 +220,7 @@ export async function startDetachedRun(options: StartDetachedRunOptions): Promis
   const stdout = openSync(stdoutPath, "wx", 0o600);
   const stderr = openSync(stderrPath, "wx", 0o600);
   const cliPath = resolve(options.cliPath ?? process.argv[1]!);
-  const childEnv = { ...env, FACTORY_LAUNCH_INSTANCE_ID: instanceId };
+  const childEnv = { ...env, [LAUNCH_INSTANCE_ENV]: instanceId };
   const invocation = cliInvocation(cliPath, [
     "run",
     "execute",
