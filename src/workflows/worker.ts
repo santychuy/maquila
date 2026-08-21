@@ -398,6 +398,7 @@ export async function runWorkerLifecycle(
     const lifecycle = {
       status: reviewer.status,
       stage: "reviewer",
+      ...(reviewer.receipt.error ? { error: reviewer.receipt.error } : {}),
       ...(worker ? { workerRunDir: worker.runDir } : {}),
       documenterRunDir: documenter.runDir,
       reviewerRunDir: reviewer.runDir,

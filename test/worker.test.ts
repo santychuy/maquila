@@ -76,6 +76,7 @@ async function fixture(): Promise<Fixture> {
 interface StubResponse {
   status: AgentRunResult["status"];
   envelope?: Envelope;
+  error?: string;
   mutate?: () => void | Promise<void>;
 }
 
@@ -114,6 +115,7 @@ function agentStub(
         access: runOptions.agent.access,
       },
       artifacts: ["issue.md", "events.jsonl", "receipt.json"],
+      ...(response.error ? { error: response.error } : {}),
     };
     runOptions.artifacts.writeJson("receipt.json", receipt);
     return {
@@ -464,6 +466,35 @@ test("reviewer FAIL fails lifecycle", async () => {
     });
     assert.equal(result.status, "failed");
     assert.equal(result.reviewer?.verdict, "FAIL");
+  } finally {
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("failed reviewer preserves receipt error in lifecycle", async () => {
+  const f = await fixture();
+  try {
+    await mkdir(join(f.repo, "src"), { recursive: true });
+    const result = await runWorkerLifecycle({
+      ...options(f),
+      runAgent: agentStub(
+        [
+          {
+            status: "completed",
+            envelope: workerEnvelope,
+            mutate: () => writeFile(join(f.repo, "src", "x.ts"), "x\n"),
+          },
+          { status: "failed", error: "reviewer envelope missing after correction" },
+        ],
+        [],
+      ),
+      verifyRepository: async () => verification(true),
+    });
+    assert.equal(result.status, "failed");
+    assert.equal(
+      (await json(join(result.runDir, "lifecycle.json"))).error,
+      "reviewer envelope missing after correction",
+    );
   } finally {
     await rm(f.root, { recursive: true, force: true });
   }

@@ -206,7 +206,7 @@ test("envelopeCorrectionPrompt is stable", () => {
       "Your final envelope was missing or invalid. This run requires exactly one valid planner envelope submitted with the submit_envelope tool as your final action.",
       "Validation errors:",
       "- /changes: at least one change is required when decisionsNeeded is empty",
-      "Call submit_envelope exactly once with a corrected envelope. Do not call any other tool.",
+      "Stop analysis. Do not respond with prose. Call submit_envelope now with a corrected envelope; it is your only available tool.",
     ].join("\n"),
   );
 });

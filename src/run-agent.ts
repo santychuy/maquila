@@ -333,6 +333,11 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
             role: envelopeRole,
             errors: parsed.errors,
           });
+          const submitTool = session.agent.state.tools.find(
+            (tool) => tool.name === "submit_envelope",
+          );
+          if (!submitTool) throw new Error("submit_envelope tool unavailable during correction");
+          session.agent.state.tools = [submitTool];
           await session.prompt(envelopeCorrectionPrompt(envelopeRole, parsed.errors));
           if (!timedOut) parsed = captureEnvelope();
         }

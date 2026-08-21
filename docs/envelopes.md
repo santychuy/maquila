@@ -15,7 +15,7 @@ Passing both checks means only that the claim is well-formed. It does not prove 
 
 ## Submit flow
 
-`runAgent()` can run in envelope mode for one role. It adds the `submit_envelope` tool, asks the agent to make that call last, captures its value, and runs structural and semantic validation again. A valid submission terminates the session. If missing or invalid, the runner records `envelope_invalid`, gives one correction prompt in the same session, and accepts or rejects the second result. No third attempt exists.
+`runAgent()` can run in envelope mode for one role. It adds the `submit_envelope` tool, asks the agent to make that call last, captures its value, and runs structural and semantic validation again. A valid submission terminates the session. If missing or invalid, the runner records `envelope_invalid`, leaves only `submit_envelope` available, gives one correction prompt in the same session, and accepts or rejects the second result. No third attempt exists.
 
 On acceptance, the run records `envelope_accepted` and writes `envelope.json`. Planner completion also renders `plan.md`. The receipt records role, validity, correction count, and envelope path. `events.jsonl` records lifecycle and envelope events; `sessions/` keeps the Pi transcript; `issue.md` keeps the input snapshot.
 

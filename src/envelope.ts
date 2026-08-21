@@ -191,7 +191,7 @@ export function envelopeCorrectionPrompt(role: EnvelopeRole, errors: string[]): 
     `Your final envelope was missing or invalid. This run requires exactly one valid ${role} envelope submitted with the submit_envelope tool as your final action.`,
     "Validation errors:",
     ...errors.map((error) => `- ${error}`),
-    "Call submit_envelope exactly once with a corrected envelope. Do not call any other tool.",
+    "Stop analysis. Do not respond with prose. Call submit_envelope now with a corrected envelope; it is your only available tool.",
   ].join("\n");
 }
 
