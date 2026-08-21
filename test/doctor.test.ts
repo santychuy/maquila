@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { test } from "node:test";
 import { runDoctor } from "../src/doctor.js";
 
-const MODELS = new Set(["google/gemini-3.7-flash", "z-ai/glm-5.3", "x-ai/grok-4.6"]);
+const MODELS = new Set(["google/gemini-3.7-flash", "z-ai/glm-5.3"]);
 
 test("doctor reports redacted readiness checks", async () => {
   const root = mkdtempSync(resolve(tmpdir(), "factory-doctor-"));
