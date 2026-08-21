@@ -38,6 +38,15 @@ factory run start --target /absolute/path/to/target-repository --issue RIFF-52 -
 
 `run start` returns accepted run ID before workflow completion. Open `<observer-url>/runs/<run-id>`. Pi users may use `/skill:software-factory` from target repository with only issue ID.
 
+When planner needs an engineer decision, run stays `awaiting_decision`. Answer numbered questions in marked Linear thread. Detached process polls for reply. Inspect or restart polling with same run ID:
+
+```bash
+factory run status --run-id <run-id>
+factory run resume --run-id <run-id>
+```
+
+`run resume` continues persisted wait after controller-process restart. It does not retry arbitrary failed runs or start a new linked run. Observer remains read-only.
+
 Foreground server behaves like development server:
 
 ```bash
@@ -84,7 +93,7 @@ Run summaries include `runtimeMilliseconds` and `phaseRuntimeMilliseconds`, calc
 
 ## Failure semantics
 
-Observer or browser outage never changes controller result. If canonical telemetry cannot be written, controller fails run safely and still attempts VM cleanup. Stale heartbeat displays `activity unknown`, not success or failure. Success appears only after validated evidence and completed cleanup.
+Observer or browser outage never changes controller result. If canonical telemetry cannot be written, controller fails run safely and still attempts VM cleanup. Stale heartbeat displays `activity unknown`, not success or failure. Open decision wait remains `awaiting_decision` even without agent activity. A 24-hour decision expiry displays terminal `cancelled` after cleanup attempt. Success appears only after validated evidence and completed cleanup.
 
 ## Host credentials
 

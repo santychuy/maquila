@@ -35,7 +35,7 @@ Use run ID returned by start:
 factory run status --run-id "<run-id>" --json
 ```
 
-Report status, phase, current safe tool name, last activity, cleanup, decision request, failure, pull-request metadata, and safe artifact metadata exactly as command returns. `awaiting_decision` means the assigned engineer must reply to the linked Linear thread with `Decision:`; the detached local controller then starts a fresh linked run automatically. A later controller failure is run outcome, not skill execution failure. A completed run must include the ready-for-review pull-request URL.
+Report status, phase, current safe tool name, last activity, cleanup, decision request, failure, pull-request metadata, and safe artifact metadata exactly as command returns. `awaiting_decision` means the request-time assignee must reply to the linked Linear thread using its numbered `Decision:` template; the detached controller then resumes the same retained VM and completed planner session when input snapshots still match. The wait expires after 24 hours. A later controller failure is run outcome, not skill execution failure. A completed run must include the ready-for-review pull-request URL.
 
 ## Safe failures
 

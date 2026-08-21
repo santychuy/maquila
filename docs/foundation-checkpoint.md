@@ -21,10 +21,10 @@ All four role schemas run locally and through `factory run` in a fresh exe.dev V
 - `src/run-artifacts.ts` creates `.factory/runs/<run-id>/`, snapshots input, appends JSONL events, and writes JSON artifacts.
 - `src/verify.ts` loads `factory.verify.json`, executes repository checks, and evaluates the exact Git diff gate.
 - `src/workflows/worker.ts` runs sequential disjoint worker/documenter writers, deterministic verification, and a separate reviewer with aggregate lifecycle evidence.
-- `src/integrations/linear.ts`, `src/integrations/github.ts`, and `src/intake.ts` validate and hash immutable external inputs; Linear intake requires an assignee, can create an assignee-mentioned decision thread, and accepts only current-assignee replies beginning with `Decision:`; `src/integrations/github.ts` publishes an idempotent controller-side branch and ready-for-review pull request without storing credentials.
+- `src/integrations/linear.ts`, `src/integrations/github.ts`, and `src/intake.ts` validate and hash immutable external inputs. Linear intake requires an assignee. A decision request pins that assignee, issue, round, question hash, and request time; only a later numbered `Decision:` reply from that pinned assignee is eligible. `src/integrations/github.ts` publishes an idempotent controller-side branch and ready-for-review pull request without storing credentials.
 - `src/run-state.ts` atomically stores fail-closed controller state with transition validation, idempotency checks, and orphan VM lookup.
 - `src/integrations/exe.ts` provides tested command construction for exe.dev SSH, SCP, and retryable deletion without retaining credentials. Integration boundaries live together under `src/integrations/`.
-- `src/controller-lock.ts`, `src/controller.ts`, and `src/controller-chain.ts` provide single-host ownership, restart cleanup, remote bootstrap/lifecycle, fail-closed evidence harvest, unconditional cleanup, bounded decision-thread polling, and fresh linked continuation runs.
+- `src/controller-lock.ts`, `src/controller.ts`, and `src/controller-chain.ts` provide single-host ownership, restart cleanup, remote bootstrap/lifecycle, fail-closed evidence harvest, bounded decision-thread polling, and same-run planner-session continuation on a retained VM.
 - `src/telemetry.ts` adds a strict append-only host event ledger with gap-free sequencing, safe replay, bounded public fields, and terminal cleanup reconciliation.
 - `src/remote-protocol.ts` plus streaming exe.dev SSH expose deterministic live phase, agent/tool, gate, and review activity without prompts, tool arguments/results, or raw output. Controller code still owns state transitions and acceptance.
 - `src/target.ts`, `src/run-launcher.ts`, and `src/run-status.ts` add target-repository inference, accepted detached controller startup with a preallocated run ID, and read-only telemetry status folding.
@@ -37,9 +37,27 @@ Live controller run `fa7b5de1-8125-469f-b723-5db21243d783` completed RIFF-39 aga
 
 Telemetry/streaming, detached launcher, local observer server/UI, factory-owned Pi skill, and GitHub publication are implemented and covered by deterministic local tests. Publication has not yet completed a credentialed end-to-end smoke run, so the RIFF-39 evidence above proves the earlier controller path only.
 
+## Engineer decision flow
+
+A planner can finish a Pi turn with unresolved questions. Factory then pauses that controller run; it does not keep a model request open and does not create a linked run. It retains the VM and copies the completed planner session to a mode-`0600` host checkpoint. The checkpoint is limited to 8 MiB, pinned by SHA-256, and rejected if it contains the OpenRouter key. Factory removes VM-local model credentials before waiting.
+
+Factory posts one marked Linear thread for the round. Retry lookup reuses that marked thread; duplicate matches or an ambiguous mutation result fail closed instead of posting another prompt. Request identity includes the issue, request-time assignee, round, question hash, count, and timestamp. Reply in that thread with every answer numbered:
+
+```text
+Decision:
+1. <answer>
+2. <answer>
+```
+
+Only a reply after the request time from the pinned assignee is accepted. Factory polls every 30 seconds while detached. Check progress with `factory run status --run-id <run-id>`. If the detached process stops, continue the persisted wait with `factory run resume --run-id <run-id>`; an exclusive host lease and state checks prevent two resumptions from accepting the same reply.
+
+Before accepting a reply, Factory checks the 24-hour expiry and snapshots Linear issue and GitHub base again. Changed issue input, repository identity, or base SHA fails the run. It also checks the retained workspace and Factory runtime before putting the OpenRouter config back. The same controller run then opens the completed Pi session checkpoint and starts the next planner turn. Deterministic verification, fresh review, cleanup, and publication remain unchanged.
+
+A missing retained VM gets one replacement attempt. Factory rebuilds the pinned workspace from controller state and restores the bounded checkpoint; another loss fails. Each wait lasts at most 24 hours, and one run allows at most three decision rounds. Expiry records `cancelled`, emits terminal telemetry, and attempts VM cleanup. Observer and `run status` keep an open wait as `awaiting_decision` rather than stale activity.
+
 ## Controller limitations
 
-The lock and recovery model is single-host and serial. A timed-out SSH command may continue remotely until VM destruction succeeds; cleanup cannot be guaranteed while exe.dev control-plane deletion is unavailable. The controller starts a fresh linked run after an assigned engineer decision rather than resuming an in-flight agent session. Its local poller requires the detached controller process to remain alive; no hosted webhook or reboot recovery exists yet. Publication fails closed if the target base branch moves after intake or if a deterministic factory branch already contains different content. Successful publication still requires a non-empty repository diff; only unresolved engineer decisions currently have a Linear delivery contract. Agents still have OS-level access inside the VM; use trusted, non-sensitive repositories.
+The lock and recovery model is single-host and serial. Resume survives a controller-process restart because wait state and planner checkpoint live on the host, but there is no hosted webhook or OS boot service to launch polling after a host reboot. Resume continues only at a completed Pi-turn boundary; an interrupted model request cannot continue. A timed-out SSH command may continue remotely until VM destruction succeeds, and cleanup cannot be guaranteed while exe.dev control-plane deletion is unavailable. Publication fails closed if the target base branch moves after intake or if a deterministic factory branch already contains different content. Successful publication still requires a non-empty repository diff; only unresolved engineer decisions currently have a Linear delivery contract. Agents still have OS-level access inside the VM; use trusted, non-sensitive repositories.
 
 ## CLI architecture decision
 
@@ -69,7 +87,7 @@ An empty `trustedDependencies` list keeps dependency lifecycle scripts blocked u
 
 ## Tests
 
-The verified DX checkpoint passes 196 tests (`bun run check`). This count records this checkpoint; it is not an evergreen promise.
+The decision-resume implementation passed 211 tests with `bun run test`; lint, format, type-check, binary build, help smoke, and `git diff --check` also passed. Full `bun run check` currently stops only because its generated observer-bundle diff gate sees preserved observer changes that predate this feature. Counts record this checkpoint; they are not evergreen promises.
 
 `bun run test` covers role boundaries, envelopes, local worker/reviewer lifecycle failures, controller lock/recovery and fake remote lifecycle paths, tar and patch trust boundaries, artifact safety, verification and Git gates, Linear/GitHub input validation and publication, credential redaction, deterministic intake and publication identities, detached startup, telemetry replay, observer ownership, read-only HTTP boundaries, UI routes, and skill wiring.
 
@@ -79,4 +97,4 @@ Bounded remote lifecycle errors are redacted and copied into controller receipts
 
 ## Next
 
-Run one credentialed end-to-end publication smoke test and one assigned-engineer decision continuation smoke test. Then define the broader planning-output/delivery contract. Fix pass, hosted decision delivery, poller reboot recovery, and in-flight session resume remain out of scope.
+Run one credentialed end-to-end publication smoke test and one assigned-engineer same-session continuation smoke test. Then define the broader planning-output/delivery contract. Fix pass, hosted decision delivery, and poller reboot recovery remain out of scope.

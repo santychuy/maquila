@@ -186,7 +186,7 @@ Factory requires the Linear issue to be `Todo` and assigned. It will:
 6. Destroy the VM.
 7. Open a ready-for-review GitHub pull request.
 
-If planning needs a human decision, Factory cleans up the VM, comments on the issue mentioning its assignee, and reports `awaiting_decision`. The detached local controller polls that one comment thread every 30 seconds. A reply from the current assignee beginning with `Decision:` starts a fresh linked run with the reply snapshotted into its intake. Keep the local controller process running while waiting; no hosted webhook or in-flight agent-session resume is involved.
+If planning needs a human decision, Factory pauses the same run, retains its VM, checkpoints the completed planner session on the controller, removes the VM-local OpenRouter configuration, and comments on the issue mentioning the request-time assignee. Reply in that thread with the numbered `Decision:` template. The detached controller polls every 30 seconds without holding the controller lock, accepts only a pinned-assignee reply for that request, rechecks the Linear and GitHub snapshots, restores the transient model configuration, and resumes the same planner session and VM. Each wait expires after 24 hours, and one run may request at most three decision rounds. Keep the detached controller process running while waiting; hosted webhooks and reboot-time polling recovery are not implemented.
 
 The dashboard is read-only. It shows progress, verification, review, cleanup, failures, and pull-request status. It cannot start, cancel, approve, or merge work.
 

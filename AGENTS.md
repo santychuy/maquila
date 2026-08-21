@@ -26,7 +26,7 @@ Implemented now:
 - Executable local worker/documenter/reviewer lifecycle: `factory pi worker`; worker owns approved non-doc paths, documenter owns approved docs paths, then deterministic verification and fresh review cover aggregate diff. Docs-only runs skip worker.
 - Deterministic verification: `factory.verify.json` argv commands plus exact Git diff gate (`src/verify.ts`).
 - Controller-side assigned Linear `Todo` issue and GitHub base-SHA snapshot primitives with credential-free hashes.
-- Planner decision handoff: blocked plans become `awaiting_decision`, controller comments on Linear mentioning the assignee, and the detached local controller polls for an assignee-authored `Decision:` reply before starting a fresh linked run.
+- Planner decision handoff: blocked plans pause the same run as `awaiting_decision`; the controller retains the VM, checkpoints the completed planner session, removes transient model credentials, and polls a numbered Linear thread for a pinned-assignee `Decision:` reply before resuming the same session. Waits expire after 24 hours and allow at most three rounds.
 - Executable `factory run`: single-host lock, restart cleanup, pinned Node/Bun bootstrap, remote planner/worker/documenter/verification/reviewer, evidence and patch harvest, VM destruction, then controller-side bot branch and ready-for-review pull-request publication.
 - Strict host telemetry with streaming remote phase/activity frames, accepted detached `run start`, and read-only `run status`.
 - Managed loopback observer server/UI with replay/cursor polling, human `factory dashboard` startup alias, and factory-owned `.pi/skills/software-factory` command routing.
@@ -37,7 +37,7 @@ Implemented now:
 
 Not implemented yet:
 
-- Fix pass and in-flight session resume.
+- Fix pass and interrupted model-request resume.
 - General planning outcomes delivered only to controller-owned external surfaces; the implemented Linear handoff covers unresolved engineer decisions only, and successful publication still requires a non-empty repository diff.
 - Guaranteed hard termination when exe.dev cleanup itself is unavailable.
 - Runtime state is still stored under the Factory checkout. Linear OAuth, native keychain storage, and credential profiles are not implemented.
@@ -68,7 +68,7 @@ Current execution is not a security sandbox. Read-only tools stop mutation but d
 - `src/verify.ts` — fail-closed `factory.verify.json` parsing, command execution, exact Git gate.
 - `src/integrations/linear.ts`, `src/integrations/github.ts`, and `src/intake.ts` — immutable external input snapshots, assigned-engineer decision comments/replies, idempotency hash, and controller-side GitHub publication.
 - `src/run-state.ts` and `src/integrations/exe.ts` — atomic PoC state plus tested exe.dev SSH/SCP command boundaries.
-- `src/controller-lock.ts`, `src/controller.ts`, and `src/controller-chain.ts` — serial controller ownership, restart reconciliation, remote execution, local decision polling, fresh continuation runs, harvest, and cleanup.
+- `src/controller-lock.ts`, `src/controller.ts`, and `src/controller-chain.ts` — serial controller ownership, restart reconciliation, remote execution, retained same-run decision polling/resume, harvest, and cleanup.
 - `src/telemetry.ts`, `src/remote-protocol.ts`, `src/run-launcher.ts`, and `src/run-status.ts` — bounded live event contract, detached accepted start, and safe status replay.
 - `src/observer.ts`, `src/observer-ui.ts`, and `src/observer-app.tsx` — loopback-only read API, managed server ownership, and Preact polling dashboard bundled by Bun.
 - `src/cli/index.ts` — `agents list`, setup/doctor, local Pi commands, remote run commands, human dashboard alias, observer machine commands, and exit-code handling.
