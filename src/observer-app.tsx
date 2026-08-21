@@ -44,10 +44,16 @@ function text(element: HTMLElement, value: string | null | undefined): void {
 function time(value: string | null | undefined): string {
   return value ? new Date(value).toLocaleString() : "No activity";
 }
-function duration(value: number | null | undefined): string {
-  return value == null
-    ? "—"
-    : `${Math.floor(value / 60000)}m ${Math.floor((value % 60000) / 1000)}s`;
+export function formatDuration(value: number | null | undefined): string {
+  if (value == null) return "—";
+  const seconds = Math.floor(value / 1000);
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+export function sumReportedCosts(costs: Array<number | undefined>): number | undefined {
+  return costs.reduce<number | undefined>(
+    (total, cost) => (cost === undefined ? total : (total ?? 0) + cost),
+    undefined,
+  );
 }
 export function formatTokens(value: number): string {
   const divisor = value >= 1_000_000 ? 1_000_000 : value >= 1_000 ? 1_000 : 1;
@@ -240,7 +246,7 @@ function SegmentButton({
         <strong>
           {segment.start.phase.name.replaceAll("_", " ")} · {status}
         </strong>
-        <small>{duration(Math.max(0, elapsed))}</small>
+        <small>{formatDuration(Math.max(0, elapsed))}</small>
       </button>
     </li>
   );
@@ -248,9 +254,6 @@ function SegmentButton({
 function SegmentDetailPanel({ segment }: { segment: PhaseSegment | undefined }) {
   if (!segment) return <p class="empty">No phase telemetry recorded yet.</p>;
   const end = segment.boundary;
-  const elapsed =
-    (end ? Date.parse(end.recordedAt) : segment.effectiveEnd) -
-    Date.parse(segment.start.recordedAt);
   const context = segment.context?.payload;
   const usage = segment.usage?.payload;
   const calls = new Map<string, { name: string; running: boolean; error: boolean }>();
@@ -282,7 +285,6 @@ function SegmentDetailPanel({ segment }: { segment: PhaseSegment | undefined }) 
         {segment.start.phase.name.replaceAll("_", " ")} · {status}
       </h3>
       <div class="detail-list">
-        <MetricField label="Elapsed" value={duration(Math.max(0, elapsed))} />
         {usage && <MetricField label="Tokens" value={`${formatTokens(usage.total)} total`} />}
         {usage?.reportedCostNanoUsd !== undefined && (
           <MetricField label="Reported cost" value={money(usage.reportedCostNanoUsd)} />
@@ -345,16 +347,22 @@ function SegmentDetailPanel({ segment }: { segment: PhaseSegment | undefined }) 
     </>
   );
 }
-function SummaryGrid({ detail }: { detail: RunStatusSummary }) {
+function SummaryGrid({
+  detail,
+  totalReportedCost,
+}: {
+  detail: RunStatusSummary;
+  totalReportedCost: number | undefined;
+}) {
   return (
     <>
       <div class="summary-grid">
         <MetricField label="Status" value={detail.status.replaceAll("_", " ")} />
         <MetricField label="Phase" value={detail.phase || "Waiting"} />
-        <MetricField label="Runtime" value={duration(detail.runtimeMilliseconds)} />
+        <MetricField label="Runtime" value={formatDuration(detail.runtimeMilliseconds)} />
         <MetricField
-          label="Current phase duration"
-          value={duration(detail.phaseRuntimeMilliseconds)}
+          label="Total reported cost"
+          value={totalReportedCost === undefined ? "—" : money(totalReportedCost)}
         />
         <MetricField
           label="Latest actor or open tool"
@@ -460,7 +468,15 @@ function renderDetail(detail: RunStatusSummary, events: TelemetryRecord[]): void
   const automatic = selected?.id !== previous;
   selectedSegmentId = selected?.id || null;
   currentSegments = phases;
-  render(<SummaryGrid detail={detail} />, $("summary"));
+  render(
+    <SummaryGrid
+      detail={detail}
+      totalReportedCost={sumReportedCosts(
+        phases.map((segment) => segment.usage?.payload.reportedCostNanoUsd),
+      )}
+    />,
+    $("summary"),
+  );
   render(
     <>
       {phases.map((segment) => (

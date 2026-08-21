@@ -16,7 +16,7 @@ import {
   type ObserverDescriptor,
 } from "../src/observer.js";
 import { OBSERVER_CSS, OBSERVER_HTML, OBSERVER_JS } from "../src/observer-ui.js";
-import { formatTokens } from "../src/observer-app.js";
+import { formatDuration, formatTokens, sumReportedCosts } from "../src/observer-app.js";
 import { parseAgentDefinition } from "../src/agents/index.js";
 import { createTelemetryWriter, telemetryPath } from "../src/telemetry.js";
 
@@ -337,7 +337,18 @@ test("observer UI preserves focus and truthful partial telemetry state", () => {
   assert.match(observerAppSource, /noopener noreferrer/);
   assert.match(OBSERVER_CSS, /\.event-actor,\.event-detail\{grid-column:2/);
   assert.deepEqual([999, 1_000, 12_400, 1_000_000].map(formatTokens), ["999", "1K", "12.4K", "1M"]);
-  assert.match(observerAppSource, /<small>\{duration\(Math\.max\(0, elapsed\)\)\}<\/small>/);
+  assert.deepEqual([null, 0, 46_999, 60_000, 106_000].map(formatDuration), [
+    "—",
+    "0s",
+    "46s",
+    "1m 0s",
+    "1m 46s",
+  ]);
+  assert.equal(sumReportedCosts([154_518_890, undefined, 1_359_636_000]), 1_514_154_890);
+  assert.equal(sumReportedCosts([undefined]), undefined);
+  assert.match(observerAppSource, /<small>\{formatDuration\(Math\.max\(0, elapsed\)\)\}<\/small>/);
+  assert.doesNotMatch(observerAppSource, /label="Elapsed"/);
+  assert.match(observerAppSource, /label="Total reported cost"/);
 });
 
 test("observer readiness failure terminates owned child before rejection", async () => {
