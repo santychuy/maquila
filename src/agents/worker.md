@@ -10,7 +10,7 @@ tools:
   - bash
   - edit
   - write
-thinking: high
+thinking: low
 access: writer
 ---
 

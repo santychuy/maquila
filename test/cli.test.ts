@@ -346,6 +346,7 @@ test("specialized agents load with explicit capability boundaries", () => {
   assert.equal(agents.reviewer?.access, "read-only");
   assert.deepEqual(agents.reviewer?.tools, ["read", "grep", "find", "ls"]);
   assert.equal(agents.worker?.access, "writer");
+  assert.equal(agents.worker?.thinking, "low");
   assert.deepEqual(agents.worker?.tools, ["read", "grep", "find", "ls", "bash", "edit", "write"]);
   assert.equal(parseCli(["agents", "list"]), "list-agents");
 });
