@@ -86,6 +86,7 @@ export type AgentActivity =
         cacheWrite: number;
         total: number;
       };
+      reportedCostNanoUsd?: number;
     }
   | { type: "tool_started"; at: string; toolCallId: string; toolName: string }
   | {
@@ -99,8 +100,17 @@ export type AgentActivity =
 export function tokenUsageActivity(
   tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number },
   at = new Date().toISOString(),
+  cost?: number,
 ): Extract<AgentActivity, { type: "agent_usage" }> {
-  return { type: "agent_usage", at, tokens: { ...tokens } };
+  const nanoUsd = cost === undefined ? undefined : cost * 1_000_000_000;
+  return {
+    type: "agent_usage",
+    at,
+    tokens: { ...tokens },
+    ...(Number.isFinite(nanoUsd) && nanoUsd! >= 0 && Number.isSafeInteger(Math.round(nanoUsd!))
+      ? { reportedCostNanoUsd: Math.round(nanoUsd!) }
+      : {}),
+  };
 }
 
 export interface RunAgentOptions {
@@ -418,7 +428,9 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         status: receipt.status,
       });
       if (receipt.status === "completed")
-        options.onActivity?.(tokenUsageActivity(receipt.stats.tokens));
+        options.onActivity?.(
+          tokenUsageActivity(receipt.stats.tokens, undefined, receipt.stats.cost),
+        );
       session.dispose();
     }
     privatizeSessionFiles(artifacts.sessionsDir);

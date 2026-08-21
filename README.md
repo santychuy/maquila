@@ -263,7 +263,7 @@ Linear and GitHub credentials stay in the host controller. OpenRouter uses a ded
 - `.factory/runs/<run-id>/` — role receipts and transcripts
 - `.factory/observer.json` — private dashboard ownership descriptor
 
-Generated `.factory/` content is ignored by Git. The dashboard binds only to `127.0.0.1`, accepts read requests only, and does not expose credentials, prompts, transcripts, reasoning, tool arguments, command output, or repository files.
+Generated `.factory/` content is ignored by Git. The dashboard binds only to `127.0.0.1` and accepts read requests only. It exposes a prompt body only when requested through the loopback observer, after the pinned Factory commit and telemetry SHA-256 fingerprint match. Transcripts, tool arguments/results, credentials, and repository content remain excluded.
 
 ## Current limits
 

@@ -1,6 +1,6 @@
 # Foundation checkpoint
 
-Verified snapshot updated 2026-08-19. This page describes current code and evidence. See [ARCHITECTURE.md](../ARCHITECTURE.md) and [envelopes](envelopes.md).
+Verified snapshot updated 2026-08-19. This page describes current code and evidence. See [ARCHITECTURE.md](../ARCHITECTURE.md), [envelopes](envelopes.md), and [local observer](observer.md).
 
 ## Current boundary
 
@@ -63,7 +63,7 @@ An empty `trustedDependencies` list keeps dependency lifecycle scripts blocked u
 
 ## Tests
 
-The verified DX checkpoint passes 162 tests (`bun run test`), with zero failures and zero skips. This count records this checkpoint; it is not an evergreen promise.
+The verified DX checkpoint passes 185 tests (`bun run check`). This count records this checkpoint; it is not an evergreen promise.
 
 `bun run test` covers role boundaries, envelopes, local worker/reviewer lifecycle failures, controller lock/recovery and fake remote lifecycle paths, tar and patch trust boundaries, artifact safety, verification and Git gates, Linear/GitHub input validation and publication, credential redaction, deterministic intake and publication identities, detached startup, telemetry replay, observer ownership, read-only HTTP boundaries, UI routes, and skill wiring.
 

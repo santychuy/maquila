@@ -1110,6 +1110,9 @@ export async function runController(options: ControllerOptions): Promise<Control
                 sourceAt,
                 payload: {
                   ...event.tokens,
+                  ...(event.reportedCostNanoUsd === undefined
+                    ? {}
+                    : { reportedCostNanoUsd: event.reportedCostNanoUsd }),
                 },
               });
               break;

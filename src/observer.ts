@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { execFileSync, spawn } from "node:child_process";
 import {
   chmodSync,
   closeSync,
@@ -14,10 +14,11 @@ import {
 } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { resolve } from "node:path";
+import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { externalCommandEnvironment } from "./exe.js";
 import { linuxProcessIdentity } from "./controller-lock.js";
 import { foldRunStatus, type RunStatusSummary } from "./run-status.js";
-import { cliInvocation } from "./runtime.js";
+import { cliInvocation, factoryRoot } from "./runtime.js";
 import { readTelemetry, telemetryPath, type TelemetryRecord } from "./telemetry.js";
 import { OBSERVER_CSS, OBSERVER_HTML, OBSERVER_JS } from "./observer-ui.js";
 
@@ -26,6 +27,8 @@ export const DEFAULT_OBSERVER_PORT = 4600;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MAX_RUNS = 100;
 const MAX_EVENTS = 500;
+const MAX_PROMPT_BYTES = 256 * 1024;
+const MODEL_ACTORS = new Set(["planner", "worker", "documenter", "reviewer"]);
 
 export interface ObserverDescriptor {
   version: 1;
@@ -203,6 +206,39 @@ function events(root: string, runId: string, after: number, limit: number): Tele
   if (records.some((event) => event.runId !== runId)) throw new Error("invalid telemetry");
   return records.filter((event) => event.seq > after).slice(0, limit + 1);
 }
+export function archivedSystemPrompt(root: string, runId: string, actor: string): string {
+  if (!UUID.test(runId) || !MODEL_ACTORS.has(actor)) throw new Error("invalid prompt request");
+  const runtimePath = resolve(root, ".factory", "controllers", runId, "runtime.json");
+  const runtime: unknown = JSON.parse(readFileSync(runtimePath, "utf8"));
+  if (
+    !record(runtime) ||
+    Object.keys(runtime).some((key) => !["factorySha", "sha256"].includes(key)) ||
+    typeof runtime.factorySha !== "string" ||
+    !/^[0-9a-f]{40}$/.test(runtime.factorySha) ||
+    typeof runtime.sha256 !== "string" ||
+    !/^[0-9a-f]{64}$/.test(runtime.sha256)
+  )
+    throw new Error("invalid runtime data");
+  const source = execFileSync("git", ["show", `${runtime.factorySha}:src/agents/${actor}.md`], {
+    cwd: factoryRoot(import.meta.dirname),
+    encoding: "utf8",
+    maxBuffer: MAX_PROMPT_BYTES,
+  });
+  if (Buffer.byteLength(source) > MAX_PROMPT_BYTES) throw new Error("prompt too large");
+  const { body } = parseFrontmatter(source);
+  const prompt = body.trim();
+  const context = readTelemetry(telemetryPath(root, runId)).find(
+    (event) => event.type === "agent_context" && event.actor === actor,
+  );
+  if (
+    !prompt ||
+    context?.type !== "agent_context" ||
+    createHash("sha256").update(prompt).digest("hex") !== context.payload.systemPromptSha256
+  )
+    throw new Error("prompt verification failed");
+  return prompt;
+}
+
 function allowedHost(request: IncomingMessage, port: number): boolean {
   const host = request.headers.host;
   return host === `127.0.0.1:${port}` || host === `localhost:${port}`;
@@ -296,6 +332,20 @@ export async function createObserverServer(
             hasMore: found.length > limit,
             integrity: "ok",
           },
+          head,
+        );
+        return;
+      }
+      const promptMatch = url.pathname.match(
+        /^\/api\/v1\/runs\/([0-9a-f-]{36})\/prompts\/(planner|worker|documenter|reviewer)$/,
+      );
+      if (promptMatch) {
+        const runId = promptMatch[1]!;
+        const actor = promptMatch[2]!;
+        sendJson(
+          response,
+          200,
+          { version: 1, actor, prompt: archivedSystemPrompt(root, runId, actor) },
           head,
         );
         return;
