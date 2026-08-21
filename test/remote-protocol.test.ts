@@ -29,6 +29,36 @@ test("remote protocol parses arbitrary chunks and typed terminal result", () => 
   assert.equal(parser.finish().status, "completed");
 });
 
+test("remote protocol carries only fixed phase failure codes", () => {
+  let output = "";
+  const writer = createRemoteProtocolWriter((line) => (output += line));
+  writer.result({
+    status: "failed",
+    runDir: "/tmp/run",
+    failure: { phase: "planning", code: "model_request_failed" },
+  });
+  const parser = new RemoteProtocolParser(() => {});
+  parser.push(output);
+  assert.deepEqual(parser.finish().failure, {
+    phase: "planning",
+    code: "model_request_failed",
+  });
+  assert.throws(
+    () =>
+      new RemoteProtocolParser(() => {}).push(
+        `${JSON.stringify({
+          protocol: 1,
+          kind: "result",
+          remoteSeq: 1,
+          status: "failed",
+          runDir: "/tmp/run",
+          failure: { phase: "planning", code: "model_request_failed", detail: "raw" },
+        })}\n`,
+      ),
+    /invalid remote protocol frame/,
+  );
+});
+
 test("remote protocol preserves Unicode across every raw byte split", () => {
   let output = "";
   const writer = createRemoteProtocolWriter((line) => (output += line));

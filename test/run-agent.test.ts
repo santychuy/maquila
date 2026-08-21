@@ -4,7 +4,14 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { test } from "node:test";
 import type { AgentDefinition } from "../src/agents/index.js";
-import { runAgent, runArtifactNameErrors, tokenUsageActivity } from "../src/run-agent.js";
+import {
+  agentFailureCode,
+  assistantFailureMessage,
+  cappedAgentOutputTokens,
+  runAgent,
+  runArtifactNameErrors,
+  tokenUsageActivity,
+} from "../src/run-agent.js";
 import { createRunArtifacts } from "../src/run-artifacts.js";
 
 test("token usage activity copies finalized session token totals", () => {
@@ -16,6 +23,53 @@ test("token usage activity copies finalized session token totals", () => {
     reportedCostNanoUsd: 1234,
   });
   assert.equal(tokenUsageActivity(tokens, undefined, Number.NaN).reportedCostNanoUsd, undefined);
+});
+
+test("agent output tokens are capped to a bounded factory budget", () => {
+  assert.equal(cappedAgentOutputTokens(128_000), 16_384);
+  assert.equal(cappedAgentOutputTokens(8_192), 8_192);
+});
+
+test("agent failures expose fixed public codes", () => {
+  assert.equal(
+    agentFailureCode({
+      status: "failed",
+      runDir: "/tmp/run",
+      finalText: "",
+      receipt: {
+        runId: "run",
+        status: "failed",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        timeoutSeconds: 60,
+        agent: {
+          name: "planner",
+          description: "planner",
+          tools: [],
+          thinking: "medium",
+          access: "read-only",
+        },
+        artifacts: [],
+        error: "Model request error: unavailable",
+      },
+    }),
+    "model_request_failed",
+  );
+});
+
+test("assistant provider failures are reported before envelope correction", () => {
+  assert.equal(
+    assistantFailureMessage({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "No endpoints found for model",
+    }),
+    "Model request error: No endpoints found for model",
+  );
+  assert.equal(
+    assistantFailureMessage({ role: "assistant", stopReason: "aborted" }),
+    "Model request aborted",
+  );
+  assert.equal(assistantFailureMessage({ role: "assistant", stopReason: "toolUse" }), undefined);
 });
 
 const planner: AgentDefinition = {

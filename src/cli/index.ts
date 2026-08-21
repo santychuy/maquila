@@ -291,6 +291,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         ...("reviewerRunDir" in result && typeof result.reviewerRunDir === "string"
           ? { reviewerRunDir: result.reviewerRunDir }
           : {}),
+        ...("failure" in result && result.failure ? { failure: result.failure } : {}),
       });
     } else {
       process.stdout.write(`\nRun evidence: ${result.runDir}\n`);

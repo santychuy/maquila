@@ -324,10 +324,10 @@ test("specialized agents load with explicit capability boundaries", () => {
   assert.deepEqual(
     Object.values(agents).map((agent) => agent?.model),
     [
-      "openrouter/openai/gpt-5.6-terra",
-      "openrouter/openai/gpt-5.6-terra",
-      "openrouter/openai/gpt-5.6-terra",
-      "openrouter/openai/gpt-5.6-terra",
+      "openrouter/google/gemini-3.7-flash",
+      "openrouter/z-ai/glm-5.3",
+      "openrouter/google/gemini-3.7-flash",
+      "openrouter/x-ai/grok-4.6",
     ],
   );
   assert.equal(agents.documenter?.access, "writer");

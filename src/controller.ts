@@ -39,6 +39,7 @@ import { acquireControllerLock, linuxProcessIdentity } from "./controller-lock.j
 import {
   RemoteProtocolParser,
   type RemoteEvent,
+  type RemoteFailure,
   type RemoteResultFrame,
 } from "./remote-protocol.js";
 import {
@@ -499,34 +500,17 @@ class PlannerDecisionRequired extends Error {
   }
 }
 
-class RemoteLifecycleFailure extends Error {}
-
-const remoteLifecycleStages = new Set([
-  "planner",
-  "baseline",
-  "worker",
-  "documenter",
-  "verification",
-  "review_snapshot",
-  "reviewer",
-]);
-
-function remoteLifecycleFailure(
-  value: unknown,
-  secrets: string[],
-): { stage: string; detail: string } | undefined {
-  if (
-    !isRecord(value) ||
-    (value.status !== "failed" && value.status !== "timed_out") ||
-    typeof value.stage !== "string" ||
-    !remoteLifecycleStages.has(value.stage)
-  )
-    return undefined;
-  const detail =
-    typeof value.error === "string" && value.error.trim()
-      ? value.error
-      : `${value.stage} returned ${value.status === "timed_out" ? "timed_out" : "failed"}`;
-  return { stage: value.stage, detail: sanitizeTelemetryText(detail, secrets) };
+function remoteFailureMessage(failure: RemoteFailure): string {
+  const detail: Record<RemoteFailure["code"], string> = {
+    model_request_failed: "model request failed",
+    envelope_invalid: "agent did not submit a valid envelope",
+    ownership_failed: "agent changed paths outside its approved ownership",
+    verification_failed: "deterministic verification failed",
+    review_failed: "independent review found blocking issues",
+    timed_out: "phase timed out",
+    agent_failed: "agent execution failed",
+  };
+  return `${failure.phase}: ${detail[failure.code]}`;
 }
 
 function validateDecision(value: ControllerDecisionContext | undefined): void {
@@ -553,8 +537,7 @@ function validateDecision(value: ControllerDecisionContext | undefined): void {
 }
 
 function publicFailureDetail(error: unknown): string | undefined {
-  if (error instanceof LinearIssueValidationError || error instanceof RemoteLifecycleFailure)
-    return error.message;
+  if (error instanceof LinearIssueValidationError) return error.message;
   if (error instanceof ExeCommandError) {
     if (error.timedOut) return `${error.operation} timed out`;
     return error.exitCode === null
@@ -1087,10 +1070,29 @@ export async function runController(options: ControllerOptions): Promise<Control
         600_000,
       );
       publicFailureMessage = "OpenRouter readiness check failed";
+      const modelCatalog = "/home/exedev/openrouter-models.json";
       await remote(
         exe,
         vm.sshDest,
-        ["curl", "-fsS", "-o", "/dev/null", "https://openrouter.ai/api/v1/models"],
+        ["curl", "-fsS", "-o", modelCatalog, "https://openrouter.ai/api/v1/models"],
+        30_000,
+      );
+      publicFailureMessage = "configured OpenRouter model unavailable";
+      const requiredModels = [
+        ...new Set(
+          Object.values(archivedRoles).map((role) => role.model.slice("openrouter/".length)),
+        ),
+      ];
+      await remote(
+        exe,
+        vm.sshDest,
+        [
+          REMOTE_NODE,
+          "-e",
+          "const fs=require('node:fs');const ids=new Set(JSON.parse(fs.readFileSync(process.argv[1],'utf8')).data.map(x=>x.id));const missing=JSON.parse(process.argv[2]).filter(x=>!ids.has(x));if(missing.length){console.error(missing.join(','));process.exit(1)}",
+          modelCatalog,
+          JSON.stringify(requiredModels),
+        ],
         30_000,
       );
       let nextPublicToolId = 1;
@@ -1363,7 +1365,11 @@ export async function runController(options: ControllerOptions): Promise<Control
       stage = "planning_result";
       publicFailureMessage = "planner result is invalid";
       const plannerRun = outputPath(plannerResult.runDir, "Run evidence");
-      if (plannerResult.status !== "completed") throw new Error("remote planner failed");
+      if (plannerResult.status !== "completed") {
+        if (plannerResult.failure)
+          publicFailureMessage = remoteFailureMessage(plannerResult.failure);
+        throw new Error("remote planner failed");
+      }
       publicFailureMessage = "planner envelope retrieval failed";
       const plannerEnvelope = JSON.parse(
         await remote(exe, vm.sshDest, ["cat", `${plannerRun}/envelope.json`], 30_000),
@@ -1467,15 +1473,7 @@ export async function runController(options: ControllerOptions): Promise<Control
         if (workerResult.status === "completed") throw error;
       }
       if (workerResult.status !== "completed") {
-        const remoteFailure = remoteLifecycleFailure(lifecycle, [
-          options.linearToken,
-          options.githubToken,
-          options.openRouterKey,
-        ]);
-        if (remoteFailure) {
-          publicFailureMessage = `remote ${remoteFailure.stage} phase failed`;
-          throw new RemoteLifecycleFailure(remoteFailure.detail);
-        }
+        if (workerResult.failure) publicFailureMessage = remoteFailureMessage(workerResult.failure);
         throw new Error("remote worker lifecycle failed");
       }
       const documenterRun = outputPath(

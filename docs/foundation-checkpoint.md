@@ -14,7 +14,7 @@ All four role schemas run locally and through `factory run` in a fresh exe.dev V
 
 ## Implemented primitives
 
-- `src/agents/index.ts` loads and fail-closed validates Markdown agent definitions, including authoritative pinned OpenRouter model fields. Current role defaults are `openrouter/openai/gpt-5.6-terra`; no complete model catalog is bundled.
+- `src/agents/index.ts` loads and fail-closed validates Markdown agent definitions, including authoritative pinned OpenRouter model fields. Current role defaults are Gemini 3.7 Flash for documenter/reviewer, GLM 5.3 for planner, and Grok 4.6 for worker; no complete model catalog is bundled, so doctor and remote bootstrap validate against OpenRouter's live catalog. Agent requests cap maximum output at 16,384 tokens.
 - `src/run-agent.ts` exposes generic `runAgent()` and records session, lifecycle events, receipt, timeout, and envelope results.
 - `src/envelope.ts` defines role schemas, `parseEnvelope()`, correction prompt, submit tool, and planner rendering.
 - `src/workflows/plan.ts` exposes the executable planner path and writes `plan.md` from its accepted planner envelope.

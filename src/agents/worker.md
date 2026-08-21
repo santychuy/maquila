@@ -1,7 +1,7 @@
 ---
 name: worker
 description: Implements approved plan as sole writer and runs focused validation
-model: openrouter/openai/gpt-5.6-terra
+model: openrouter/x-ai/grok-4.6
 tools:
   - read
   - grep

@@ -26,6 +26,19 @@ const StatusSchema = Type.Union([
   Type.Literal("failed"),
   Type.Literal("timed_out"),
 ]);
+const FailureCodeSchema = Type.Union([
+  Type.Literal("model_request_failed"),
+  Type.Literal("envelope_invalid"),
+  Type.Literal("ownership_failed"),
+  Type.Literal("verification_failed"),
+  Type.Literal("review_failed"),
+  Type.Literal("timed_out"),
+  Type.Literal("agent_failed"),
+]);
+const RemoteFailureSchema = Type.Object(
+  { phase: PhaseSchema, code: FailureCodeSchema },
+  { additionalProperties: false },
+);
 const TokenSchema = Type.Object(
   {
     input: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
@@ -167,6 +180,7 @@ const ResultFrameSchema = Type.Object(
     status: StatusSchema,
     runDir: Type.String({ minLength: 1 }),
     reviewerRunDir: Type.Optional(Type.String({ minLength: 1 })),
+    failure: Type.Optional(RemoteFailureSchema),
   },
   { additionalProperties: false },
 );
@@ -175,6 +189,7 @@ export type RemoteToolName = (typeof REMOTE_TOOL_NAMES)[number];
 export type RemoteEvent = Static<typeof RemoteEventSchema>;
 export type RemoteFrame = Static<typeof RemoteFrameSchema>;
 export type RemoteResultFrame = Static<typeof ResultFrameSchema>;
+export type RemoteFailure = Static<typeof RemoteFailureSchema>;
 export type RemoteEventSink = (event: RemoteEvent) => void;
 
 export function isRemoteToolName(value: string): value is RemoteToolName {

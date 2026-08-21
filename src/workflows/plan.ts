@@ -4,8 +4,13 @@ import { readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { loadAgent } from "../agents/index.js";
 import { renderPlannerPlan } from "../envelope.js";
-import { runAgent, type AgentActivity, type AgentRunStatus } from "../run-agent.js";
-import { isRemoteToolName, type RemoteEventSink } from "../remote-protocol.js";
+import {
+  agentFailureCode,
+  runAgent,
+  type AgentActivity,
+  type AgentRunStatus,
+} from "../run-agent.js";
+import { isRemoteToolName, type RemoteEventSink, type RemoteFailure } from "../remote-protocol.js";
 import { createRunArtifacts } from "../run-artifacts.js";
 
 export const MAX_TIMEOUT_SECONDS = 1800;
@@ -23,6 +28,7 @@ export type PlanStatus = AgentRunStatus;
 export interface PlanResult {
   runDir: string;
   status: PlanStatus;
+  failure?: RemoteFailure;
 }
 
 function git(repo: string, ...args: string[]): string {
@@ -127,7 +133,13 @@ export async function runPlan(options: PlanOptions): Promise<PlanResult> {
       status: result.status,
       sourceAt: new Date().toISOString(),
     });
-    return { runDir: result.runDir, status: result.status };
+    return {
+      runDir: result.runDir,
+      status: result.status,
+      ...(result.status === "completed"
+        ? {}
+        : { failure: { phase: "planning" as const, code: agentFailureCode(result) } }),
+    };
   } catch (error) {
     options.onEvent?.({
       type: "phase_finished",

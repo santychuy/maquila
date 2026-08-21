@@ -659,6 +659,9 @@ class FakeExe implements ControllerExe {
       protocol.result({
         status: this.failPlanner ? "failed" : "completed",
         runDir: `/home/exedev/factory/.factory/runs/${ids[0]}`,
+        ...(this.failPlanner
+          ? { failure: { phase: "planning" as const, code: "model_request_failed" as const } }
+          : {}),
       });
     } else {
       protocol.event({ type: "phase_started", actor: "worker", phase: "implementing", sourceAt });
@@ -737,6 +740,7 @@ class FakeExe implements ControllerExe {
         protocol.result({
           status: "failed",
           runDir: `/home/exedev/factory/.factory/runs/${ids[1]}`,
+          failure: { phase: "documenting", code: "agent_failed" },
         });
         onStdout(Buffer.from(output.join("")));
         return { stderr: "" };
@@ -1267,7 +1271,15 @@ test("controller reaches ready only after remote evidence and VM cleanup", async
     const contexts = events.filter((event) => event.type === "agent_context");
     assert.equal(contexts.length, 4);
     assert.ok(contexts.every((event) => /^[0-9a-f]{64}$/.test(event.payload.systemPromptSha256)));
-    assert.ok(contexts.every((event) => event.payload.model === "openrouter/openai/gpt-5.6-terra"));
+    assert.deepEqual(
+      contexts.map((event) => event.payload.model),
+      [
+        "openrouter/z-ai/glm-5.3",
+        "openrouter/x-ai/grok-4.6",
+        "openrouter/google/gemini-3.7-flash",
+        "openrouter/google/gemini-3.7-flash",
+      ],
+    );
     assert.ok(contexts.every((event) => event.payload.executionLimits === undefined));
     assert.ok(
       contexts.every((event) => !("prompt" in event.payload) && !("systemPrompt" in event.payload)),
@@ -1443,8 +1455,17 @@ test("controller planner failure destroys VM and records failed state", async ()
     assert.equal(state.state, "failed");
     assert.equal(state.cleanup, "complete");
     assert.equal(exe.calls.filter((call) => call.operation === "destroy").length, 1);
+    const events = readTelemetry(telemetryPath(root, state.runId));
     assert.ok(
-      readTelemetry(telemetryPath(root, state.runId)).some(
+      events.some(
+        (event) =>
+          event.type === "failure" &&
+          event.payload.stage === "planning_result" &&
+          event.payload.message === "planning: model request failed",
+      ),
+    );
+    assert.ok(
+      events.some(
         (event) =>
           event.type === "artifact_available" && event.payload.name === "failure-evidence.tar",
       ),
@@ -1974,34 +1995,7 @@ test("normal failed gate and review streams close phases before failed terminal 
   }
 });
 
-test("controller surfaces bounded remote lifecycle failure evidence", async () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
-  const exe = new FakeExe();
-  exe.normalFailedDocumenter = true;
-  try {
-    const result = await runController(controllerOptions(root, exe));
-    assert.equal(result.status, "failed");
-    const detail =
-      /documenter blocked: missing approved path docs\/native-architecture-assessment\.md/;
-    assert.match(result.error ?? "", detail);
-    const receiptRecord = JSON.parse(readFileSync(join(result.runDir, "receipt.json"), "utf8")) as {
-      error?: string;
-    };
-    assert.match(receiptRecord.error ?? "", detail);
-    const events = readTelemetry(telemetryPath(root, readControllerState(result.runDir).runId));
-    const failure = events.find((event) => event.type === "failure");
-    assert.ok(failure?.type === "failure");
-    assert.equal(failure.payload.stage, "documenting");
-    assert.equal(
-      failure.payload.message,
-      "remote documenter phase failed (documenter blocked: missing approved path docs/native-architecture-assessment.md)",
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("controller redacts, strips controls, and bounds remote lifecycle evidence", async () => {
+test("controller surfaces fixed remote phase causes without raw model detail", async () => {
   const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
   const exe = new FakeExe();
   exe.normalFailedDocumenter = true;
@@ -2009,37 +2003,13 @@ test("controller redacts, strips controls, and bounds remote lifecycle evidence"
   try {
     const result = await runController(controllerOptions(root, exe));
     assert.equal(result.status, "failed");
-    assert.ok((result.error?.length ?? 0) <= 1000);
-    assert.match(result.error ?? "", /\[REDACTED\]/);
-    assert.doesNotMatch(result.error ?? "", /linear-secret-value/);
-    assert.equal(result.error?.includes("\u001B"), false);
-    assert.equal(result.error?.includes("\u0007"), false);
-    const events = readTelemetry(telemetryPath(root, readControllerState(result.runDir).runId));
-    const failure = events.find((event) => event.type === "failure");
-    assert.ok(failure?.type === "failure");
-    assert.ok(failure.payload.message.length <= 1000);
-    assert.match(failure.payload.message, /\[REDACTED\]/);
-    assert.doesNotMatch(failure.payload.message, /linear-secret-value/);
-    assert.equal(failure.payload.message.includes("\u001B"), false);
-    assert.equal(failure.payload.message.includes("\u0007"), false);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("controller rejects inconsistent remote lifecycle failure evidence", async () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
-  const exe = new FakeExe();
-  exe.normalFailedDocumenter = true;
-  exe.documenterLifecycleStatus = "completed";
-  try {
-    const result = await runController(controllerOptions(root, exe));
-    assert.equal(result.status, "failed");
     assert.equal(result.error, "remote worker lifecycle failed");
     const events = readTelemetry(telemetryPath(root, readControllerState(result.runDir).runId));
     const failure = events.find((event) => event.type === "failure");
     assert.ok(failure?.type === "failure");
-    assert.equal(failure.payload.message, "controller stage failed");
+    assert.equal(failure.payload.stage, "documenting");
+    assert.equal(failure.payload.message, "documenting: agent execution failed");
+    assert.doesNotMatch(JSON.stringify(events), /linear-secret-value|evil\.example/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

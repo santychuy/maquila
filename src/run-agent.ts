@@ -23,6 +23,11 @@ import {
 import type { RunArtifacts } from "./run-artifacts.js";
 
 export type AgentRunStatus = "completed" | "failed" | "timed_out";
+export const MAX_AGENT_OUTPUT_TOKENS = 16_384;
+
+export function cappedAgentOutputTokens(modelMaximum: number): number {
+  return Math.min(modelMaximum, MAX_AGENT_OUTPUT_TOKENS);
+}
 
 export interface EnvelopeReceipt {
   role: EnvelopeRole;
@@ -140,6 +145,15 @@ export interface AgentRunResult {
   receipt: RunReceipt;
 }
 
+export function agentFailureCode(
+  result: AgentRunResult,
+): "model_request_failed" | "envelope_invalid" | "timed_out" | "agent_failed" {
+  if (result.status === "timed_out") return "timed_out";
+  if (result.receipt.error?.startsWith("Model request ")) return "model_request_failed";
+  if (result.receipt.envelope?.valid === false) return "envelope_invalid";
+  return "agent_failed";
+}
+
 function privatizeSessionFiles(path: string): void {
   if (!existsSync(path)) return;
   const metadata = statSync(path);
@@ -211,6 +225,26 @@ function finalAssistantText(session: AgentSession): string {
     .trim();
 }
 
+export function assistantFailureMessage(
+  message: { role: string; stopReason?: string; errorMessage?: string } | undefined,
+): string | undefined {
+  if (
+    message?.role !== "assistant" ||
+    (message.stopReason !== "error" && message.stopReason !== "aborted")
+  )
+    return undefined;
+  const detail = message.errorMessage?.trim();
+  return detail
+    ? `Model request ${message.stopReason}: ${detail}`
+    : `Model request ${message.stopReason}`;
+}
+
+function lastAssistantFailure(session: AgentSession): string | undefined {
+  return assistantFailureMessage(
+    session.messages.toReversed().find((candidate) => candidate.role === "assistant"),
+  );
+}
+
 export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult> {
   const { agent, artifacts } = options;
   const envelopeRole = options.envelopeRole;
@@ -252,6 +286,11 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       throw new Error(resolvedModel.error ?? `Unknown model: ${agent.model}`);
     const thinkingLevel = resolvedModel.thinkingLevel ?? agent.thinking;
     receipt.agent.thinking = thinkingLevel;
+    const model = {
+      ...resolvedModel.model,
+      maxTokens: cappedAgentOutputTokens(resolvedModel.model.maxTokens),
+    };
+    receipt.maxOutputTokens = model.maxTokens;
     if (!(await modelRuntime.getAuth(resolvedModel.model))) {
       throw new Error(`No authentication configured for provider: ${resolvedModel.model.provider}`);
     }
@@ -263,7 +302,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
     const capture: EnvelopeCapture = { calls: 0 };
     const created = await createAgentSession({
       cwd: options.cwd,
-      model: resolvedModel.model,
+      model,
       thinkingLevel,
       modelRuntime,
       resourceLoader: isolatedResources(agent.systemPrompt),
@@ -322,6 +361,8 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
     options.onActivity?.({ type: "agent_started", at: new Date().toISOString() });
     try {
       await session.prompt(options.prompt);
+      const initialFailure = lastAssistantFailure(session);
+      if (initialFailure) throw new Error(initialFailure);
       if (envelopeRole && !timedOut) {
         // The SDK schema check alone is not acceptance: semantics are revalidated here.
         let parsed = captureEnvelope();
@@ -339,6 +380,8 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           if (!submitTool) throw new Error("submit_envelope tool unavailable during correction");
           session.agent.state.tools = [submitTool];
           await session.prompt(envelopeCorrectionPrompt(envelopeRole, parsed.errors));
+          const correctionFailure = lastAssistantFailure(session);
+          if (correctionFailure) throw new Error(correctionFailure);
           if (!timedOut) parsed = captureEnvelope();
         }
         if (!timedOut) {

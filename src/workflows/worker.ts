@@ -5,8 +5,13 @@ import { resolve } from "node:path";
 import { loadAgent } from "../agents/index.js";
 import { parseEnvelope, type PlannerEnvelope, type ReviewerEnvelope } from "../envelope.js";
 import { assertOwnedPaths, runDocumenter } from "./document.js";
-import { runAgent, type AgentActivity, type AgentRunResult } from "../run-agent.js";
-import { isRemoteToolName, type RemoteEventSink } from "../remote-protocol.js";
+import {
+  agentFailureCode,
+  runAgent,
+  type AgentActivity,
+  type AgentRunResult,
+} from "../run-agent.js";
+import { isRemoteToolName, type RemoteEventSink, type RemoteFailure } from "../remote-protocol.js";
 import { createRunArtifacts, type RunArtifacts } from "../run-artifacts.js";
 import {
   assertCleanBaseline,
@@ -37,6 +42,7 @@ export interface WorkerLifecycleResult {
   reviewerRunDir?: string;
   verification?: VerificationResult;
   reviewer?: ReviewerEnvelope;
+  failure?: RemoteFailure;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -218,7 +224,11 @@ export async function runWorkerLifecycle(
         stage: "worker",
         error: error instanceof Error ? error.message : String(error),
       });
-      return { status: "failed", runDir: workerArtifacts.runDir };
+      return {
+        status: "failed",
+        runDir: workerArtifacts.runDir,
+        failure: { phase: "implementing", code: "agent_failed" },
+      };
     }
 
     if (worker.status !== "completed" || !worker.envelope) {
@@ -226,9 +236,14 @@ export async function runWorkerLifecycle(
       writeLifecycle(workerArtifacts, {
         status: worker.status,
         stage: "worker",
+        ...(worker.receipt.error ? { error: worker.receipt.error } : {}),
         workerRunDir: worker.runDir,
       });
-      return { status: worker.status, runDir: worker.runDir };
+      return {
+        status: worker.status,
+        runDir: worker.runDir,
+        failure: { phase: "implementing", code: agentFailureCode(worker) },
+      };
     }
     try {
       assertOwnedPaths(options.repo, workerPaths, "worker");
@@ -239,7 +254,11 @@ export async function runWorkerLifecycle(
         stage: "worker",
         error: error instanceof Error ? error.message : String(error),
       });
-      return { status: "failed", runDir: worker.runDir };
+      return {
+        status: "failed",
+        runDir: worker.runDir,
+        failure: { phase: "implementing", code: "ownership_failed" },
+      };
     }
     phaseEvent(options.onEvent, "phase_finished", "worker", "implementing", "completed");
   }
@@ -263,15 +282,24 @@ export async function runWorkerLifecycle(
       stage: "documenter",
       error: error instanceof Error ? error.message : String(error),
     });
-    return { status: "failed", runDir: worker?.runDir ?? documenterArtifacts.runDir };
+    return {
+      status: "failed",
+      runDir: worker?.runDir ?? documenterArtifacts.runDir,
+      failure: { phase: "documenting", code: "agent_failed" },
+    };
   }
   if (documenter.status !== "completed" || !documenter.envelope) {
     writeLifecycle(workerArtifacts, {
       status: documenter.status,
       stage: "documenter",
+      ...(documenter.receipt.error ? { error: documenter.receipt.error } : {}),
       documenterRunDir: documenter.runDir,
     });
-    return { status: documenter.status, runDir: worker?.runDir ?? documenter.runDir };
+    return {
+      status: documenter.status,
+      runDir: worker?.runDir ?? documenter.runDir,
+      failure: { phase: "documenting", code: agentFailureCode(documenter) },
+    };
   }
 
   const primaryRun = worker ?? documenter;
@@ -297,7 +325,11 @@ export async function runWorkerLifecycle(
       stage: "verification",
       error: error instanceof Error ? error.message : String(error),
     });
-    return { status: "failed", runDir: worker?.runDir ?? documenter.runDir };
+    return {
+      status: "failed",
+      runDir: worker?.runDir ?? documenter.runDir,
+      failure: { phase: "verifying", code: "verification_failed" },
+    };
   }
 
   options.onEvent?.({
@@ -332,7 +364,15 @@ export async function runWorkerLifecycle(
       stage: "verification",
       verification,
     });
-    return { status, runDir: worker?.runDir ?? documenter.runDir, verification };
+    return {
+      status,
+      runDir: worker?.runDir ?? documenter.runDir,
+      verification,
+      failure: {
+        phase: "verifying",
+        code: status === "timed_out" ? "timed_out" : "verification_failed",
+      },
+    };
   }
 
   let patch: string;
@@ -350,7 +390,12 @@ export async function runWorkerLifecycle(
       error: error instanceof Error ? error.message : String(error),
       verification,
     });
-    return { status: "failed", runDir: primaryRun.runDir, verification };
+    return {
+      status: "failed",
+      runDir: primaryRun.runDir,
+      verification,
+      failure: { phase: "reviewing", code: "agent_failed" },
+    };
   }
 
   const reviewerArtifacts = createRunArtifacts(issue, options.root);
@@ -390,6 +435,7 @@ export async function runWorkerLifecycle(
       runDir: primaryRun.runDir,
       reviewerRunDir: reviewerArtifacts.runDir,
       verification,
+      failure: { phase: "reviewing", code: "agent_failed" },
     };
   }
 
@@ -411,6 +457,7 @@ export async function runWorkerLifecycle(
       runDir: primaryRun.runDir,
       reviewerRunDir: reviewer.runDir,
       verification,
+      failure: { phase: "reviewing", code: agentFailureCode(reviewer) },
     };
   }
 
@@ -432,6 +479,7 @@ export async function runWorkerLifecycle(
       runDir: primaryRun.runDir,
       reviewerRunDir: reviewer.runDir,
       verification,
+      failure: { phase: "reviewing", code: "envelope_invalid" },
     };
   }
 
@@ -467,5 +515,8 @@ export async function runWorkerLifecycle(
     reviewerRunDir: reviewer.runDir,
     verification,
     reviewer: envelope,
+    ...(status === "failed"
+      ? { failure: { phase: "reviewing" as const, code: "review_failed" as const } }
+      : {}),
   };
 }

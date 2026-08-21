@@ -1,7 +1,7 @@
 ---
 name: documenter
 description: Maintains and simplifies docs for agents first and humans second
-model: openrouter/openai/gpt-5.6-terra
+model: openrouter/google/gemini-3.7-flash
 tools:
   - read
   - grep

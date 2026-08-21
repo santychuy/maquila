@@ -42,7 +42,7 @@ Factory reuses this login. For CI, `GITHUB_TOKEN` or `GH_TOKEN` also works.
 
 ## Connect OpenRouter
 
-Remote planner, worker, and reviewer sessions use the model pinned in each agent definition. Current defaults are `openrouter/openai/gpt-5.6-terra`; the definition is authoritative, not a run-time `--model` override. The runtime does not maintain or validate a complete OpenRouter model catalog, so use a valid pinned identifier and configure model access at OpenRouter.
+Remote planner, worker, and reviewer sessions use the model pinned in each agent definition. Current defaults are Gemini 3.7 Flash for documenter/reviewer, GLM 5.3 for planner, and Grok 4.6 for worker; the definition is authoritative, not a run-time `--model` override. The runtime does not bundle an OpenRouter model catalog; `factory doctor` and remote bootstrap validate pinned identifiers against OpenRouter's live catalog. Agent requests cap maximum output at 16,384 tokens so provider credit checks remain bounded.
 
 Export a key for local commands:
 

@@ -260,9 +260,9 @@ test("successful worker invokes separate reviewer with untracked patch", async (
     assert.equal(result.status, "completed");
     assert.equal(verifyOptions?.commandTimeoutMs, 60_000);
     assert.equal(calls.length, 3);
-    assert.equal(calls[0]?.agent.model, "openrouter/openai/gpt-5.6-terra");
-    assert.equal(calls[1]?.agent.model, "openrouter/openai/gpt-5.6-terra");
-    assert.equal(calls[2]?.agent.model, "openrouter/openai/gpt-5.6-terra");
+    assert.equal(calls[0]?.agent.model, "openrouter/x-ai/grok-4.6");
+    assert.equal(calls[1]?.agent.model, "openrouter/google/gemini-3.7-flash");
+    assert.equal(calls[2]?.agent.model, "openrouter/google/gemini-3.7-flash");
     assert.notEqual(calls[0]?.artifacts.runDir, calls[2]?.artifacts.runDir);
     assert.match(calls[2]?.prompt ?? "", /new file mode/);
     assert.match(calls[2]?.prompt ?? "", /export const x = 1/);

@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
+import { listAgents } from "./agents/index.js";
 import { loadFactoryConfig, type FactoryConfig } from "./config.js";
 import {
   resolveGithubToken,
@@ -43,6 +44,7 @@ export interface DoctorOptions {
     config: FactoryConfig | undefined,
     runner?: CredentialRunner,
   ) => Promise<string>;
+  resolveModelIds?: () => Promise<Set<string>>;
   loadConfig?: typeof loadFactoryConfig;
   write?: (text: string) => void;
 }
@@ -62,6 +64,23 @@ function check(
     message: fail,
     ...(remediation ? { remediation } : {}),
   };
+}
+
+async function resolveOpenRouterModelIds(): Promise<Set<string>> {
+  const response = await fetch("https://openrouter.ai/api/v1/models", {
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new Error("OpenRouter model catalog unavailable");
+  const value: unknown = await response.json();
+  if (!value || typeof value !== "object" || !("data" in value) || !Array.isArray(value.data))
+    throw new Error("OpenRouter model catalog invalid");
+  return new Set(
+    value.data.flatMap((item) =>
+      item && typeof item === "object" && "id" in item && typeof item.id === "string"
+        ? [item.id]
+        : [],
+    ),
+  );
 }
 
 function sshReady(env: NodeJS.ProcessEnv, home: string): boolean {
@@ -162,6 +181,32 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
         "",
         "OpenRouter credential not checked",
         "fix factory config first",
+      ),
+    );
+  }
+  try {
+    const available = await (options.resolveModelIds ?? resolveOpenRouterModelIds)();
+    const configured = [
+      ...new Set(listAgents().map((agent) => agent.model.slice("openrouter/".length))),
+    ];
+    const missing = configured.filter((model) => !available.has(model));
+    checks.push(
+      check(
+        "models",
+        missing.length === 0,
+        "configured OpenRouter models available",
+        `configured OpenRouter models unavailable: ${missing.join(", ")}`,
+        "pin available model IDs in src/agents/*.md",
+      ),
+    );
+  } catch {
+    checks.push(
+      check(
+        "models",
+        false,
+        "",
+        "OpenRouter model catalog unavailable",
+        "check network access to https://openrouter.ai/api/v1/models",
       ),
     );
   }

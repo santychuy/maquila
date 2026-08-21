@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: Independently reviews implementation against issue, plan, diff, and verification evidence
-model: openrouter/openai/gpt-5.6-terra
+model: openrouter/google/gemini-3.7-flash
 tools:
   - read
   - grep
