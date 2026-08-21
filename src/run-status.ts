@@ -107,6 +107,7 @@ export function foldRunStatus(options: FoldRunStatusOptions): RunStatusSummary {
       summary.phase = record.phase.name;
       phaseStartedAt = recordedAt;
       summary.actor = record.actor;
+      if (record.phase.name !== "awaiting_decision") summary.decision = null;
     }
     switch (record.type) {
       case "agent_started":
@@ -114,7 +115,10 @@ export function foldRunStatus(options: FoldRunStatusOptions): RunStatusSummary {
         break;
       case "agent_finished":
       case "phase_finished":
-        if (record.type === "phase_finished") phaseStartedAt = undefined;
+        if (record.type === "phase_finished") {
+          phaseStartedAt = undefined;
+          if (record.phase?.name === "awaiting_decision") summary.decision = null;
+        }
         summary.actor = null;
         openTools.clear();
         summary.currentTool = null;
@@ -150,6 +154,7 @@ export function foldRunStatus(options: FoldRunStatusOptions): RunStatusSummary {
         summary.cleanup = record.payload.cleanup;
         summary.currentTool = null;
         summary.actor = null;
+        if (record.payload.status !== "awaiting_decision") summary.decision = null;
         break;
     }
   }

@@ -53,7 +53,7 @@ Only a reply after the request time from the pinned assignee is accepted. Factor
 
 Before accepting a reply, Factory checks the 24-hour expiry and snapshots Linear issue and GitHub base again. Changed issue input, repository identity, or base SHA fails the run. It also checks the retained workspace and Factory runtime before putting the OpenRouter config back. The same controller run then opens the completed Pi session checkpoint and starts the next planner turn. Deterministic verification, fresh review, cleanup, and publication remain unchanged.
 
-A missing retained VM gets one replacement attempt. Factory rebuilds the pinned workspace from controller state and restores the bounded checkpoint; another loss fails. Each wait lasts at most 24 hours, and one run allows at most three decision rounds. Expiry records `cancelled`, emits terminal telemetry, and attempts VM cleanup. Observer and `run status` keep an open wait as `awaiting_decision` rather than stale activity.
+A missing retained VM gets one replacement attempt. Factory rebuilds the pinned workspace from controller state and restores the bounded checkpoint; another loss fails. Each wait lasts at most 24 hours, and one run allows at most three decision rounds. Expiry records `cancelled`, emits terminal telemetry, and attempts VM cleanup. Observer and `run status` keep an open wait as `awaiting_decision` rather than stale activity, and drop the live decision prompt once that wait phase finishes.
 
 ## Controller limitations
 

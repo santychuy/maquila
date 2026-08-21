@@ -129,6 +129,49 @@ test("status exposes an awaiting Linear decision", () => {
   }
 });
 
+test("status drops a Linear decision after planning resumes", () => {
+  const root = temporary();
+  try {
+    const telemetry = createTelemetryWriter(root, runId);
+    telemetry.append({ type: "run_created", actor: "controller", payload: { status: "created" } });
+    telemetry.append({
+      type: "decision_requested",
+      actor: "controller",
+      payload: {
+        count: 1,
+        commentId: "comment-1",
+        commentUrl: "https://linear.app/example/comment-1",
+        continuationRunId: runId,
+      },
+    });
+    telemetry.append({
+      type: "phase_started",
+      actor: "controller",
+      phase: { id: "awaiting_decision:1", name: "awaiting_decision", attempt: 1 },
+      payload: {},
+    });
+    assert.equal(foldRunStatus({ root, runId, now: Date.now() }).decision?.commentId, "comment-1");
+    telemetry.append({
+      type: "phase_finished",
+      actor: "controller",
+      phase: { id: "awaiting_decision:1", name: "awaiting_decision", attempt: 1 },
+      payload: { status: "completed" },
+    });
+    telemetry.append({
+      type: "phase_started",
+      actor: "planner",
+      phase: { id: "planning:2", name: "planning", attempt: 2 },
+      payload: {},
+    });
+    const resumed = foldRunStatus({ root, runId, now: Date.now() });
+    assert.equal(resumed.status, "running");
+    assert.equal(resumed.phase, "planning");
+    assert.equal(resumed.decision, null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("open decision phase stays awaiting instead of becoming stale", () => {
   const root = temporary();
   try {

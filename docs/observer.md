@@ -38,7 +38,7 @@ factory run start --target /absolute/path/to/target-repository --issue RIFF-52 -
 
 `run start` returns accepted run ID before workflow completion. Open `<observer-url>/runs/<run-id>`. Pi users may use `/skill:software-factory` from target repository with only issue ID.
 
-When planner needs an engineer decision, run stays `awaiting_decision`. Answer numbered questions in marked Linear thread. Detached process polls for reply. Inspect or restart polling with same run ID:
+When planner needs an engineer decision, run stays `awaiting_decision` and status exposes the live Linear thread. Answer numbered questions in marked Linear thread. After a valid reply, wait phase finishes and status drops `decision` so observer and `run status` stop asking. Detached process polls for reply. Inspect or restart polling with same run ID:
 
 ```bash
 factory run status --run-id <run-id>
