@@ -7,6 +7,7 @@ import { listAgents } from "../agents/index.js";
 import { runPlan } from "../workflows/plan.js";
 import { runWorkerLifecycle } from "../workflows/worker.js";
 import { runControllerChain } from "../controller-chain.js";
+import { readPersistedDecisionRequest } from "../controller.js";
 import { createRemoteProtocolWriter } from "../remote-protocol.js";
 import { loadFactoryConfig } from "../config.js";
 import { resolveControllerCredentials } from "../credentials.js";
@@ -208,6 +209,29 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         if (options.json) json(result);
         else await writeHumanStart(root, result.runId);
         return 0;
+      }
+      if (options.command === "run-resume") {
+        const credentials = await resolveControllerCredentials({
+          env: process.env,
+          identityFlag: options.identity,
+          config: loadFactoryConfig({ env: process.env }),
+        });
+        const runDir = resolve(root, ".factory", "controllers", options.runId);
+        const persisted = readPersistedDecisionRequest(runDir);
+        const result = await runControllerChain({
+          ...persisted.request,
+          runId: options.runId,
+          root,
+          factoryRoot: root,
+          linearToken: credentials.linearToken,
+          githubToken: credentials.githubToken,
+          openRouterKey: credentials.openRouterKey,
+          resumeExisting: true,
+          ...(credentials.identity ? { identity: credentials.identity } : {}),
+        });
+        if (options.json) json(result);
+        else process.stdout.write(`Controller evidence: ${result.runDir}\n`);
+        return result.status === "completed" ? 0 : 1;
       }
       if (options.command === "run-status") {
         const status = foldRunStatus({

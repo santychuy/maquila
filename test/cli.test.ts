@@ -25,6 +25,32 @@ test("planner command accepts required inputs and safe timeout", () => {
       timeoutSeconds: 60,
     },
   );
+  assert.deepEqual(
+    parseCli([
+      "pi",
+      "plan",
+      "--repo",
+      "/tmp/repo",
+      "--issue",
+      "/tmp/issue.md",
+      "--resume-session",
+      "/tmp/session.jsonl",
+      "--session-id",
+      "session-1",
+      "--session-sha256",
+      "a".repeat(64),
+    ]),
+    {
+      repo: "/tmp/repo",
+      issue: "/tmp/issue.md",
+      timeoutSeconds: 300,
+      resumeSession: {
+        path: "/tmp/session.jsonl",
+        sessionId: "session-1",
+        sha256: "a".repeat(64),
+      },
+    },
+  );
 });
 
 test("controller command accepts bounded immutable inputs", () => {
@@ -135,6 +161,10 @@ test("detached run and status commands default target to cwd and treat JSON as o
   assert.deepEqual(
     parseCli(["run", "status", "--run-id", "11111111-1111-4111-8111-111111111111", "--json"]),
     { command: "run-status", runId: "11111111-1111-4111-8111-111111111111", json: true },
+  );
+  assert.deepEqual(
+    parseCli(["run", "resume", "--run-id", "11111111-1111-4111-8111-111111111111", "--json"]),
+    { command: "run-resume", runId: "11111111-1111-4111-8111-111111111111", json: true },
   );
   assert.deepEqual(
     parseCli(["run", "status", "--run-id", "11111111-1111-4111-8111-111111111111"]),

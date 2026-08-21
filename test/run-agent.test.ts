@@ -1,5 +1,14 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { test } from "node:test";
@@ -8,6 +17,7 @@ import {
   agentFailureCode,
   assistantFailureMessage,
   cappedAgentOutputTokens,
+  openControllerSession,
   runAgent,
   runArtifactNameErrors,
   tokenUsageActivity,
@@ -28,6 +38,55 @@ test("token usage activity copies finalized session token totals", () => {
 test("agent output tokens are capped to a bounded factory budget", () => {
   assert.equal(cappedAgentOutputTokens(128_000), 16_384);
   assert.equal(cappedAgentOutputTokens(8_192), 8_192);
+});
+
+test("controller session reopening accepts only pinned artifact sessions", () => {
+  const root = mkdtempSync(resolve(tmpdir(), "factory-session-"));
+  const sessions = resolve(root, "sessions");
+  try {
+    mkdirSync(sessions);
+    const path = resolve(sessions, "planner.jsonl");
+    writeFileSync(
+      path,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "session-1",
+        timestamp: "2026-01-01T00:00:00.000Z",
+        cwd: root,
+      })}\n`,
+    );
+    const checkpoint = {
+      path,
+      sessionId: "session-1",
+      sha256: createHash("sha256").update(readFileSync(path)).digest("hex"),
+    };
+    assert.equal(
+      openControllerSession(checkpoint, sessions, root).getSessionId(),
+      checkpoint.sessionId,
+    );
+    assert.throws(
+      () => openControllerSession({ ...checkpoint, sha256: "0".repeat(64) }, sessions, root),
+      /hash mismatch/,
+    );
+    assert.throws(
+      () =>
+        openControllerSession(
+          { ...checkpoint, path: resolve(root, "outside.jsonl") },
+          sessions,
+          root,
+        ),
+      /outside artifacts/,
+    );
+    writeFileSync(path, "not jsonl");
+    const corrupt = {
+      ...checkpoint,
+      sha256: createHash("sha256").update(readFileSync(path)).digest("hex"),
+    };
+    assert.throws(() => openControllerSession(corrupt, sessions, root), /invalid/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("agent failures expose fixed public codes", () => {

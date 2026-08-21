@@ -129,6 +129,25 @@ test("status exposes an awaiting Linear decision", () => {
   }
 });
 
+test("open decision phase stays awaiting instead of becoming stale", () => {
+  const root = temporary();
+  try {
+    const telemetry = createTelemetryWriter(root, runId);
+    telemetry.append({ type: "run_created", actor: "controller", payload: { status: "created" } });
+    telemetry.append({
+      type: "phase_started",
+      actor: "controller",
+      phase: { id: "awaiting_decision:1", name: "awaiting_decision", attempt: 1 },
+      payload: {},
+    });
+    const status = foldRunStatus({ root, runId, now: Date.now() + 60_000, staleAfterMs: 1 });
+    assert.equal(status.status, "awaiting_decision");
+    assert.equal(status.phase, "awaiting_decision");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("status preserves the primary failure when evidence collection also fails", () => {
   const root = temporary();
   try {

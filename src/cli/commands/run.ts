@@ -3,14 +3,17 @@ import { parseTimeout, rejectOptions } from "../helpers.js";
 import type {
   DirectRunOptions,
   RunExecuteCommand,
+  RunResumeCommand,
   RunStartCommand,
   RunStatusCommand,
 } from "../types.js";
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 export function parseRunCommand(
   subcommand: string | undefined,
   values: Record<string, unknown>,
-): DirectRunOptions | RunStartCommand | RunExecuteCommand | RunStatusCommand {
+): DirectRunOptions | RunStartCommand | RunExecuteCommand | RunResumeCommand | RunStatusCommand {
   if (subcommand === "start") {
     rejectOptions(values, [
       "json",
@@ -75,6 +78,22 @@ export function parseRunCommand(
     };
   }
 
+  if (subcommand === "resume") {
+    rejectOptions(values, ["json", "run-id", "identity"]);
+    if (typeof values["run-id"] !== "string" || !UUID.test(values["run-id"]))
+      throw new Error("invalid run resume --run-id");
+    const identity =
+      typeof values.identity === "string" ? values.identity : process.env.FACTORY_EXE_IDENTITY;
+    if (identity && (!isAbsolute(identity) || identity.includes("\0")))
+      throw new Error("exe.dev identity must be an absolute path");
+    return {
+      command: "run-resume",
+      runId: values["run-id"],
+      ...(identity ? { identity } : {}),
+      ...(values.json ? { json: true } : {}),
+    };
+  }
+
   if (subcommand === "status") {
     rejectOptions(values, ["json", "run-id"]);
     if (typeof values["run-id"] !== "string" || !values["run-id"])
@@ -123,6 +142,6 @@ export function parseRunCommand(
   }
 
   throw new Error(
-    "Expected command: agents list, setup, doctor, pi plan, pi worker, run, run start, run status, dashboard, or observer",
+    "Expected command: agents list, setup, doctor, pi plan, pi worker, run, run start, run resume, run status, dashboard, or observer",
   );
 }

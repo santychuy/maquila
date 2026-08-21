@@ -25,6 +25,9 @@ export function parseCli(args: string[]): ParsedCli {
       machine: { type: "boolean" },
       target: { type: "string" },
       "run-id": { type: "string" },
+      "resume-session": { type: "string" },
+      "session-id": { type: "string" },
+      "session-sha256": { type: "string" },
       json: { type: "boolean" },
       port: { type: "string" },
       "linear-token-reference": { type: "string" },
@@ -59,13 +62,13 @@ export function parseCli(args: string[]): ParsedCli {
   if (primary === "pi") {
     if (!secondary) {
       throw new Error(
-        "Expected command: agents list, setup, doctor, pi plan, pi worker, run, run start, run status, dashboard, or observer",
+        "Expected command: agents list, setup, doctor, pi plan, pi worker, run, run start, run resume, run status, dashboard, or observer",
       );
     }
     return parsePiCommand(secondary, values);
   }
 
   throw new Error(
-    "Expected command: agents list, setup, doctor, pi plan, pi worker, run, run start, run status, dashboard, or observer",
+    "Expected command: agents list, setup, doctor, pi plan, pi worker, run, run start, run resume, run status, dashboard, or observer",
   );
 }

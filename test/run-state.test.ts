@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
+  beginControllerDecisionWait,
   createControllerState,
   findOrphanVms,
   readControllerState,
@@ -137,8 +138,10 @@ test("duplicate active and completed inputs are rejected; failed and legacy read
     try {
       const decisionDir = runDir(decisionRoot, "run-1");
       createControllerState(decisionDir, input("run-1"));
-      for (const next of ["creating_vm", "bootstrapping", "planning", "awaiting_decision"] as const)
+      for (const next of ["creating_vm", "bootstrapping", "planning"] as const)
         transitionControllerState(decisionDir, next);
+      recordControllerCleanup(decisionDir, "complete");
+      transitionControllerState(decisionDir, "awaiting_decision");
       createControllerState(runDir(decisionRoot, "run-2"), input("run-2"));
     } finally {
       rmSync(decisionRoot, { recursive: true, force: true });
@@ -187,6 +190,35 @@ test("duplicate active and completed inputs are rejected; failed and legacy read
     } finally {
       rmSync(completeRoot, { recursive: true, force: true });
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("retained decision wait keeps claim and can resume planning", () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-state-decision-"));
+  const dir = runDir(root, "run-1");
+  try {
+    createControllerState(dir, input("run-1"));
+    transitionControllerState(dir, "creating_vm");
+    recordControllerVm(dir, { name: "vm-1", sshDest: "vm.exe.xyz", status: "running" });
+    for (const next of ["bootstrapping", "planning"] as const) transitionControllerState(dir, next);
+    const waiting = beginControllerDecisionWait(dir, {
+      generation: 1,
+      expiresAt: "2026-01-02T00:00:00.000Z",
+      plannerRunId: "planner-run-1",
+      plannerSessionId: "session-1",
+      plannerSessionSha256: "e".repeat(64),
+      checkpointSha256: "f".repeat(64),
+    });
+    assert.equal(waiting.state, "awaiting_decision");
+    assert.equal(waiting.cleanup, "pending");
+    assert.equal(scanRecoverableControllerStates(join(root, ".factory", "runs")).length, 1);
+    assert.throws(
+      () => createControllerState(runDir(root, "run-2"), input("run-2")),
+      /duplicate active or completed/,
+    );
+    assert.equal(transitionControllerState(dir, "planning").state, "planning");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

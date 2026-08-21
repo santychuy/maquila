@@ -19,7 +19,17 @@ export interface LinearSnapshot {
 export interface LinearDecisionRequest {
   commentId: string;
   commentUrl: string;
+  issueId?: string;
+  assigneeId?: string;
+  generation?: number;
+  questionSha256?: string;
+  questionCount?: number;
+  requestedAt?: string;
+  marker?: string;
 }
+
+export const LINEAR_DECISION_MAX_PAGES = 10;
+export const LINEAR_DECISION_MAX_REPLIES = 500;
 
 export interface LinearDecisionReply {
   commentId: string;
@@ -52,6 +62,15 @@ function record(value: unknown, label: string): Record<string, unknown> {
 
 function hash(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function decisionMarker(runId: string, generation: number, questionSha256: string): string {
+  return `<!-- factory-decision:${runId}:${generation}:${questionSha256} -->`;
+}
+
+function timestamp(value: string, label: string): string {
+  if (!Number.isFinite(Date.parse(value))) throw new Error(`${label} is invalid`);
+  return value;
 }
 
 async function requestLinear(
@@ -151,7 +170,10 @@ export async function createLinearDecisionComment(options: {
   token: string;
   issueId: string;
   assigneeUrl: string;
+  assigneeId?: string;
   runId: string;
+  generation?: number;
+  requestedAt?: string;
   decisions: string[];
 }): Promise<LinearDecisionRequest> {
   text(options.token, "Linear token");
@@ -165,82 +187,214 @@ export async function createLinearDecisionComment(options: {
   if (!/^https:\/\/linear\.app\/[A-Za-z0-9_.~/-]+$/.test(assigneeUrl))
     throw new Error("assignee URL is invalid");
   if (!/^[0-9a-f-]{36}$/.test(options.runId)) throw new Error("run ID is invalid");
+  const generation = options.generation ?? 1;
+  if (!Number.isInteger(generation) || generation < 1 || generation > 3)
+    throw new Error("decision generation is invalid");
+  const assigneeId = options.assigneeId ? text(options.assigneeId, "assignee ID") : undefined;
+  const requestedAt = timestamp(
+    options.requestedAt ?? new Date().toISOString(),
+    "request timestamp",
+  );
+  const questionSha256 = hash(decisions);
+  const marker = decisionMarker(options.runId, generation, questionSha256);
   const body = [
-    `${assigneeUrl} Factory needs your decision before implementation can continue.`,
+    `${assigneeUrl} Factory paused this run pending your decision.`,
     "",
-    `Run: \`${options.runId}\``,
+    `Run: \`${options.runId}\` · Decision round: ${generation}`,
     "",
     ...decisions.map((decision, index) => `${index + 1}. ${decision}`),
     "",
-    "Reply in this thread with `Decision: <your answer>`. Factory will start a fresh linked run automatically.",
+    "Reply in this thread exactly in this form:",
+    "Decision:",
+    ...decisions.map((_, index) => `${index + 1}. <answer>`),
+    "",
+    "Factory resumes this same run after a valid reply.",
+    marker,
   ].join("\n");
-  const payload = record(
-    (
-      await requestLinear(
-        options,
-        `mutation($input:CommentCreateInput!){ commentCreate(input:$input){ success comment{id url} } }`,
-        { input: { issueId: options.issueId, body } },
-      )
-    ).commentCreate,
-    "Linear comment payload",
-  );
+  const result = (comment: { commentId: string; commentUrl: string }): LinearDecisionRequest => ({
+    ...comment,
+    issueId: options.issueId,
+    ...(assigneeId ? { assigneeId } : {}),
+    generation,
+    questionSha256,
+    questionCount: decisions.length,
+    requestedAt,
+    marker,
+  });
+  const existing = await findLinearDecisionComment({
+    ...options,
+    issueId: options.issueId,
+    marker,
+  });
+  if (existing) return result(existing);
+  let payload: Record<string, unknown>;
+  try {
+    payload = record(
+      (
+        await requestLinear(
+          options,
+          `mutation($input:CommentCreateInput!){ commentCreate(input:$input){ success comment{id url} } }`,
+          { input: { issueId: options.issueId, body } },
+        )
+      ).commentCreate,
+      "Linear comment payload",
+    );
+  } catch (error) {
+    const recovered = await findLinearDecisionComment({
+      ...options,
+      issueId: options.issueId,
+      marker,
+    });
+    if (recovered) return result(recovered);
+    throw error;
+  }
   if (payload.success !== true) throw new Error("Linear comment creation failed");
   const comment = record(payload.comment, "Linear comment");
-  return {
+  return result({
     commentId: text(comment.id, "comment.id"),
     commentUrl: text(comment.url, "comment.url"),
-  };
+  });
+}
+
+export async function findLinearDecisionComment(options: {
+  fetch?: typeof globalThis.fetch;
+  token: string;
+  issueId: string;
+  marker: string;
+}): Promise<{ commentId: string; commentUrl: string } | undefined> {
+  text(options.token, "Linear token");
+  const issueId = text(options.issueId, "issue");
+  const marker = text(options.marker, "decision marker");
+  let after: string | null = null;
+  const matches: Array<{ commentId: string; commentUrl: string }> = [];
+  for (let page = 0; page < LINEAR_DECISION_MAX_PAGES; page += 1) {
+    const issue = record(
+      (
+        await requestLinear(
+          options,
+          `query($id:String!,$after:String){ issue(id:$id){ id comments(first:50,after:$after){ nodes{id url body} pageInfo{hasNextPage endCursor} } } }`,
+          { id: issueId, after },
+        )
+      ).issue,
+      "Linear issue",
+    );
+    if (text(issue.id, "issue.id") !== issueId) throw new Error("Linear issue identity mismatch");
+    const comments = record(issue.comments, "issue comments");
+    if (!Array.isArray(comments.nodes)) throw new Error("decision comments are malformed");
+    for (const value of comments.nodes) {
+      const comment = record(value, "decision comment");
+      if (text(comment.body, "comment body").includes(marker))
+        matches.push({
+          commentId: text(comment.id, "comment.id"),
+          commentUrl: text(comment.url, "comment.url"),
+        });
+    }
+    if (matches.length > 1) throw new Error("Linear decision comment is ambiguous");
+    const pageInfo = record(comments.pageInfo, "decision comment page info");
+    if (pageInfo.hasNextPage === false) return matches[0];
+    if (pageInfo.hasNextPage !== true || !text(pageInfo.endCursor, "decision comment cursor"))
+      throw new Error("decision comment pagination is malformed");
+    after = text(pageInfo.endCursor, "decision comment cursor");
+  }
+  throw new Error("decision comment search exceeds limit");
 }
 
 export async function fetchLinearDecisionReply(options: {
   fetch?: typeof globalThis.fetch;
   token: string;
-  commentId: string;
+  commentId?: string;
+  request?: LinearDecisionRequest;
 }): Promise<LinearDecisionReply | undefined> {
   text(options.token, "Linear token");
-  text(options.commentId, "comment ID");
-  const comment = record(
-    (
-      await requestLinear(
-        options,
-        `query($id:String!){ comment(id:$id){ id issue{assignee{id}} children(first:50){ nodes{id body createdAt user{id}} pageInfo{hasNextPage} } } }`,
-        { id: options.commentId },
-      )
-    ).comment,
-    "Linear comment",
-  );
-  if (text(comment.id, "comment.id") !== options.commentId)
-    throw new Error("Linear comment identity mismatch");
-  const assignee = record(record(comment.issue, "comment issue").assignee, "assignee");
-  const assigneeId = text(assignee.id, "assignee.id");
-  const children = record(comment.children, "comment children");
-  const pageInfo = record(children.pageInfo, "comment page info");
-  if (pageInfo.hasNextPage !== false) throw new Error("Linear decision thread exceeds limit");
-  if (!Array.isArray(children.nodes)) throw new Error("comment replies are malformed");
-  const replies = children.nodes
-    .map((value) => {
+  const request = options.request;
+  const commentId = text(request?.commentId ?? options.commentId, "comment ID");
+  const pinnedAssignee = request?.assigneeId;
+  const issueId = request?.issueId;
+  const requestedAt = request?.requestedAt && timestamp(request.requestedAt, "request timestamp");
+  if (request) {
+    if (!pinnedAssignee || !issueId || !requestedAt || !request.marker || !request.questionSha256)
+      throw new Error("decision request is incomplete");
+    if (!Number.isInteger(request.generation) || !Number.isInteger(request.questionCount))
+      throw new Error("decision request is invalid");
+    const marker = request.marker.match(
+      /^<!-- factory-decision:[0-9a-f-]{36}:(\d+):([0-9a-f]{64}) -->$/,
+    );
+    if (!marker || Number(marker[1]) !== request.generation || marker[2] !== request.questionSha256)
+      throw new Error("decision request marker is invalid");
+  }
+  const replies: Array<{ commentId: string; body: string; createdAt: string; userId?: string }> =
+    [];
+  let after: string | null = null;
+  for (let page = 0; page < LINEAR_DECISION_MAX_PAGES; page += 1) {
+    const comment = record(
+      (
+        await requestLinear(
+          options,
+          `query($id:String!,$after:String){ comment(id:$id){ id body issue{id assignee{id}} children(first:50,after:$after){ nodes{id body createdAt user{id}} pageInfo{hasNextPage endCursor} } } }`,
+          { id: commentId, after },
+        )
+      ).comment,
+      "Linear comment",
+    );
+    if (text(comment.id, "comment.id") !== commentId)
+      throw new Error("Linear comment identity mismatch");
+    const issue = record(comment.issue, "comment issue");
+    if (request) {
+      if (text(issue.id, "comment issue.id") !== issueId)
+        throw new Error("Linear decision issue mismatch");
+      if (!text(comment.body, "comment body").includes(request.marker!))
+        throw new Error("Linear decision generation mismatch");
+    }
+    const assigneeId = pinnedAssignee ?? text(record(issue.assignee, "assignee").id, "assignee.id");
+    const children = record(comment.children, "comment children");
+    if (!Array.isArray(children.nodes)) throw new Error("comment replies are malformed");
+    for (const value of children.nodes) {
       const reply = record(value, "comment reply");
       const body = text(reply.body, "comment body").trim();
-      const createdAt = text(reply.createdAt, "comment createdAt");
-      if (!Number.isFinite(Date.parse(createdAt))) throw new Error("comment timestamp is invalid");
+      const createdAt = timestamp(text(reply.createdAt, "comment createdAt"), "comment timestamp");
       const user = reply.user === null ? undefined : record(reply.user, "comment user");
-      return {
-        commentId: text(reply.id, "comment.id"),
-        body,
-        createdAt,
-        userId: user ? text(user.id, "comment user.id") : undefined,
-      };
+      if (user && text(user.id, "comment user.id") === assigneeId && body.startsWith("Decision:"))
+        replies.push({
+          commentId: text(reply.id, "comment.id"),
+          body,
+          createdAt,
+          userId: assigneeId,
+        });
+      if (replies.length > LINEAR_DECISION_MAX_REPLIES)
+        throw new Error("Linear decision thread exceeds limit");
+    }
+    const pageInfo = record(children.pageInfo, "comment page info");
+    if (pageInfo.hasNextPage === false) break;
+    if (pageInfo.hasNextPage !== true || !text(pageInfo.endCursor, "comment cursor"))
+      throw new Error("Linear decision pagination is malformed");
+    after = text(pageInfo.endCursor, "comment cursor");
+    if (page === LINEAR_DECISION_MAX_PAGES - 1)
+      throw new Error("Linear decision thread exceeds limit");
+  }
+  const reply = replies
+    .filter((candidate) => {
+      if (!request) return true;
+      if (Date.parse(candidate.createdAt) <= Date.parse(requestedAt!)) return false;
+      const lines = candidate.body.slice("Decision:".length).trim().split("\n").filter(Boolean);
+      return (
+        lines.length === request.questionCount &&
+        lines.every(
+          (line, index) => line.trim().startsWith(`${index + 1}. `) && line.trim().length > 3,
+        )
+      );
     })
-    .filter((reply) => reply.userId === assigneeId && reply.body.startsWith("Decision:"))
-    .toSorted((left, right) => right.createdAt.localeCompare(left.createdAt));
-  const reply = replies[0];
+    .toSorted(
+      (left, right) =>
+        right.createdAt.localeCompare(left.createdAt) ||
+        right.commentId.localeCompare(left.commentId),
+    )[0];
   if (!reply) return undefined;
-  const decision = reply.body.slice("Decision:".length).trim();
-  if (!decision || decision.length > 4000) throw new Error("Linear decision reply is invalid");
+  const body = reply.body.slice("Decision:".length).trim();
+  if (!body || body.length > 4000) throw new Error("Linear decision reply is invalid");
   return {
     commentId: reply.commentId,
-    body: decision,
+    body,
     createdAt: reply.createdAt,
-    sha256: hash({ commentId: reply.commentId, body: decision, createdAt: reply.createdAt }),
+    sha256: hash({ commentId: reply.commentId, body, createdAt: reply.createdAt }),
   };
 }

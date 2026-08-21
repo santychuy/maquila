@@ -10,6 +10,7 @@ export const HELP = `Usage:
   factory pi worker --repo PATH --issue PATH --planner PATH --base-sha SHA [--timeout-seconds 300]
   factory run --issue ID --owner OWNER --repo REPO --base-ref REF --tag TAG [--identity ABS] [--timeout-seconds 900]
   factory run start --issue ID [--target PATH] [--owner OWNER] [--repo REPO] [--base-ref REF] [--tag TAG] [--identity ABS] [--timeout-seconds 900] [--json]
+  factory run resume --run-id UUID [--identity ABS] [--json]
   factory run status --run-id UUID [--json]
   factory dashboard [--port 4600]
   factory observer serve [--port 4600]
@@ -42,6 +43,14 @@ export interface RunExecuteCommand {
   baseRef: string;
   tag: string;
   timeoutSeconds: number;
+}
+
+export interface RunResumeCommand {
+  command: "run-resume";
+  runId: string;
+  identity?: string;
+  json?: boolean;
+  timeoutSeconds?: undefined;
 }
 
 export interface RunStatusCommand {
@@ -91,6 +100,7 @@ export type ParsedCli =
   | DirectRunOptions
   | RunStartCommand
   | RunExecuteCommand
+  | RunResumeCommand
   | RunStatusCommand
   | ObserverServeCommand
   | ObserverReadCommand

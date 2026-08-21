@@ -322,6 +322,22 @@ test("terminal telemetry permits only later cleanup reconciliation", () => {
   }
 });
 
+test("decision expiry is an honest cancelled terminal", () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-telemetry-"));
+  try {
+    const writer = createTelemetryWriter(root, runId);
+    writer.append({ type: "run_created", actor: "controller", payload: { status: "created" } });
+    writer.append({
+      type: "run_finished",
+      actor: "controller",
+      payload: { status: "cancelled", cleanup: "complete", reason: "decision_expired" },
+    });
+    assert.equal(readTelemetry(writer.path).at(-1)?.type, "run_finished");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("replay rejects a complete sequence gap", () => {
   const root = mkdtempSync(join(tmpdir(), "factory-telemetry-"));
   const path = telemetryPath(root, runId);

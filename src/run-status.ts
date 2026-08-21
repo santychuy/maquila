@@ -10,7 +10,8 @@ export type RunStatusName =
   | "awaiting_decision"
   | "ready_for_publication"
   | "completed"
-  | "failed";
+  | "failed"
+  | "cancelled";
 
 export interface RunStatusSummary {
   version: 1;
@@ -159,9 +160,12 @@ export function foldRunStatus(options: FoldRunStatusOptions): RunStatusSummary {
   if (phaseStartedAt !== undefined && !terminal)
     summary.phaseRuntimeMilliseconds = Math.max(0, now - phaseStartedAt);
   if (!terminal) {
-    const freshness = Date.parse(summary.lastActivity ?? "");
-    if (!Number.isFinite(freshness) || now - freshness > (options.staleAfterMs ?? 30_000))
-      summary.status = "activity_unknown";
+    if (summary.phase === "awaiting_decision") summary.status = "awaiting_decision";
+    else {
+      const freshness = Date.parse(summary.lastActivity ?? "");
+      if (!Number.isFinite(freshness) || now - freshness > (options.staleAfterMs ?? 30_000))
+        summary.status = "activity_unknown";
+    }
   }
   return summary;
 }

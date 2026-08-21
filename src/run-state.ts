@@ -35,6 +35,15 @@ export interface ControllerVm {
   status: string;
 }
 
+export interface ControllerDecisionWait {
+  generation: number;
+  expiresAt: string;
+  plannerRunId: string;
+  plannerSessionId: string;
+  plannerSessionSha256: string;
+  checkpointSha256: string;
+}
+
 export interface ControllerState {
   version: 1;
   runId: string;
@@ -51,6 +60,8 @@ export interface ControllerState {
   updatedAt: string;
   vm?: ControllerVm;
   cleanup: CleanupState;
+  /** Present only while a retained VM is waiting for an engineer decision. */
+  decisionWait?: ControllerDecisionWait;
 }
 
 export type ControllerStateInput = Pick<
@@ -66,24 +77,25 @@ export type ControllerStateInput = Pick<
   | "baseSha"
 >;
 
-const terminal = new Set<ControllerStateName>([
-  "awaiting_decision",
-  "completed",
-  "failed",
-  "cancelled",
-]);
+const terminal = new Set<ControllerStateName>(["completed", "failed", "cancelled"]);
 const retryableClaim = new Set<ControllerStateName>([
-  "awaiting_decision",
   "failed",
   "cancelled",
   "ready_for_publication",
 ]);
+function retryable(state: ControllerState): boolean {
+  return (
+    retryableClaim.has(state.state) ||
+    (state.state === "awaiting_decision" && state.decisionWait === undefined)
+  );
+}
+
 const transitions: Record<ControllerStateName, ControllerStateName[]> = {
   intake: ["creating_vm", "failed", "cancelled"],
   creating_vm: ["bootstrapping", "failed", "cancelled"],
   bootstrapping: ["planning", "failed", "cancelled"],
   planning: ["awaiting_decision", "implementing", "documenting", "failed", "cancelled"],
-  awaiting_decision: [],
+  awaiting_decision: ["planning", "failed", "cancelled"],
   implementing: ["documenting", "verifying", "failed", "cancelled"],
   documenting: ["verifying", "fixing", "failed", "cancelled"],
   verifying: ["reviewing", "fixing", "failed", "cancelled"],
@@ -117,6 +129,29 @@ function isHash(value: unknown, length: number): value is string {
   return typeof value === "string" && new RegExp(`^[0-9a-f]{${length}}$`, "i").test(value);
 }
 
+function isDecisionWait(value: unknown): value is ControllerDecisionWait {
+  return (
+    isRecord(value) &&
+    exactKeys(value, [
+      "generation",
+      "expiresAt",
+      "plannerRunId",
+      "plannerSessionId",
+      "plannerSessionSha256",
+      "checkpointSha256",
+    ]) &&
+    typeof value.generation === "number" &&
+    Number.isInteger(value.generation) &&
+    value.generation >= 1 &&
+    value.generation <= 3 &&
+    isTimestamp(value.expiresAt) &&
+    nonBlank(value.plannerRunId) &&
+    nonBlank(value.plannerSessionId) &&
+    isHash(value.plannerSessionSha256, 64) &&
+    isHash(value.checkpointSha256, 64)
+  );
+}
+
 function isVm(value: unknown): value is ControllerVm {
   return (
     isRecord(value) &&
@@ -145,6 +180,7 @@ function isControllerState(value: unknown): value is ControllerState {
     "updatedAt",
     "cleanup",
     ...(value.vm === undefined ? [] : ["vm"]),
+    ...(value.decisionWait === undefined ? [] : ["decisionWait"]),
   ];
   if (!exactKeys(value, allowed)) return false;
   if (
@@ -165,21 +201,26 @@ function isControllerState(value: unknown): value is ControllerState {
     !isTimestamp(value.createdAt) ||
     !isTimestamp(value.updatedAt) ||
     !["pending", "complete", "not-needed", "failed"].includes(String(value.cleanup)) ||
-    (value.vm !== undefined && !isVm(value.vm))
+    (value.vm !== undefined && !isVm(value.vm)) ||
+    (value.decisionWait !== undefined && !isDecisionWait(value.decisionWait))
   ) {
     return false;
   }
   if (value.vm === undefined && !["not-needed", "complete"].includes(String(value.cleanup)))
     return false;
   if (value.vm !== undefined && value.cleanup === "not-needed") return false;
+  if (value.state === "awaiting_decision") {
+    // Legacy cleaned waits remain readable; retained waits must retain their VM and claim.
+    if (value.decisionWait) return value.vm !== undefined && value.cleanup === "pending";
+    return ["complete", "not-needed"].includes(String(value.cleanup));
+  }
   if (
-    (value.state === "awaiting_decision" ||
-      value.state === "completed" ||
-      value.state === "ready_for_publication") &&
+    (value.state === "completed" || value.state === "ready_for_publication") &&
     !["complete", "not-needed"].includes(String(value.cleanup))
   ) {
     return false;
   }
+  if (value.decisionWait !== undefined) return false;
   return true;
 }
 
@@ -249,7 +290,7 @@ function acquireClaim(runsDir: string, state: ControllerState): void {
     const owner = readFileSync(ownerPath, "utf8").trim();
     const ownerDir = resolve(runsDir, owner);
     const previous = readControllerState(ownerDir);
-    if (!retryableClaim.has(previous.state)) {
+    if (!retryable(previous)) {
       throw new Error("duplicate active or completed idempotency key", { cause: error });
     }
     releaseClaim(runsDir, previous);
@@ -278,7 +319,7 @@ export function createControllerState(
   acquireClaim(runsDir, state);
   try {
     for (const previous of listStates(runsDir)) {
-      if (previous.idempotencyKey === input.idempotencyKey && !retryableClaim.has(previous.state)) {
+      if (previous.idempotencyKey === input.idempotencyKey && !retryable(previous)) {
         throw new Error("duplicate active or completed idempotency key");
       }
     }
@@ -298,10 +339,53 @@ export function transitionControllerState(
   if (!transitions[current.state].includes(next)) {
     throw new Error(`invalid transition: ${current.state} -> ${next}`);
   }
-  const state = { ...current, state: next, updatedAt: new Date().toISOString() };
+  if (current.state === "awaiting_decision" && !current.decisionWait && next === "planning")
+    throw new Error("legacy decision wait cannot resume");
+  const { decisionWait: _decisionWait, ...withoutDecisionWait } = current;
+  const state = {
+    ...withoutDecisionWait,
+    state: next,
+    updatedAt: new Date().toISOString(),
+  };
   writeControllerState(runDir, state);
-  if (next === "awaiting_decision" || next === "failed" || next === "cancelled")
+  if (
+    next === "failed" ||
+    next === "cancelled" ||
+    (next === "awaiting_decision" && current.decisionWait === undefined)
+  )
     releaseClaim(resolve(runDir, ".."), state);
+  return state;
+}
+
+export function beginControllerDecisionWait(
+  runDir: string,
+  decisionWait: ControllerDecisionWait,
+): ControllerState {
+  if (!isDecisionWait(decisionWait)) throw new Error("invalid decision wait");
+  const current = readControllerState(runDir);
+  if (current.state !== "planning" || !current.vm || current.cleanup !== "pending")
+    throw new Error("decision wait requires a live planning VM");
+  const state: ControllerState = {
+    ...current,
+    state: "awaiting_decision",
+    decisionWait,
+    updatedAt: new Date().toISOString(),
+  };
+  writeControllerState(runDir, state);
+  return state;
+}
+
+export function replaceControllerDecisionVm(runDir: string, vm: ControllerVm): ControllerState {
+  if (!isVm(vm)) throw new Error("invalid controller VM");
+  const current = readControllerState(runDir);
+  if (
+    current.state !== "awaiting_decision" ||
+    !current.decisionWait ||
+    current.cleanup !== "pending"
+  )
+    throw new Error("VM replacement requires a retained decision wait");
+  const state: ControllerState = { ...current, vm, updatedAt: new Date().toISOString() };
+  writeControllerState(runDir, state);
   return state;
 }
 
@@ -359,8 +443,10 @@ export function recoverStaleControllerClaims(runsDir: string): void {
 }
 
 export function scanRecoverableControllerStates(runsDir: string): ControllerState[] {
-  return listStates(runsDir).filter(
-    (state) => !terminal.has(state.state) && state.state !== "ready_for_publication",
+  return listStates(runsDir).filter((state) =>
+    state.state === "awaiting_decision"
+      ? state.decisionWait !== undefined
+      : !terminal.has(state.state) && state.state !== "ready_for_publication",
   );
 }
 

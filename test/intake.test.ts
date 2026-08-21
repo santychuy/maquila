@@ -161,6 +161,16 @@ test("Linear decision comments mention assignee and accept latest assigned Decis
     {
       body: {
         data: {
+          issue: {
+            id: "issue-1",
+            comments: { nodes: [], pageInfo: { hasNextPage: false } },
+          },
+        },
+      },
+    },
+    {
+      body: {
+        data: {
           commentCreate: {
             success: true,
             comment: { id: "comment-1", url: "https://linear.app/example/comment-1" },
@@ -174,19 +184,35 @@ test("Linear decision comments mention assignee and accept latest assigned Decis
       fetch: created.fetch,
       token: "secret",
       issueId: "issue-1",
+      assigneeId: "user-1",
       assigneeUrl: "https://linear.app/example/profiles/santiago",
       runId: "11111111-1111-4111-8111-111111111111",
+      generation: 1,
+      requestedAt: "2026-01-01T00:00:00.000Z",
       decisions: ["Keep the sign-in card?"],
     }),
-    { commentId: "comment-1", commentUrl: "https://linear.app/example/comment-1" },
+    {
+      commentId: "comment-1",
+      commentUrl: "https://linear.app/example/comment-1",
+      issueId: "issue-1",
+      assigneeId: "user-1",
+      generation: 1,
+      questionSha256: "c3cdd28ea02541b1c26e6af63ee415b252d2ccc32361e83d4df0bcc1e91b0f21",
+      questionCount: 1,
+      requestedAt: "2026-01-01T00:00:00.000Z",
+      marker:
+        "<!-- factory-decision:11111111-1111-4111-8111-111111111111:1:c3cdd28ea02541b1c26e6af63ee415b252d2ccc32361e83d4df0bcc1e91b0f21 -->",
+    },
   );
-  const rawCreateBody = created.calls[0]?.init?.body;
+  const rawCreateBody = created.calls[1]?.init?.body;
   if (typeof rawCreateBody !== "string") assert.fail("expected decision comment request body");
   const createBody = JSON.parse(rawCreateBody) as {
     variables: { input: { body: string } };
   };
   assert.match(createBody.variables.input.body, /profiles\/santiago/);
-  assert.match(createBody.variables.input.body, /Decision:/);
+  assert.match(createBody.variables.input.body, /Decision:\n1\. <answer>/);
+  assert.match(createBody.variables.input.body, /paused this run/);
+  assert.match(createBody.variables.input.body, /factory-decision:/);
 
   const replies = sequence([
     {
@@ -225,6 +251,87 @@ test("Linear decision comments mention assignee and accept latest assigned Decis
   assert.equal(reply?.commentId, "reply-1");
   assert.equal(reply?.body, "Keep the sign-in card");
   assert.match(reply?.sha256 ?? "", /^[0-9a-f]{64}$/);
+});
+
+test("Linear decision reply pins request identity and paginates", async () => {
+  const request = {
+    commentId: "comment-1",
+    commentUrl: "https://linear.app/example/comment-1",
+    issueId: "issue-1",
+    assigneeId: "user-1",
+    generation: 1,
+    questionSha256: "c3cdd28ea02541b1c26e6af63ee415b252d2ccc32361e83d4df0bcc1e91b0f21",
+    questionCount: 1,
+    requestedAt: "2026-01-01T00:00:00.000Z",
+    marker:
+      "<!-- factory-decision:11111111-1111-4111-8111-111111111111:1:c3cdd28ea02541b1c26e6af63ee415b252d2ccc32361e83d4df0bcc1e91b0f21 -->",
+  };
+  const page = (nodes: unknown[], hasNextPage: boolean, endCursor: string | null) => ({
+    data: {
+      comment: {
+        id: "comment-1",
+        body: request.marker,
+        issue: { id: "issue-1", assignee: { id: "other-user" } },
+        children: { nodes, pageInfo: { hasNextPage, endCursor } },
+      },
+    },
+  });
+  const replies = sequence([
+    {
+      body: page(
+        [
+          {
+            id: "stale",
+            body: "Decision:\n1. old",
+            createdAt: "2025-12-31T00:00:00.000Z",
+            user: { id: "user-1" },
+          },
+          {
+            id: "wrong",
+            body: "Decision:\n1. wrong",
+            createdAt: "2026-01-02T00:00:00.000Z",
+            user: { id: "other-user" },
+          },
+        ],
+        true,
+        "cursor-1",
+      ),
+    },
+    {
+      body: page(
+        [
+          {
+            id: "first",
+            body: "Decision:\n1. first",
+            createdAt: "2026-01-02T00:00:00.000Z",
+            user: { id: "user-1" },
+          },
+          {
+            id: "last",
+            body: "Decision:\n1. last",
+            createdAt: "2026-01-03T00:00:00.000Z",
+            user: { id: "user-1" },
+          },
+          {
+            id: "bad",
+            body: "Decision: unnumbered",
+            createdAt: "2026-01-04T00:00:00.000Z",
+            user: { id: "user-1" },
+          },
+        ],
+        false,
+        null,
+      ),
+    },
+  ]);
+  const reply = await fetchLinearDecisionReply({ fetch: replies.fetch, token: "secret", request });
+  assert.equal(reply?.commentId, "last");
+  assert.equal(reply?.body, "1. last");
+  assert.equal(replies.calls.length, 2);
+  const rawSecond = replies.calls[1]?.init?.body;
+  if (typeof rawSecond !== "string") assert.fail("expected pagination request body");
+  const second = JSON.parse(rawSecond) as { variables: { after: string } };
+  assert.equal(second.variables.after, "cursor-1");
 });
 
 test("Linear transport failures never expose token", async () => {

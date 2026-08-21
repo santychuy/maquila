@@ -20,15 +20,19 @@ import {
   createLinearDecisionComment,
   LinearIssueValidationError,
   type LinearDecisionReply,
+  type LinearDecisionRequest as LinearDecisionThreadRequest,
 } from "./integrations/linear.js";
 import { publishGitHubPullRequest, type GitHubPublication } from "./integrations/github.js";
-import { parseEnvelope } from "./envelope.js";
+import { parseEnvelope, type EnvelopeParseResult, type PlannerEnvelope } from "./envelope.js";
 import { assertSafeRepoPath } from "./verify.js";
 import { ExeClient, ExeCommandError } from "./integrations/exe.js";
 import {
+  beginControllerDecisionWait,
   createControllerState,
+  readControllerState,
   recordControllerCleanup,
   recordControllerVm,
+  replaceControllerDecisionVm,
   recoverStaleControllerClaims,
   scanRecoverableControllerStates,
   transitionControllerState,
@@ -66,6 +70,7 @@ const NODE_CHECKSUMS: Record<string, string> = {
 };
 const MAX_PATCH = 1_000_000;
 const MAX_EVIDENCE_ARCHIVE = 50 * 1024 * 1024;
+const MAX_SESSION_CHECKPOINT = 8 * 1024 * 1024;
 const REMOTE_RUN = `${REMOTE_FACTORY}/.factory/runs/`;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 type RemotePhase = RemoteEvent["phase"];
@@ -77,8 +82,11 @@ const PHASE_OWNER: Record<RemotePhase, RemoteActor> = {
   verifying: "verifier",
   reviewing: "reviewer",
 };
-function telemetryPhase(phase: RemotePhase): { id: string; name: RemotePhase; attempt: 1 } {
-  return { id: `${phase}:1`, name: phase, attempt: 1 };
+function telemetryPhase(
+  phase: RemotePhase,
+  attempt = 1,
+): { id: string; name: RemotePhase; attempt: number } {
+  return { id: `${phase}:${attempt}`, name: phase, attempt };
 }
 
 function claimedPaths(paths: string[]): string[] | undefined {
@@ -116,15 +124,19 @@ export interface ControllerOptions {
   heartbeatMilliseconds?: number;
   decision?: ControllerDecisionContext;
   createDecisionComment?: typeof createLinearDecisionComment;
+  inlineDecisionWaiter?: (
+    request: ControllerDecisionRequest,
+    expiresAt: string,
+  ) => Promise<LinearDecisionReply>;
+  /** Internal entry used by `factory run resume`; never accepted from remote input. */
+  resumeExisting?: boolean;
 }
 export interface ControllerDecisionContext extends LinearDecisionReply {
   previousRunId: string;
   requestCommentId: string;
 }
-export interface ControllerDecisionRequest {
+export interface ControllerDecisionRequest extends LinearDecisionThreadRequest {
   runId: string;
-  commentId: string;
-  commentUrl: string;
   continuationRunId: string;
   issue: string;
   owner: string;
@@ -155,7 +167,7 @@ export interface ControllerExe {
   copyFrom(destination: string, remotePath: string, localPath: string): Promise<unknown>;
 }
 export interface ControllerResult {
-  status: "awaiting_decision" | "completed" | "failed";
+  status: "awaiting_decision" | "cancelled" | "completed" | "failed";
   runDir: string;
   pullRequest?: GitHubPublication;
   decisionRequest?: ControllerDecisionRequest;
@@ -183,6 +195,10 @@ function json(path: string): unknown {
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
 }
 function safeRepo(owner: string, repo: string): string {
   if (!/^[A-Za-z0-9_.-]+$/.test(owner) || !/^[A-Za-z0-9_.-]+$/.test(repo))
@@ -536,6 +552,74 @@ function validateDecision(value: ControllerDecisionContext | undefined): void {
     throw new Error("invalid controller decision context");
 }
 
+export interface PersistedDecisionRequest {
+  request: ControllerDecisionRequest;
+  generation: number;
+  expiresAt: string;
+  assigneeId: string;
+}
+
+export function readPersistedDecisionRequest(runDir: string): PersistedDecisionRequest {
+  const value: unknown = JSON.parse(readFileSync(resolve(runDir, "decision-request.json"), "utf8"));
+  if (!isRecord(value)) throw new Error("invalid persisted decision request");
+  const request = {
+    runId: stringValue(value.runId),
+    commentId: stringValue(value.commentId),
+    commentUrl: stringValue(value.commentUrl),
+    issueId: stringValue(value.issueId),
+    assigneeId: stringValue(value.assigneeId),
+    generation: typeof value.generation === "number" ? value.generation : Number.NaN,
+    questionSha256: stringValue(value.questionSha256),
+    questionCount: typeof value.questionCount === "number" ? value.questionCount : Number.NaN,
+    requestedAt: stringValue(value.requestedAt),
+    marker: stringValue(value.marker),
+    continuationRunId: stringValue(value.continuationRunId),
+    issue: stringValue(value.issue),
+    owner: stringValue(value.owner),
+    repo: stringValue(value.repo),
+    baseRef: stringValue(value.baseRef),
+    tag: stringValue(value.tag),
+    timeoutSeconds: typeof value.timeoutSeconds === "number" ? value.timeoutSeconds : Number.NaN,
+  };
+  if (
+    !UUID.test(request.runId) ||
+    request.continuationRunId !== request.runId ||
+    !request.commentId ||
+    !request.commentUrl.startsWith("https://linear.app/") ||
+    !request.issueId ||
+    !request.assigneeId ||
+    !Number.isInteger(request.generation) ||
+    request.generation < 1 ||
+    request.generation > 3 ||
+    !/^[0-9a-f]{64}$/.test(request.questionSha256) ||
+    !Number.isInteger(request.questionCount) ||
+    request.questionCount < 1 ||
+    request.questionCount > 10 ||
+    !Number.isFinite(Date.parse(request.requestedAt)) ||
+    !request.marker ||
+    !request.issue ||
+    !request.owner ||
+    !request.repo ||
+    !request.baseRef ||
+    !request.tag ||
+    !Number.isInteger(request.timeoutSeconds) ||
+    !Number.isInteger(value.generation) ||
+    Number(value.generation) < 1 ||
+    Number(value.generation) > 3 ||
+    typeof value.expiresAt !== "string" ||
+    !Number.isFinite(Date.parse(value.expiresAt)) ||
+    typeof value.assigneeId !== "string" ||
+    !value.assigneeId.trim()
+  )
+    throw new Error("invalid persisted decision request");
+  return {
+    request,
+    generation: Number(value.generation),
+    expiresAt: value.expiresAt,
+    assigneeId: value.assigneeId,
+  };
+}
+
 function publicFailureDetail(error: unknown): string | undefined {
   if (error instanceof LinearIssueValidationError) return error.message;
   if (error instanceof ExeCommandError) {
@@ -569,6 +653,43 @@ async function streamed(
   const parser = new RemoteProtocolParser(onEvent);
   await exe.execStream(destination, argv, (chunk) => parser.push(chunk), timeout);
   return parser.finish();
+}
+
+function acquireDecisionResumeLease(runDir: string): () => void {
+  const path = resolve(runDir, "decision-resume-owner.json");
+  const claim = (): void => {
+    const processIdentity = linuxProcessIdentity(process.pid);
+    if (!processIdentity) throw new Error("controller process identity unavailable");
+    try {
+      writeFileSync(
+        path,
+        `${JSON.stringify({ version: 1, pid: process.pid, processIdentity })}\n`,
+        { mode: 0o600, flag: "wx" },
+      );
+    } catch (error) {
+      let owner: unknown;
+      try {
+        owner = JSON.parse(readFileSync(path, "utf8"));
+      } catch {
+        owner = undefined;
+      }
+      if (
+        isRecord(owner) &&
+        typeof owner.pid === "number" &&
+        typeof owner.processIdentity === "string" &&
+        linuxProcessIdentity(owner.pid) === owner.processIdentity
+      )
+        throw new Error("decision resume is already active", { cause: error });
+      rmSync(path, { force: true });
+      writeFileSync(
+        path,
+        `${JSON.stringify({ version: 1, pid: process.pid, processIdentity })}\n`,
+        { mode: 0o600, flag: "wx" },
+      );
+    }
+  };
+  claim();
+  return () => rmSync(path, { force: true });
 }
 
 interface AttemptRecoveryRecord {
@@ -647,10 +768,26 @@ async function recover(root: string, exe: ControllerExe): Promise<void> {
   if (!existsSync(controllers)) return;
   recoverStaleControllerClaims(controllers);
   for (const state of scanRecoverableControllerStates(controllers)) {
+    const expiredDecisionWait =
+      state.state === "awaiting_decision" &&
+      state.decisionWait !== undefined &&
+      Date.now() >= Date.parse(state.decisionWait.expiresAt);
+    // A persisted, unexpired decision wait intentionally survives controller restarts.
+    if (state.state === "awaiting_decision" && state.decisionWait && !expiredDecisionWait) continue;
     const runDir = resolve(controllers, state.runId);
     const name =
       state.vm?.name ?? (state.state === "creating_vm" ? vmName(state.runId) : undefined);
     let cleanup = state.cleanup;
+    if (state.vm && expiredDecisionWait) {
+      try {
+        await remote(
+          exe,
+          state.vm.sshDest,
+          ["rm", "-f", "/home/exedev/.pi/agent/models.json"],
+          30_000,
+        );
+      } catch {}
+    }
     if (name) {
       const result = await exe.destroyVm(name);
       if (!result.destroyed && !result.notFound)
@@ -658,7 +795,7 @@ async function recover(root: string, exe: ControllerExe): Promise<void> {
       cleanup = "complete";
       recordControllerCleanup(runDir, "complete");
     }
-    transitionControllerState(runDir, "failed");
+    transitionControllerState(runDir, expiredDecisionWait ? "cancelled" : "failed");
 
     // Cleanup authority wins over observability: corrupt or unavailable telemetry
     // must never strand a VM during recovery.
@@ -682,16 +819,31 @@ async function recover(root: string, exe: ControllerExe): Promise<void> {
           actor: "controller",
           payload: { cleanup: "complete" },
         });
-      telemetry.append({
-        type: "failure",
-        actor: "controller",
-        payload: { stage: "recovery", message: "abandoned controller run" },
-      });
+      if (!expiredDecisionWait)
+        telemetry.append({
+          type: "failure",
+          actor: "controller",
+          payload: { stage: "recovery", message: "abandoned controller run" },
+        });
       telemetry.append({
         type: "run_finished",
         actor: "controller",
-        payload: { status: "failed", cleanup },
+        payload: {
+          status: expiredDecisionWait ? "cancelled" : "failed",
+          cleanup,
+          ...(expiredDecisionWait ? { reason: "decision_expired" } : {}),
+        },
       });
+      if (expiredDecisionWait)
+        writeJson(resolve(runDir, "receipt.json"), {
+          kind: "controller",
+          status: "cancelled",
+          stage: "decision_expired",
+          startedAt: state.createdAt,
+          finishedAt: new Date().toISOString(),
+          cleanup,
+          artifacts: readdirArtifacts(runDir),
+        });
     } catch {}
   }
 }
@@ -712,7 +864,7 @@ export async function runController(options: ControllerOptions): Promise<Control
   const root = resolve(options.root ?? process.cwd());
   const factoryRoot = resolve(options.factoryRoot ?? process.cwd());
   const exe = options.exe ?? new ExeClient(undefined, 30_000, options.identity);
-  const lock = acquireControllerLock(root);
+  let lock = acquireControllerLock(root);
   const runId = options.runId ?? randomUUID();
   const provisional = resolve(root, ".factory", "attempts", runId);
   const startedAt = new Date().toISOString();
@@ -721,25 +873,35 @@ export async function runController(options: ControllerOptions): Promise<Control
   let failure: string | undefined;
   try {
     telemetry = (options.telemetry ?? createTelemetryWriter)(root, runId);
-    telemetry.append({ type: "run_created", actor: "controller", payload: { status: "created" } });
-    telemetry.append({ type: "run_started", actor: "controller", payload: { status: "running" } });
-    mkdirSync(provisional, { recursive: true, mode: 0o700 });
-    const processIdentity = linuxProcessIdentity(process.pid);
-    if (!processIdentity) throw new Error("controller process identity unavailable");
-    writeJson(resolve(provisional, "recovery.json"), {
-      version: 1,
-      runId,
-      pid: process.pid,
-      processIdentity,
-      startedAt,
-    } satisfies AttemptRecoveryRecord);
-    writeJson(resolve(provisional, "receipt.json"), {
-      kind: "controller",
-      status: "failed",
-      startedAt,
-      artifacts: ["receipt.json"],
-    });
-    options.onAccepted?.();
+    if (!options.resumeExisting) {
+      telemetry.append({
+        type: "run_created",
+        actor: "controller",
+        payload: { status: "created" },
+      });
+      telemetry.append({
+        type: "run_started",
+        actor: "controller",
+        payload: { status: "running" },
+      });
+      mkdirSync(provisional, { recursive: true, mode: 0o700 });
+      const processIdentity = linuxProcessIdentity(process.pid);
+      if (!processIdentity) throw new Error("controller process identity unavailable");
+      writeJson(resolve(provisional, "recovery.json"), {
+        version: 1,
+        runId,
+        pid: process.pid,
+        processIdentity,
+        startedAt,
+      } satisfies AttemptRecoveryRecord);
+      writeJson(resolve(provisional, "receipt.json"), {
+        kind: "controller",
+        status: "failed",
+        startedAt,
+        artifacts: ["receipt.json"],
+      });
+      options.onAccepted?.();
+    }
   } catch (error) {
     lock.release();
     throw error;
@@ -814,14 +976,15 @@ export async function runController(options: ControllerOptions): Promise<Control
     next: Parameters<typeof transitionControllerState>[1],
     actor: TelemetryInput["actor"] = "controller",
     sourceAt?: string,
+    attempt = 1,
   ): ControllerState => {
     closeHostPhase();
-    const nextState = transitionControllerState(runDir, next);
+    const nextState = state?.state === next ? state : transitionControllerState(runDir, next);
     state = nextState;
     emit({
       type: "phase_started",
       actor,
-      phase: { id: `${next}:1`, name: next, attempt: 1 },
+      phase: { id: `${next}:${attempt}`, name: next, attempt },
       ...(sourceAt ? { sourceAt } : {}),
       payload: {},
     });
@@ -839,6 +1002,12 @@ export async function runController(options: ControllerOptions): Promise<Control
   try {
     await recover(root, exe);
     stage = "intake";
+    const runDir = resolve(root, ".factory", "controllers", runId);
+    let vm: { vmName: string; sshDest: string; status: string };
+    let initialPlannerAttempt = 1;
+    let initialResumeSession: { sessionId: string; sha256: string } | undefined;
+    let replacementVm = false;
+    const resuming = options.resumeExisting === true;
     const intake = await (options.intake ?? createIntake)(
       { token: options.linearToken, issue: options.issue },
       {
@@ -848,87 +1017,288 @@ export async function runController(options: ControllerOptions): Promise<Control
         baseRef: options.baseRef,
       },
     );
-    const idempotencyKey = options.decision
-      ? createHash("sha256")
-          .update(`${intake.idempotencyKey}:${options.decision.sha256}`)
-          .digest("hex")
-      : intake.idempotencyKey;
-    intakeSnapshot = { ...intake, idempotencyKey };
-    const runDir = resolve(root, ".factory", "controllers", runId);
-    const decisionContext = options.decision
-      ? `\n\n## Human decision\n\nLinear reply ${options.decision.commentId}:\n${options.decision.body}\n`
-      : "";
-    writeFileSync(
-      resolve(provisional, "issue.md"),
-      `${intake.issue.title}\n\n${intake.issue.description}${decisionContext}\n`,
-      { mode: 0o600 },
-    );
-    writeJson(resolve(provisional, "intake.json"), {
-      issue: intake.issue,
-      repository: intake.repository,
-      idempotencyKey,
-      ...(options.decision ? { decision: options.decision } : {}),
-    });
-    stage = "state";
-    state = createControllerState(runDir, {
-      runId: basename(runDir),
-      idempotencyKey,
-      issueUuid: intake.issue.uuid,
-      issueSnapshotSha256: intake.issue.snapshotSha256,
-      repositoryId: intake.repository.repositoryId,
-      repositoryFullName: intake.repository.fullName,
-      repositorySnapshotSha256: intake.repository.snapshotSha256,
-      baseRef: intake.repository.baseRef,
-      baseSha: intake.repository.baseSha,
-    });
-    for (const name of ["receipt.json", "issue.md", "intake.json"]) {
-      renameSync(resolve(provisional, name), resolve(runDir, name));
-    }
-    rmSync(provisional, { recursive: true, force: true });
-    evidenceDir = runDir;
-    advance(runDir, "creating_vm");
-    const vm = await exe.createVm({ name: vmName(state.runId), tag: options.tag });
-    state = recordControllerVm(runDir, { name: vm.vmName, sshDest: vm.sshDest, status: vm.status });
-    cleanupOutcome = "pending";
-    emit({ type: "cleanup_updated", actor: "controller", payload: { cleanup: "pending" } });
-    for (let attempt = 0; attempt < 12; attempt += 1) {
+    if (resuming) {
+      state = readControllerState(runDir);
+      let persisted: PersistedDecisionRequest;
       try {
-        await remote(exe, vm.sshDest, ["true"], 30_000);
-        break;
+        persisted = readPersistedDecisionRequest(runDir);
       } catch (error) {
-        if (attempt === 11) throw error;
-        await (
-          options.sleep ?? ((milliseconds) => new Promise((done) => setTimeout(done, milliseconds)))
-        )(5_000);
+        if (state.state === "awaiting_decision" && state.decisionWait)
+          state = transitionControllerState(runDir, "failed");
+        throw error;
       }
+      const wait = state.decisionWait;
+      if (
+        state.runId !== runId ||
+        state.state !== "awaiting_decision" ||
+        state.cleanup !== "pending" ||
+        !state.vm ||
+        !wait ||
+        persisted.request.runId !== runId ||
+        persisted.request.issue !== options.issue ||
+        persisted.request.owner !== options.owner ||
+        persisted.request.repo !== options.repo ||
+        persisted.request.baseRef !== options.baseRef ||
+        persisted.request.tag !== options.tag ||
+        persisted.generation !== wait.generation ||
+        persisted.expiresAt !== wait.expiresAt ||
+        Date.now() >= Date.parse(wait.expiresAt)
+      ) {
+        if (state.state === "awaiting_decision" && state.decisionWait)
+          state = transitionControllerState(runDir, "failed");
+        throw new Error("controller decision wait is not resumable");
+      }
+      const checkpoint = resolve(runDir, "planner-session.jsonl");
+      if (
+        !existsSync(checkpoint) ||
+        statSync(checkpoint).size > MAX_SESSION_CHECKPOINT ||
+        hash(checkpoint) !== wait.checkpointSha256
+      ) {
+        state = transitionControllerState(runDir, "failed");
+        throw new Error("planner session checkpoint is invalid");
+      }
+      assertSecretAbsent(readFileSync(checkpoint), [options.openRouterKey]);
+      if (
+        intake.issue.snapshotSha256 !== state.issueSnapshotSha256 ||
+        intake.repository.snapshotSha256 !== state.repositorySnapshotSha256 ||
+        intake.repository.baseSha !== state.baseSha
+      ) {
+        state = transitionControllerState(runDir, "failed");
+        throw new Error("decision wait input drifted");
+      }
+      if (!options.inlineDecisionWaiter) throw new Error("decision resume waiter missing");
+      evidenceDir = runDir;
+      cleanupOutcome = "pending";
+      let releaseResumeLease: () => void;
+      try {
+        releaseResumeLease = acquireDecisionResumeLease(runDir);
+      } catch {
+        decisionRequest = persisted.request;
+        throw new PlannerDecisionRequired(persisted.request);
+      }
+      lock.release();
+      let decision: LinearDecisionReply;
+      try {
+        decision = await options.inlineDecisionWaiter(persisted.request, wait.expiresAt);
+      } catch (error) {
+        releaseResumeLease();
+        lock = acquireControllerLock(root);
+        state = transitionControllerState(
+          runDir,
+          Date.now() >= Date.parse(wait.expiresAt) ? "cancelled" : "failed",
+        );
+        throw error;
+      }
+      lock = acquireControllerLock(root);
+      releaseResumeLease();
+      if (
+        Date.now() >= Date.parse(wait.expiresAt) ||
+        Date.parse(decision.createdAt) > Date.parse(wait.expiresAt)
+      ) {
+        state = transitionControllerState(runDir, "cancelled");
+        throw new Error("decision wait expired");
+      }
+      const refreshed = await (options.intake ?? createIntake)(
+        { token: options.linearToken, issue: options.issue },
+        {
+          token: options.githubToken,
+          owner: options.owner,
+          repo: options.repo,
+          baseRef: options.baseRef,
+        },
+      );
+      if (
+        refreshed.issue.snapshotSha256 !== state.issueSnapshotSha256 ||
+        refreshed.repository.snapshotSha256 !== state.repositorySnapshotSha256 ||
+        refreshed.repository.baseSha !== state.baseSha
+      ) {
+        state = transitionControllerState(runDir, "failed");
+        throw new Error("decision wait input drifted");
+      }
+      const current = readControllerState(runDir);
+      if (current.updatedAt !== state.updatedAt || current.state !== "awaiting_decision")
+        throw new Error("decision wait changed while accepting reply");
+      try {
+        await remote(exe, current.vm!.sshDest, ["true"], 30_000);
+      } catch {
+        const replacementPath = resolve(runDir, "decision-vm-replacement.json");
+        writeFileSync(
+          replacementPath,
+          `${JSON.stringify({ version: 1, attemptedAt: new Date().toISOString() })}\n`,
+          { mode: 0o600, flag: "wx" },
+        );
+        await exe.destroyVm(current.vm!.name).catch(() => ({ destroyed: false, notFound: true }));
+        const replacement = await exe.createVm({ name: vmName(runId), tag: options.tag });
+        state = replaceControllerDecisionVm(runDir, {
+          name: replacement.vmName,
+          sshDest: replacement.sshDest,
+          status: replacement.status,
+        });
+        vm = replacement;
+        replacementVm = true;
+        for (let attempt = 0; attempt < 12; attempt += 1) {
+          try {
+            await remote(exe, vm.sshDest, ["true"], 30_000);
+            break;
+          } catch (error) {
+            if (attempt === 11) throw error;
+            await (
+              options.sleep ??
+              ((milliseconds) => new Promise((done) => setTimeout(done, milliseconds)))
+            )(5_000);
+          }
+        }
+        await remote(
+          exe,
+          vm.sshDest,
+          [
+            "git",
+            "clone",
+            `https://github.int.exe.xyz/${state.repositoryFullName}.git`,
+            REMOTE_WORK,
+          ],
+          120_000,
+        );
+        await remote(
+          exe,
+          vm.sshDest,
+          ["git", "-C", REMOTE_WORK, "checkout", "--detach", state.baseSha],
+          30_000,
+        );
+      }
+      vm = { vmName: state.vm!.name, sshDest: state.vm!.sshDest, status: state.vm!.status };
+      if (
+        (
+          await remote(exe, vm.sshDest, ["git", "-C", REMOTE_WORK, "rev-parse", "HEAD"], 30_000)
+        ).trim() !== state.baseSha ||
+        (
+          await remote(exe, vm.sshDest, ["git", "-C", REMOTE_WORK, "status", "--porcelain"], 30_000)
+        ).trim()
+      )
+        throw new Error("retained decision workspace changed");
+      if (!replacementVm)
+        await remote(exe, vm.sshDest, ["test", "-x", `${REMOTE_FACTORY}/dist/factory`], 30_000);
+      writeJson(resolve(runDir, "decision-accepted.json"), {
+        version: 1,
+        generation: wait.generation,
+        requestCommentId: persisted.request.commentId,
+        decision,
+      });
+      const localIssue = resolve(runDir, "issue.md");
+      writeFileSync(
+        localIssue,
+        `${readFileSync(localIssue, "utf8").trimEnd()}\n\n## Engineer decision ${wait.generation}\n\n${decision.body}\n`,
+        { mode: 0o600 },
+      );
+      state = transitionControllerState(runDir, "planning");
+      emit({
+        type: "phase_finished",
+        actor: "controller",
+        phase: {
+          id: `awaiting_decision:${wait.generation}`,
+          name: "awaiting_decision",
+          attempt: wait.generation,
+        },
+        payload: { status: "completed" },
+      });
+      vm = { vmName: state.vm!.name, sshDest: state.vm!.sshDest, status: state.vm!.status };
+      initialPlannerAttempt = wait.generation + 1;
+      initialResumeSession = { sessionId: wait.plannerSessionId, sha256: wait.checkpointSha256 };
+      intakeSnapshot = { ...intake, idempotencyKey: state.idempotencyKey };
+    } else {
+      const idempotencyKey = options.decision
+        ? createHash("sha256")
+            .update(`${intake.idempotencyKey}:${options.decision.sha256}`)
+            .digest("hex")
+        : intake.idempotencyKey;
+      intakeSnapshot = { ...intake, idempotencyKey };
+      const decisionContext = options.decision
+        ? `\n\n## Human decision\n\nLinear reply ${options.decision.commentId}:\n${options.decision.body}\n`
+        : "";
+      writeFileSync(
+        resolve(provisional, "issue.md"),
+        `${intake.issue.title}\n\n${intake.issue.description}${decisionContext}\n`,
+        { mode: 0o600 },
+      );
+      writeJson(resolve(provisional, "intake.json"), {
+        issue: intake.issue,
+        repository: intake.repository,
+        idempotencyKey,
+        ...(options.decision ? { decision: options.decision } : {}),
+      });
+      stage = "state";
+      state = createControllerState(runDir, {
+        runId: basename(runDir),
+        idempotencyKey,
+        issueUuid: intake.issue.uuid,
+        issueSnapshotSha256: intake.issue.snapshotSha256,
+        repositoryId: intake.repository.repositoryId,
+        repositoryFullName: intake.repository.fullName,
+        repositorySnapshotSha256: intake.repository.snapshotSha256,
+        baseRef: intake.repository.baseRef,
+        baseSha: intake.repository.baseSha,
+      });
+      for (const name of ["receipt.json", "issue.md", "intake.json"])
+        renameSync(resolve(provisional, name), resolve(runDir, name));
+      rmSync(provisional, { recursive: true, force: true });
+      evidenceDir = runDir;
+      advance(runDir, "creating_vm");
+      vm = await exe.createVm({ name: vmName(state.runId), tag: options.tag });
+      state = recordControllerVm(runDir, {
+        name: vm.vmName,
+        sshDest: vm.sshDest,
+        status: vm.status,
+      });
+      cleanupOutcome = "pending";
+      emit({ type: "cleanup_updated", actor: "controller", payload: { cleanup: "pending" } });
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        try {
+          await remote(exe, vm.sshDest, ["true"], 30_000);
+          break;
+        } catch (error) {
+          if (attempt === 11) throw error;
+          await (
+            options.sleep ??
+            ((milliseconds) => new Promise((done) => setTimeout(done, milliseconds)))
+          )(5_000);
+        }
+      }
+      advance(runDir, "bootstrapping");
+      publicFailureMessage = "repository clone failed";
+      await remote(
+        exe,
+        vm.sshDest,
+        ["git", "clone", `https://github.int.exe.xyz/${state.repositoryFullName}.git`, REMOTE_WORK],
+        120_000,
+      );
+      publicFailureMessage = "repository checkout failed";
+      await remote(
+        exe,
+        vm.sshDest,
+        ["git", "-C", REMOTE_WORK, "checkout", "--detach", state.baseSha],
+        30_000,
+      );
+      if (
+        (
+          await remote(exe, vm.sshDest, ["git", "-C", REMOTE_WORK, "rev-parse", "HEAD"], 30_000)
+        ).trim() !== state.baseSha
+      )
+        throw new Error("remote checkout SHA mismatch");
     }
-    advance(runDir, "bootstrapping");
-    publicFailureMessage = "repository clone failed";
-    await remote(
-      exe,
-      vm.sshDest,
-      ["git", "clone", `https://github.int.exe.xyz/${state.repositoryFullName}.git`, REMOTE_WORK],
-      120_000,
-    );
-    publicFailureMessage = "repository checkout failed";
-    await remote(
-      exe,
-      vm.sshDest,
-      ["git", "-C", REMOTE_WORK, "checkout", "--detach", state.baseSha],
-      30_000,
-    );
-    if (
-      (
-        await remote(exe, vm.sshDest, ["git", "-C", REMOTE_WORK, "rev-parse", "HEAD"], 30_000)
-      ).trim() !== state.baseSha
-    )
-      throw new Error("remote checkout SHA mismatch");
     publicFailureMessage = "runtime archive creation failed";
     archive = archiveFactory(factoryRoot);
-    writeJson(resolve(runDir, "runtime.json"), {
-      factorySha: archive.sha,
-      sha256: hash(archive.path),
-    });
+    const runtimePath = resolve(runDir, "runtime.json");
+    if (resuming) {
+      const runtime: unknown = JSON.parse(readFileSync(runtimePath, "utf8"));
+      if (
+        !isRecord(runtime) ||
+        runtime.factorySha !== archive.sha ||
+        runtime.sha256 !== hash(archive.path)
+      )
+        throw new Error("controller runtime changed during decision wait");
+    } else {
+      writeJson(runtimePath, { factorySha: archive.sha, sha256: hash(archive.path) });
+    }
     const archivedRole = (role: "planner" | "worker" | "documenter" | "reviewer") => {
       const filePath = `src/agents/${role}.md`;
       const source = execFileSync("git", ["show", `${archive!.sha}:${filePath}`], {
@@ -948,127 +1318,151 @@ export async function runController(options: ControllerOptions): Promise<Control
       const models = resolve(configDir, "models.json");
       writeJson(models, { providers: { openrouter: { apiKey: options.openRouterKey } } });
       chmodSync(models, 0o600);
-      publicFailureMessage = "bootstrap architecture detection failed";
-      const machine = (await remote(exe, vm.sshDest, ["uname", "-m"], 30_000)).trim();
-      const nodeArch = machine === "x86_64" ? "x64" : machine === "aarch64" ? "arm64" : "";
-      const checksum = NODE_CHECKSUMS[nodeArch];
-      if (!checksum) throw new Error("unsupported exe.dev architecture");
-      const nodeArchive = `/home/exedev/node-v${NODE_VERSION}-linux-${nodeArch}.tar.xz`;
-      publicFailureMessage = "bootstrap directory initialization failed";
-      await remote(
-        exe,
-        vm.sshDest,
-        [
-          "mkdir",
-          "-p",
-          REMOTE_FACTORY,
-          "/home/exedev/.pi/agent",
-          "/home/exedev/.local/node",
-          "/home/exedev/.local/bun",
-        ],
-        30_000,
-      );
-      publicFailureMessage = "Node.js download failed";
-      await remote(
-        exe,
-        vm.sshDest,
-        [
-          "curl",
-          "-fsSLo",
-          nodeArchive,
-          `https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${nodeArch}.tar.xz`,
-        ],
-        120_000,
-      );
-      publicFailureMessage = "Node.js verification failed";
-      const actualChecksum = (await remote(exe, vm.sshDest, ["sha256sum", nodeArchive], 30_000))
-        .trim()
-        .split(/\s+/, 1)[0];
-      if (actualChecksum !== checksum) throw new Error("Node.js archive checksum mismatch");
-      publicFailureMessage = "Node.js installation failed";
-      await remote(
-        exe,
-        vm.sshDest,
-        ["tar", "-xJf", nodeArchive, "-C", "/home/exedev/.local/node", "--strip-components=1"],
-        60_000,
-      );
-      publicFailureMessage = "Bun installation failed";
-      await remote(
-        exe,
-        vm.sshDest,
-        [
-          "env",
-          `PATH=${REMOTE_PATH}`,
-          REMOTE_NPM,
-          "install",
-          "--global",
-          "--prefix",
-          "/home/exedev/.local/bun",
-          `bun@${BUN_VERSION}`,
-        ],
-        180_000,
-      );
-      publicFailureMessage = "Bun verification failed";
-      const bunVersion = (await remote(exe, vm.sshDest, [REMOTE_BUN, "--version"], 30_000)).trim();
-      if (bunVersion !== BUN_VERSION) throw new Error("unexpected Bun version");
-      writeJson(resolve(runDir, "bootstrap.json"), {
-        nodeVersion: NODE_VERSION,
-        nodeArch,
-        nodeSha256: checksum,
-        bunVersion,
-      });
-      publicFailureMessage = "runtime upload failed";
-      await exe.copyTo(vm.sshDest, archive.path, "/home/exedev/runtime.tar");
-      await exe.copyTo(vm.sshDest, models, "/home/exedev/.pi/agent/models.json");
-      await remote(exe, vm.sshDest, ["chmod", "600", "/home/exedev/.pi/agent/models.json"], 30_000);
-      publicFailureMessage = "runtime installation failed";
-      await remote(
-        exe,
-        vm.sshDest,
-        ["tar", "-xf", "/home/exedev/runtime.tar", "-C", REMOTE_FACTORY],
-        60_000,
-      );
-      await remote(exe, vm.sshDest, [REMOTE_NODE, "--version"], 30_000);
-      publicFailureMessage = "Factory dependency installation failed";
-      await remote(
-        exe,
-        vm.sshDest,
-        [
-          "env",
-          "-C",
-          REMOTE_FACTORY,
-          `PATH=${REMOTE_PATH}`,
-          REMOTE_BUN,
-          "install",
-          "--frozen-lockfile",
-          "--ignore-scripts",
-        ],
-        300_000,
-      );
-      publicFailureMessage = "Factory build failed";
-      await remote(
-        exe,
-        vm.sshDest,
-        ["env", "-C", REMOTE_FACTORY, `PATH=${REMOTE_PATH}`, REMOTE_BUN, "run", "build"],
-        120_000,
-      );
-      publicFailureMessage = "target dependency installation failed";
-      await remote(
-        exe,
-        vm.sshDest,
-        [
-          "env",
-          "-C",
-          REMOTE_WORK,
-          `PATH=${REMOTE_PATH}`,
-          "BUN_INSTALL=/home/exedev/.local/bun",
-          REMOTE_BUN,
-          "install",
-          "--frozen-lockfile",
-          "--ignore-scripts",
-        ],
-        600_000,
-      );
+      if (resuming && !replacementVm) {
+        await remote(exe, vm.sshDest, ["true"], 30_000);
+        if (
+          (
+            await remote(exe, vm.sshDest, ["git", "-C", REMOTE_WORK, "rev-parse", "HEAD"], 30_000)
+          ).trim() !== state.baseSha
+        )
+          throw new Error("retained VM checkout changed");
+        await exe.copyTo(vm.sshDest, models, "/home/exedev/.pi/agent/models.json");
+        await remote(
+          exe,
+          vm.sshDest,
+          ["chmod", "600", "/home/exedev/.pi/agent/models.json"],
+          30_000,
+        );
+      } else {
+        publicFailureMessage = "bootstrap architecture detection failed";
+        const machine = (await remote(exe, vm.sshDest, ["uname", "-m"], 30_000)).trim();
+        const nodeArch = machine === "x86_64" ? "x64" : machine === "aarch64" ? "arm64" : "";
+        const checksum = NODE_CHECKSUMS[nodeArch];
+        if (!checksum) throw new Error("unsupported exe.dev architecture");
+        const nodeArchive = `/home/exedev/node-v${NODE_VERSION}-linux-${nodeArch}.tar.xz`;
+        publicFailureMessage = "bootstrap directory initialization failed";
+        await remote(
+          exe,
+          vm.sshDest,
+          [
+            "mkdir",
+            "-p",
+            REMOTE_FACTORY,
+            "/home/exedev/.pi/agent",
+            "/home/exedev/.local/node",
+            "/home/exedev/.local/bun",
+          ],
+          30_000,
+        );
+        publicFailureMessage = "Node.js download failed";
+        await remote(
+          exe,
+          vm.sshDest,
+          [
+            "curl",
+            "-fsSLo",
+            nodeArchive,
+            `https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${nodeArch}.tar.xz`,
+          ],
+          120_000,
+        );
+        publicFailureMessage = "Node.js verification failed";
+        const actualChecksum = (await remote(exe, vm.sshDest, ["sha256sum", nodeArchive], 30_000))
+          .trim()
+          .split(/\s+/, 1)[0];
+        if (actualChecksum !== checksum) throw new Error("Node.js archive checksum mismatch");
+        publicFailureMessage = "Node.js installation failed";
+        await remote(
+          exe,
+          vm.sshDest,
+          ["tar", "-xJf", nodeArchive, "-C", "/home/exedev/.local/node", "--strip-components=1"],
+          60_000,
+        );
+        publicFailureMessage = "Bun installation failed";
+        await remote(
+          exe,
+          vm.sshDest,
+          [
+            "env",
+            `PATH=${REMOTE_PATH}`,
+            REMOTE_NPM,
+            "install",
+            "--global",
+            "--prefix",
+            "/home/exedev/.local/bun",
+            `bun@${BUN_VERSION}`,
+          ],
+          180_000,
+        );
+        publicFailureMessage = "Bun verification failed";
+        const bunVersion = (
+          await remote(exe, vm.sshDest, [REMOTE_BUN, "--version"], 30_000)
+        ).trim();
+        if (bunVersion !== BUN_VERSION) throw new Error("unexpected Bun version");
+        writeJson(resolve(runDir, "bootstrap.json"), {
+          nodeVersion: NODE_VERSION,
+          nodeArch,
+          nodeSha256: checksum,
+          bunVersion,
+        });
+        publicFailureMessage = "runtime upload failed";
+        await exe.copyTo(vm.sshDest, archive.path, "/home/exedev/runtime.tar");
+        await exe.copyTo(vm.sshDest, models, "/home/exedev/.pi/agent/models.json");
+        await remote(
+          exe,
+          vm.sshDest,
+          ["chmod", "600", "/home/exedev/.pi/agent/models.json"],
+          30_000,
+        );
+        publicFailureMessage = "runtime installation failed";
+        await remote(
+          exe,
+          vm.sshDest,
+          ["tar", "-xf", "/home/exedev/runtime.tar", "-C", REMOTE_FACTORY],
+          60_000,
+        );
+        await remote(exe, vm.sshDest, [REMOTE_NODE, "--version"], 30_000);
+        publicFailureMessage = "Factory dependency installation failed";
+        await remote(
+          exe,
+          vm.sshDest,
+          [
+            "env",
+            "-C",
+            REMOTE_FACTORY,
+            `PATH=${REMOTE_PATH}`,
+            REMOTE_BUN,
+            "install",
+            "--frozen-lockfile",
+            "--ignore-scripts",
+          ],
+          300_000,
+        );
+        publicFailureMessage = "Factory build failed";
+        await remote(
+          exe,
+          vm.sshDest,
+          ["env", "-C", REMOTE_FACTORY, `PATH=${REMOTE_PATH}`, REMOTE_BUN, "run", "build"],
+          120_000,
+        );
+        publicFailureMessage = "target dependency installation failed";
+        await remote(
+          exe,
+          vm.sshDest,
+          [
+            "env",
+            "-C",
+            REMOTE_WORK,
+            `PATH=${REMOTE_PATH}`,
+            "BUN_INSTALL=/home/exedev/.local/bun",
+            REMOTE_BUN,
+            "install",
+            "--frozen-lockfile",
+            "--ignore-scripts",
+          ],
+          600_000,
+        );
+      }
       publicFailureMessage = "OpenRouter readiness check failed";
       const modelCatalog = "/home/exedev/openrouter-models.json";
       await remote(
@@ -1098,6 +1492,7 @@ export async function runController(options: ControllerOptions): Promise<Control
       let nextPublicToolId = 1;
       const remoteSequence = (
         expected: Array<"planning" | "implementing" | "documenting" | "verifying" | "reviewing">,
+        attempt = 1,
       ) => {
         let index = 0;
         let open: (typeof expected)[number] | undefined;
@@ -1124,7 +1519,7 @@ export async function runController(options: ControllerOptions): Promise<Control
           emit({
             type: "phase_finished",
             actor,
-            phase: telemetryPhase(open),
+            phase: telemetryPhase(open, attempt),
             sourceAt: new Date().toISOString(),
             payload: { status },
           });
@@ -1144,13 +1539,13 @@ export async function runController(options: ControllerOptions): Promise<Control
             if (open || event.phase !== expected[index])
               throw new Error("invalid remote phase sequence");
             open = event.phase;
-            advance(runDir, event.phase, event.actor, sourceAt);
+            advance(runDir, event.phase, event.actor, sourceAt, attempt);
             if (event.actor !== "verifier") {
               const role = archivedRoles[event.actor];
               emit({
                 type: "agent_context",
                 actor: event.actor,
-                phase: telemetryPhase(event.phase),
+                phase: telemetryPhase(event.phase, attempt),
                 payload: {
                   model: role.model,
                   description: role.description,
@@ -1172,7 +1567,7 @@ export async function runController(options: ControllerOptions): Promise<Control
             )
           )
             throw new Error("remote agent activity after usage");
-          const phase = telemetryPhase(event.phase);
+          const phase = telemetryPhase(event.phase, attempt);
           switch (event.type) {
             case "phase_finished":
               if (tools.size) throw new Error("remote phase finished with active tool calls");
@@ -1331,69 +1726,126 @@ export async function runController(options: ControllerOptions): Promise<Control
         };
       };
       const issue = "/home/exedev/issue.md";
-      await exe.copyTo(vm.sshDest, resolve(runDir, "issue.md"), issue);
-      const plannerSequence = remoteSequence(["planning"]);
-      let plannerResult: RemoteResultFrame;
-      try {
-        plannerResult = await streamed(
-          exe,
-          vm.sshDest,
-          [
-            "env",
-            "-C",
-            REMOTE_FACTORY,
-            `PATH=${REMOTE_PATH}`,
-            `${REMOTE_FACTORY}/dist/factory`,
-            "pi",
-            "plan",
-            "--repo",
-            REMOTE_WORK,
-            "--issue",
-            issue,
-            "--timeout-seconds",
-            String(options.timeoutSeconds),
-            "--machine",
-          ],
-          options.timeoutSeconds * 1000 + 60_000,
-          plannerSequence.onEvent,
-        );
-        plannerSequence.finish(plannerResult);
-      } catch (error) {
-        plannerSequence.closeOpen();
-        throw error;
+      const localIssue = resolve(runDir, "issue.md");
+      const checkpoint = resolve(runDir, "planner-session.jsonl");
+      const remoteCheckpoint = "/home/exedev/planner-session.jsonl";
+      await exe.copyTo(vm.sshDest, localIssue, issue);
+      let plannerAttempt = initialPlannerAttempt;
+      let resumeSession = initialResumeSession;
+      if (resumeSession) {
+        if (hash(checkpoint) !== resumeSession.sha256)
+          throw new Error("planner session checkpoint changed");
+        await exe.copyTo(vm.sshDest, checkpoint, remoteCheckpoint);
+        await remote(exe, vm.sshDest, ["chmod", "600", remoteCheckpoint], 30_000);
       }
-      stage = "planning_result";
-      publicFailureMessage = "planner result is invalid";
-      const plannerRun = outputPath(plannerResult.runDir, "Run evidence");
-      if (plannerResult.status !== "completed") {
-        if (plannerResult.failure)
-          publicFailureMessage = remoteFailureMessage(plannerResult.failure);
-        throw new Error("remote planner failed");
-      }
-      publicFailureMessage = "planner envelope retrieval failed";
-      const plannerEnvelope = JSON.parse(
-        await remote(exe, vm.sshDest, ["cat", `${plannerRun}/envelope.json`], 30_000),
-      ) as unknown;
-      stage = "planning_envelope";
-      publicFailureMessage = "planner envelope validation failed";
-      const parsedPlan = parseEnvelope("planner", plannerEnvelope);
-      if (!parsedPlan.ok) throw new Error("remote planner envelope is invalid");
-      if (parsedPlan.envelope.decisionsNeeded.length) {
+      let plannerRun = "";
+      let parsedPlan: EnvelopeParseResult<PlannerEnvelope> | undefined;
+      for (;;) {
+        const plannerSequence = remoteSequence(["planning"], plannerAttempt);
+        let plannerResult: RemoteResultFrame;
+        const plannerArgv = [
+          "env",
+          "-C",
+          REMOTE_FACTORY,
+          `PATH=${REMOTE_PATH}`,
+          `${REMOTE_FACTORY}/dist/factory`,
+          "pi",
+          "plan",
+          "--repo",
+          REMOTE_WORK,
+          "--issue",
+          issue,
+          "--timeout-seconds",
+          String(options.timeoutSeconds),
+          "--machine",
+          ...(resumeSession
+            ? [
+                "--resume-session",
+                remoteCheckpoint,
+                "--session-id",
+                resumeSession.sessionId,
+                "--session-sha256",
+                resumeSession.sha256,
+              ]
+            : []),
+        ];
+        try {
+          plannerResult = await streamed(
+            exe,
+            vm.sshDest,
+            plannerArgv,
+            options.timeoutSeconds * 1000 + 60_000,
+            plannerSequence.onEvent,
+          );
+          plannerSequence.finish(plannerResult);
+        } catch (error) {
+          plannerSequence.closeOpen();
+          throw error;
+        }
+        stage = "planning_result";
+        publicFailureMessage = "planner result is invalid";
+        plannerRun = outputPath(plannerResult.runDir, "Run evidence");
+        if (plannerResult.status !== "completed") {
+          if (plannerResult.failure)
+            publicFailureMessage = remoteFailureMessage(plannerResult.failure);
+          throw new Error("remote planner failed");
+        }
+        publicFailureMessage = "planner envelope retrieval failed";
+        const plannerEnvelope = JSON.parse(
+          await remote(exe, vm.sshDest, ["cat", `${plannerRun}/envelope.json`], 30_000),
+        ) as unknown;
+        stage = "planning_envelope";
+        publicFailureMessage = "planner envelope validation failed";
+        parsedPlan = parseEnvelope("planner", plannerEnvelope);
+        if (!parsedPlan.ok) throw new Error("remote planner envelope is invalid");
+        if (!parsedPlan.envelope.decisionsNeeded.length) break;
         if (!intakeSnapshot) throw new Error("planner intake snapshot missing");
-        const continuationRunId = randomUUID();
+        if (plannerAttempt > 3) throw new Error("planner decision round limit exceeded");
+        const plannerReceipt = JSON.parse(
+          await remote(exe, vm.sshDest, ["cat", `${plannerRun}/receipt.json`], 30_000),
+        ) as unknown;
+        if (
+          !isRecord(plannerReceipt) ||
+          typeof plannerReceipt.sessionId !== "string" ||
+          typeof plannerReceipt.sessionFile !== "string" ||
+          plannerReceipt.sessionFile !==
+            `${plannerRun}/sessions/${basename(plannerReceipt.sessionFile)}` ||
+          !plannerReceipt.sessionFile.endsWith(".jsonl")
+        )
+          throw new Error("planner session checkpoint missing");
+        await exe.copyFrom(vm.sshDest, plannerReceipt.sessionFile, checkpoint);
+        chmodSync(checkpoint, 0o600);
+        if (statSync(checkpoint).size > MAX_SESSION_CHECKPOINT) {
+          rmSync(checkpoint, { force: true });
+          throw new Error("planner session checkpoint exceeds limit");
+        }
+        assertSecretAbsent(readFileSync(checkpoint), [options.openRouterKey]);
+        const checkpointSha256 = hash(checkpoint);
+        await remote(exe, vm.sshDest, ["rm", "-f", "/home/exedev/.pi/agent/models.json"], 30_000);
         stage = "planning_decision_comment";
         publicFailureMessage = "Linear decision comment creation failed";
         const comment = await (options.createDecisionComment ?? createLinearDecisionComment)({
           token: options.linearToken,
           issueId: intakeSnapshot.issue.uuid,
           assigneeUrl: intakeSnapshot.issue.assignee.url,
+          assigneeId: intakeSnapshot.issue.assignee.id,
           runId: state.runId,
+          generation: plannerAttempt,
           decisions: parsedPlan.envelope.decisionsNeeded,
+        });
+        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+        state = beginControllerDecisionWait(runDir, {
+          generation: plannerAttempt,
+          expiresAt,
+          plannerRunId: basename(plannerRun),
+          plannerSessionId: plannerReceipt.sessionId,
+          plannerSessionSha256: checkpointSha256,
+          checkpointSha256,
         });
         decisionRequest = {
           runId: state.runId,
           ...comment,
-          continuationRunId,
+          continuationRunId: state.runId,
           issue: options.issue,
           owner: options.owner,
           repo: options.repo,
@@ -1404,6 +1856,9 @@ export async function runController(options: ControllerOptions): Promise<Control
         writeJson(resolve(runDir, "decision-request.json"), {
           version: 1,
           ...decisionRequest,
+          generation: plannerAttempt,
+          expiresAt,
+          assigneeId: intakeSnapshot.issue.assignee.id,
           count: parsedPlan.envelope.decisionsNeeded.length,
           decisions: parsedPlan.envelope.decisionsNeeded,
         });
@@ -1414,11 +1869,134 @@ export async function runController(options: ControllerOptions): Promise<Control
             count: parsedPlan.envelope.decisionsNeeded.length,
             commentId: comment.commentId,
             commentUrl: comment.commentUrl,
-            continuationRunId,
+            continuationRunId: state.runId,
           },
         });
-        throw new PlannerDecisionRequired(decisionRequest);
+        if (!options.inlineDecisionWaiter) throw new PlannerDecisionRequired(decisionRequest);
+        emit({
+          type: "phase_started",
+          actor: "controller",
+          phase: {
+            id: `awaiting_decision:${plannerAttempt}`,
+            name: "awaiting_decision",
+            attempt: plannerAttempt,
+          },
+          payload: {},
+        });
+        const waitingState = state;
+        let releaseResumeLease: () => void;
+        try {
+          releaseResumeLease = acquireDecisionResumeLease(runDir);
+        } catch {
+          throw new PlannerDecisionRequired(decisionRequest);
+        }
+        lock.release();
+        let decision: LinearDecisionReply;
+        try {
+          decision = await options.inlineDecisionWaiter(decisionRequest, expiresAt);
+        } catch (error) {
+          releaseResumeLease();
+          lock = acquireControllerLock(root);
+          state = transitionControllerState(
+            runDir,
+            Date.now() >= Date.parse(expiresAt) ? "cancelled" : "failed",
+          );
+          throw error;
+        }
+        lock = acquireControllerLock(root);
+        releaseResumeLease();
+        const current = readControllerState(runDir);
+        if (
+          current.updatedAt !== waitingState.updatedAt ||
+          current.state !== "awaiting_decision" ||
+          current.decisionWait?.generation !== plannerAttempt
+        )
+          throw new Error("decision wait changed while accepting reply");
+        if (
+          Date.now() >= Date.parse(expiresAt) ||
+          Date.parse(decision.createdAt) > Date.parse(expiresAt)
+        ) {
+          state = transitionControllerState(runDir, "cancelled");
+          throw new Error("decision wait expired");
+        }
+        try {
+          await remote(exe, current.vm!.sshDest, ["true"], 30_000);
+        } catch {
+          throw new PlannerDecisionRequired(decisionRequest);
+        }
+        const refreshed = await (options.intake ?? createIntake)(
+          { token: options.linearToken, issue: options.issue },
+          {
+            token: options.githubToken,
+            owner: options.owner,
+            repo: options.repo,
+            baseRef: options.baseRef,
+          },
+        );
+        if (
+          refreshed.issue.snapshotSha256 !== state.issueSnapshotSha256 ||
+          refreshed.repository.snapshotSha256 !== state.repositorySnapshotSha256 ||
+          refreshed.repository.baseSha !== state.baseSha
+        ) {
+          state = transitionControllerState(runDir, "failed");
+          throw new Error("decision wait input drifted");
+        }
+        writeJson(resolve(runDir, "decision-accepted.json"), {
+          version: 1,
+          generation: plannerAttempt,
+          requestCommentId: comment.commentId,
+          decision,
+        });
+        state = transitionControllerState(runDir, "planning");
+        writeFileSync(
+          localIssue,
+          `${readFileSync(localIssue, "utf8").trimEnd()}\n\n## Engineer decision ${plannerAttempt}\n\n${decision.body}\n`,
+          { mode: 0o600 },
+        );
+        await exe.copyTo(vm.sshDest, localIssue, issue);
+        if (
+          (
+            await remote(exe, vm.sshDest, ["git", "-C", REMOTE_WORK, "rev-parse", "HEAD"], 30_000)
+          ).trim() !== state.baseSha ||
+          (
+            await remote(
+              exe,
+              vm.sshDest,
+              ["git", "-C", REMOTE_WORK, "status", "--porcelain"],
+              30_000,
+            )
+          ).trim()
+        )
+          throw new Error("retained decision workspace changed");
+        await remote(exe, vm.sshDest, ["test", "-x", `${REMOTE_FACTORY}/dist/factory`], 30_000);
+        await exe.copyTo(vm.sshDest, models, "/home/exedev/.pi/agent/models.json");
+        await remote(
+          exe,
+          vm.sshDest,
+          ["chmod", "600", "/home/exedev/.pi/agent/models.json"],
+          30_000,
+        );
+        if (hash(checkpoint) !== checkpointSha256) {
+          state = transitionControllerState(runDir, "failed");
+          throw new Error("planner session checkpoint changed");
+        }
+        await exe.copyTo(vm.sshDest, checkpoint, remoteCheckpoint);
+        await remote(exe, vm.sshDest, ["chmod", "600", remoteCheckpoint], 30_000);
+        emit({
+          type: "phase_finished",
+          actor: "controller",
+          phase: {
+            id: `awaiting_decision:${plannerAttempt}`,
+            name: "awaiting_decision",
+            attempt: plannerAttempt,
+          },
+          payload: { status: "completed" },
+        });
+        resumeSession = { sessionId: plannerReceipt.sessionId, sha256: checkpointSha256 };
+        plannerAttempt += 1;
+        decisionRequest = undefined;
       }
+      if (!parsedPlan?.ok) throw new Error("remote planner envelope is invalid");
       publicFailureMessage = "planner change path validation failed";
       const hasWorker = parsedPlan.envelope.changes.some((change) => {
         const path = assertSafeRepoPath(change.path);
@@ -1508,10 +2086,23 @@ export async function runController(options: ControllerOptions): Promise<Control
         actor: "controller",
         payload: { name: "change.patch", size: Buffer.byteLength(patch), sha256: patchSha256 },
       });
+      const runIds = [
+        plannerRun,
+        ...(hasWorker ? [workerRun] : []),
+        documenterRun,
+        reviewerRun,
+      ].map((path) => basename(path));
       await remote(
         exe,
         vm.sshDest,
-        ["tar", "-cf", "/home/exedev/evidence.tar", "-C", REMOTE_FACTORY, ".factory/runs"],
+        [
+          "tar",
+          "-cf",
+          "/home/exedev/evidence.tar",
+          "-C",
+          REMOTE_FACTORY,
+          ...runIds.map((id) => `.factory/runs/${id}`),
+        ],
         60_000,
       );
       await exe.copyFrom(vm.sshDest, "/home/exedev/evidence.tar", resolve(runDir, "evidence.tar"));
@@ -1521,12 +2112,6 @@ export async function runController(options: ControllerOptions): Promise<Control
         [options.openRouterKey],
         "evidence archive",
       );
-      const runIds = [
-        plannerRun,
-        ...(hasWorker ? [workerRun] : []),
-        documenterRun,
-        reviewerRun,
-      ].map((path) => basename(path));
       harvest(resolve(runDir, "evidence.tar"), runDir, runIds, {
         baseSha: state.baseSha,
         allowedPaths: parsedPlan.envelope.changes.map((change) => change.path),
@@ -1582,6 +2167,12 @@ export async function runController(options: ControllerOptions): Promise<Control
       });
     }
   }
+  if (failure && state?.state === "awaiting_decision" && state.decisionWait) {
+    state = transitionControllerState(
+      resolve(root, ".factory", "controllers", state.runId),
+      "failed",
+    );
+  }
   if (failure && state?.vm) {
     const runDir = resolve(root, ".factory", "controllers", state.runId);
     const target = resolve(runDir, "failure-evidence.tar");
@@ -1613,7 +2204,10 @@ export async function runController(options: ControllerOptions): Promise<Control
     }
   }
   try {
-    const cleanupRequired = state !== undefined && state.state !== "intake";
+    const cleanupRequired =
+      state !== undefined &&
+      state.state !== "intake" &&
+      !(!failure && decisionRequest && state.state === "awaiting_decision" && state.decisionWait);
     if (state && cleanupRequired) {
       if (state.vm) {
         try {
@@ -1683,7 +2277,7 @@ export async function runController(options: ControllerOptions): Promise<Control
         options.githubToken,
         options.openRouterKey,
       ]);
-      if (state && !cleanupFailed && state.state !== "failed") {
+      if (state && !cleanupFailed && state.state !== "failed" && state.state !== "cancelled") {
         state = transitionControllerState(runDir, "failed");
         bestEffortEmit({
           type: "phase_started",
@@ -1713,10 +2307,38 @@ export async function runController(options: ControllerOptions): Promise<Control
       return { status: "failed", runDir, error };
     };
 
-    if (!state || failure) {
+    const cancelledResult = (message: string): ControllerResult => {
+      stopHeartbeat();
+      const error = sanitizeTelemetryText(message, [
+        options.linearToken,
+        options.githubToken,
+        options.openRouterKey,
+      ]);
+      writeJson(resolve(runDir, "receipt.json"), {
+        kind: "controller",
+        status: "cancelled",
+        stage: "decision_expired",
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        cleanup: cleanupOutcome,
+        artifacts: readdirArtifacts(runDir),
+        error,
+      });
+      bestEffortEmit({
+        type: "run_finished",
+        actor: "controller",
+        payload: { status: "cancelled", cleanup: cleanupOutcome },
+      });
+      return { status: "cancelled", runDir, error };
+    };
+
+    if (state?.state === "cancelled") {
+      result = cancelledResult(failure ?? "decision wait expired");
+    } else if (!state || failure) {
       result = failedResult(failure ?? "intake failed");
     } else if (decisionRequest) {
-      state = transitionControllerState(runDir, "awaiting_decision");
+      if (state.state !== "awaiting_decision")
+        state = transitionControllerState(runDir, "awaiting_decision");
       bestEffortEmit({
         type: "phase_started",
         actor: "controller",

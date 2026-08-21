@@ -28,12 +28,36 @@ export function parsePiCommand(
   }
 
   if (subcommand === "plan") {
-    rejectOptions(values, ["repo", "issue", "timeout-seconds", "machine"]);
+    rejectOptions(values, [
+      "repo",
+      "issue",
+      "timeout-seconds",
+      "machine",
+      "resume-session",
+      "session-id",
+      "session-sha256",
+    ]);
     if (typeof values.repo !== "string" || typeof values.issue !== "string")
       throw new Error("--repo, --issue are required");
+    const resume = values["resume-session"];
+    const sessionId = values["session-id"];
+    const sessionSha256 = values["session-sha256"];
+    const resumeSession =
+      resume === undefined && sessionId === undefined && sessionSha256 === undefined
+        ? undefined
+        : typeof resume === "string" &&
+            typeof sessionId === "string" &&
+            typeof sessionSha256 === "string"
+          ? { path: resume, sessionId, sha256: sessionSha256 }
+          : (() => {
+              throw new Error(
+                "--resume-session, --session-id, and --session-sha256 must be provided together",
+              );
+            })();
     return {
       repo: values.repo,
       issue: values.issue,
+      ...(resumeSession ? { resumeSession } : {}),
       timeoutSeconds: parseTimeout(
         typeof values["timeout-seconds"] === "string" ? values["timeout-seconds"] : undefined,
         "300",

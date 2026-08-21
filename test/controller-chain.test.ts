@@ -4,7 +4,6 @@ import { runControllerChain, waitForLinearDecision } from "../src/controller-cha
 import type { ControllerOptions, ControllerResult } from "../src/controller.js";
 
 const firstRun = "11111111-1111-4111-8111-111111111111";
-const secondRun = "22222222-2222-4222-8222-222222222222";
 const decision = {
   commentId: "reply-1",
   body: "Keep the sign-in card",
@@ -48,7 +47,39 @@ test("decision polling waits for an assigned Decision reply", async () => {
   assert.equal(sleeps, 2);
 });
 
-test("controller chain starts a fresh linked run with decision context", async () => {
+test("decision polling expires before another Linear request", async () => {
+  let fetched = false;
+  await assert.rejects(
+    waitForLinearDecision({
+      token: "linear-token",
+      commentId: "comment-1",
+      expiresAt: "1970-01-01T00:00:00.000Z",
+      fetchDecision: async () => {
+        fetched = true;
+        return undefined;
+      },
+    }),
+    /decision wait expired/,
+  );
+  assert.equal(fetched, false);
+});
+
+test("decision polling rejects a reply created after expiry", async () => {
+  await assert.rejects(
+    waitForLinearDecision({
+      token: "linear-token",
+      commentId: "comment-1",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+      fetchDecision: async () => ({
+        ...decision,
+        createdAt: "2100-01-01T00:00:00.000Z",
+      }),
+    }),
+    /decision wait expired/,
+  );
+});
+
+test("controller chain re-enters the same persisted decision wait", async () => {
   const calls: ControllerOptions[] = [];
   const results: ControllerResult[] = [
     {
@@ -58,7 +89,7 @@ test("controller chain starts a fresh linked run with decision context", async (
         runId: firstRun,
         commentId: "comment-1",
         commentUrl: "https://linear.app/example/comment-1",
-        continuationRunId: secondRun,
+        continuationRunId: firstRun,
         issue: "RIFF-45",
         owner: "santychuy",
         repo: "bookbounce",
@@ -67,7 +98,7 @@ test("controller chain starts a fresh linked run with decision context", async (
         timeoutSeconds: 900,
       },
     },
-    { status: "completed", runDir: `/tmp/${secondRun}` },
+    { status: "completed", runDir: `/tmp/${firstRun}` },
   ];
   const result = await runControllerChain({
     ...options(),
@@ -80,8 +111,8 @@ test("controller chain starts a fresh linked run with decision context", async (
   });
   assert.equal(result.status, "completed");
   assert.equal(calls.length, 2);
-  assert.equal(calls[1]?.runId, secondRun);
-  assert.equal(calls[1]?.decision?.previousRunId, firstRun);
-  assert.equal(calls[1]?.decision?.requestCommentId, "comment-1");
+  assert.equal(calls[1]?.runId, firstRun);
+  assert.equal(calls[1]?.resumeExisting, true);
+  assert.equal(calls[1]?.decision, undefined);
   assert.equal(calls[1]?.onAccepted, undefined);
 });

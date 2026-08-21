@@ -328,6 +328,7 @@ export const TelemetryRecordSchema = Type.Union([
           Type.Literal("ready_for_publication"),
           Type.Literal("completed"),
           Type.Literal("failed"),
+          Type.Literal("cancelled"),
         ]),
         cleanup: Type.Union([
           Type.Literal("pending"),
@@ -335,6 +336,7 @@ export const TelemetryRecordSchema = Type.Union([
           Type.Literal("not-needed"),
           Type.Literal("failed"),
         ]),
+        reason: Type.Optional(Type.Literal("decision_expired")),
       },
       { additionalProperties: false },
     ),

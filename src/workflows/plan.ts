@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { copyFileSync, readFileSync, statSync } from "node:fs";
+import { basename, resolve } from "node:path";
 import { loadAgent } from "../agents/index.js";
 import { renderPlannerPlan } from "../envelope.js";
 import {
@@ -9,6 +9,7 @@ import {
   runAgent,
   type AgentActivity,
   type AgentRunStatus,
+  type ControllerSessionCheckpoint,
 } from "../run-agent.js";
 import { isRemoteToolName, type RemoteEventSink, type RemoteFailure } from "../remote-protocol.js";
 import { createRunArtifacts } from "../run-artifacts.js";
@@ -20,6 +21,8 @@ export interface PlanOptions {
   issue: string;
   timeoutSeconds: number;
   machine?: boolean;
+  /** Resume a completed planner turn from a controller-pinned session. */
+  resumeSession?: ControllerSessionCheckpoint;
   onEvent?: RemoteEventSink;
 }
 
@@ -93,6 +96,14 @@ export async function runPlan(options: PlanOptions): Promise<PlanResult> {
   const issue = readFileSync(issuePath, "utf8");
   const planner = loadAgent("planner");
   const artifacts = createRunArtifacts(issue);
+  const resumeSession = options.resumeSession
+    ? (() => {
+        const source = resolve(options.resumeSession.path);
+        const path = resolve(artifacts.sessionsDir, basename(source));
+        copyFileSync(source, path);
+        return { ...options.resumeSession, path };
+      })()
+    : undefined;
 
   const phaseStartedAt = new Date().toISOString();
   options.onEvent?.({
@@ -106,8 +117,9 @@ export async function runPlan(options: PlanOptions): Promise<PlanResult> {
       agent: planner,
       cwd: repo,
       timeoutSeconds: options.timeoutSeconds,
-      prompt: `Plan this issue. Do not modify the repository.\n\n${issue}`,
+      prompt: `${resumeSession ? "Continue planning after this engineer decision." : "Plan this issue."} Do not modify the repository.\n\n${issue}`,
       artifacts,
+      ...(resumeSession ? { resumeSession } : {}),
       envelopeRole: "planner",
       receiptContext: {
         repo,

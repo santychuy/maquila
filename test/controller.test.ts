@@ -26,6 +26,7 @@ import {
 } from "../src/controller.js";
 import { acquireControllerLock } from "../src/controller-lock.js";
 import { ExeCommandError } from "../src/integrations/exe.js";
+import { createLinearDecisionComment } from "../src/integrations/linear.js";
 import {
   createControllerState,
   readControllerState,
@@ -906,6 +907,16 @@ class FakeExe implements ControllerExe {
 
 class BlockedPlannerExe extends FakeExe {
   override async exec(destination: string, argv: string[], timeoutMs?: number) {
+    if (argv[0] === "cat" && argv[1]?.endsWith("/receipt.json")) {
+      this.calls.push({ operation: "exec", value: { destination, argv, timeoutMs } });
+      return {
+        stdout: JSON.stringify({
+          sessionId: "planner-session",
+          sessionFile: `/home/exedev/factory/.factory/runs/${ids[0]}/sessions/planner.jsonl`,
+        }),
+        stderr: "",
+      };
+    }
     if (argv[0] === "cat" && argv[1]?.endsWith("/envelope.json")) {
       this.calls.push({ operation: "exec", value: { destination, argv, timeoutMs } });
       return {
@@ -919,6 +930,71 @@ class BlockedPlannerExe extends FakeExe {
         }),
         stderr: "",
       };
+    }
+    return super.exec(destination, argv, timeoutMs);
+  }
+
+  override async copyFrom(destination: string, remotePath: string, localPath: string) {
+    if (remotePath.endsWith("planner.jsonl")) {
+      this.calls.push({ operation: "copyFrom", value: { destination, remotePath, localPath } });
+      writeFileSync(localPath, '{"type":"session"}\n');
+      return;
+    }
+    return super.copyFrom(destination, remotePath, localPath);
+  }
+}
+
+class ResumingPlannerExe extends FakeExe {
+  private envelopes = 0;
+
+  override async exec(destination: string, argv: string[], timeoutMs?: number) {
+    if (argv[0] === "cat" && argv[1]?.endsWith("/receipt.json")) {
+      this.calls.push({ operation: "exec", value: { destination, argv, timeoutMs } });
+      return {
+        stdout: JSON.stringify({
+          sessionId: "planner-session",
+          sessionFile: `/home/exedev/factory/.factory/runs/${ids[0]}/sessions/planner.jsonl`,
+        }),
+        stderr: "",
+      };
+    }
+    if (argv[0] === "cat" && argv[1]?.endsWith("/envelope.json")) {
+      this.envelopes += 1;
+      if (this.envelopes === 1) {
+        this.calls.push({ operation: "exec", value: { destination, argv, timeoutMs } });
+        return {
+          stdout: JSON.stringify({
+            summary: "Blocked plan",
+            evidence: ["Issue needs a decision"],
+            changes: [],
+            verification: [],
+            risks: [],
+            decisionsNeeded: ["Choose behavior"],
+          }),
+          stderr: "",
+        };
+      }
+    }
+    return super.exec(destination, argv, timeoutMs);
+  }
+
+  override async copyFrom(destination: string, remotePath: string, localPath: string) {
+    if (remotePath.endsWith("planner.jsonl")) {
+      this.calls.push({ operation: "copyFrom", value: { destination, remotePath, localPath } });
+      writeFileSync(localPath, '{"type":"session"}\n');
+      return;
+    }
+    return super.copyFrom(destination, remotePath, localPath);
+  }
+}
+
+class MissingRetainedVmExe extends ResumingPlannerExe {
+  missing = false;
+
+  override async exec(destination: string, argv: string[], timeoutMs?: number) {
+    if (this.missing && argv.length === 1 && argv[0] === "true") {
+      this.missing = false;
+      throw new Error("missing VM");
     }
     return super.exec(destination, argv, timeoutMs);
   }
@@ -1133,9 +1209,16 @@ function controllerOptions(root: string, exe: ControllerExe) {
     factoryRoot: testFactoryRoot(),
     exe,
     intake: async () => snapshot,
-    createDecisionComment: async () => ({
+    createDecisionComment: async (input: Parameters<typeof createLinearDecisionComment>[0]) => ({
       commentId: "decision-comment-1",
       commentUrl: "https://linear.app/riff/comment/decision-comment-1",
+      issueId: "issue-uuid",
+      assigneeId: "user-1",
+      generation: input.generation ?? 1,
+      questionSha256: "e".repeat(64),
+      questionCount: input.decisions.length,
+      requestedAt: "2026-01-01T00:00:00.000Z",
+      marker: `<!-- factory-decision:${input.runId}:${input.generation ?? 1}:${"e".repeat(64)} -->`,
     }),
     publish,
     sleep: async () => {},
@@ -1163,9 +1246,132 @@ test("controller requests an assigned engineer decision without failing", async 
     );
     assert.ok(requested?.type === "decision_requested");
     assert.equal(requested.payload.count, 1);
-    assert.equal(readTelemetry(telemetryPath(root, state.runId)).at(-1)?.type, "run_finished");
-    assert.equal(state.cleanup, "complete");
+    assert.notEqual(readTelemetry(telemetryPath(root, state.runId)).at(-1)?.type, "run_finished");
+    assert.equal(state.cleanup, "pending");
+    assert.equal(state.decisionWait?.generation, 1);
+    assert.ok(existsSync(join(result.runDir, "planner-session.jsonl")));
     assert.ok(existsSync(join(result.runDir, "decision-request.json")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("controller expires a retained decision wait as cancelled and cleans its VM", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
+  const exe = new BlockedPlannerExe();
+  const now = Date.now;
+  try {
+    const result = await runController({
+      ...controllerOptions(root, exe),
+      inlineDecisionWaiter: async (_request, expiresAt) => {
+        Date.now = () => Date.parse(expiresAt);
+        throw new Error("decision wait expired");
+      },
+    });
+    assert.equal(result.status, "cancelled");
+    const state = readControllerState(result.runDir);
+    assert.equal(state.state, "cancelled");
+    assert.equal(state.cleanup, "complete");
+    assert.ok(exe.calls.some((call) => call.operation === "destroy"));
+  } finally {
+    Date.now = now;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("controller resumes the same VM and planner session after a Linear decision", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
+  const exe = new ResumingPlannerExe();
+  try {
+    const result = await runController({
+      ...controllerOptions(root, exe),
+      inlineDecisionWaiter: async () => ({
+        commentId: "reply-1",
+        body: "Keep the sign-in card",
+        createdAt: "2026-01-02T00:00:00.000Z",
+        sha256: "a".repeat(64),
+      }),
+    });
+    assert.equal(
+      result.status,
+      "completed",
+      `${result.error}: ${readTelemetry(
+        telemetryPath(root, readControllerState(result.runDir).runId),
+      )
+        .map((event) => `${event.type}:${event.phase?.id ?? "-"}`)
+        .join(",")}`,
+    );
+    assert.equal(exe.calls.filter((call) => call.operation === "create").length, 1);
+    const plannerCalls = exe.calls.filter(
+      (call) =>
+        call.operation === "execStream" &&
+        Array.isArray((call.value as { argv?: unknown }).argv) &&
+        ((call.value as { argv: string[] }).argv.includes("plan") ?? false),
+    );
+    assert.equal(plannerCalls.length, 2);
+    const resumed = (plannerCalls[1]!.value as { argv: string[] }).argv;
+    assert.ok(resumed.includes("--resume-session"));
+    assert.ok(resumed.includes("--session-id"));
+    assert.ok(resumed.includes("planner-session"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("controller resumes a persisted wait after the original process exits", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
+  const exe = new ResumingPlannerExe();
+  try {
+    const waiting = await runController(controllerOptions(root, exe));
+    assert.equal(waiting.status, "awaiting_decision");
+    const runId = readControllerState(waiting.runDir).runId;
+    const result = await runController({
+      ...controllerOptions(root, exe),
+      runId,
+      resumeExisting: true,
+      inlineDecisionWaiter: async () => ({
+        commentId: "reply-1",
+        body: "Keep the sign-in card",
+        createdAt: "2026-01-02T00:00:00.000Z",
+        sha256: "a".repeat(64),
+      }),
+    });
+    assert.equal(result.status, "completed", result.error);
+    assert.equal(readControllerState(result.runDir).runId, runId);
+    assert.equal(exe.calls.filter((call) => call.operation === "create").length, 1);
+    const plannerCalls = exe.calls.filter(
+      (call) =>
+        call.operation === "execStream" &&
+        ((call.value as { argv: string[] }).argv.includes("plan") ?? false),
+    );
+    assert.equal(plannerCalls.length, 2);
+    assert.ok((plannerCalls[1]!.value as { argv: string[] }).argv.includes("--resume-session"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("controller replaces one missing retained VM before resuming", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
+  const exe = new MissingRetainedVmExe();
+  try {
+    const waiting = await runController(controllerOptions(root, exe));
+    const runId = readControllerState(waiting.runDir).runId;
+    exe.missing = true;
+    const result = await runController({
+      ...controllerOptions(root, exe),
+      runId,
+      resumeExisting: true,
+      inlineDecisionWaiter: async () => ({
+        commentId: "reply-1",
+        body: "Keep it",
+        createdAt: "2026-01-02T00:00:00.000Z",
+        sha256: "a".repeat(64),
+      }),
+    });
+    assert.equal(result.status, "completed", result.error);
+    assert.equal(exe.calls.filter((call) => call.operation === "create").length, 2);
+    assert.ok(existsSync(join(result.runDir, "decision-vm-replacement.json")));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

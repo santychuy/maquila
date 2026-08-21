@@ -1,5 +1,6 @@
-import { chmodSync, existsSync, readdirSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+import { createHash } from "node:crypto";
+import { chmodSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   createAgentSession,
   createExtensionRuntime,
@@ -118,12 +119,48 @@ export function tokenUsageActivity(
   };
 }
 
+export interface ControllerSessionCheckpoint {
+  path: string;
+  sessionId: string;
+  sha256: string;
+}
+
+/** Open only an artifact-owned, hash-pinned completed session. */
+export function openControllerSession(
+  checkpoint: ControllerSessionCheckpoint,
+  sessionsDir: string,
+  cwd: string,
+): SessionManager {
+  if (!/^[0-9a-f]{64}$/i.test(checkpoint.sha256) || !checkpoint.sessionId)
+    throw new Error("invalid session checkpoint");
+  const root = resolve(sessionsDir);
+  const path = resolve(checkpoint.path);
+  const child = relative(root, path);
+  if (!child || child === ".." || child.startsWith(`..${sep}`) || isAbsolute(child))
+    throw new Error("session checkpoint is outside artifacts");
+  if (!existsSync(path) || !statSync(path).isFile())
+    throw new Error("session checkpoint is unavailable");
+  const digest = createHash("sha256").update(readFileSync(path)).digest("hex");
+  if (digest !== checkpoint.sha256) throw new Error("session checkpoint hash mismatch");
+  let manager: SessionManager;
+  try {
+    manager = SessionManager.open(path, root);
+  } catch {
+    throw new Error("session checkpoint is invalid");
+  }
+  if (manager.getSessionId() !== checkpoint.sessionId || resolve(manager.getCwd()) !== resolve(cwd))
+    throw new Error("session checkpoint identity mismatch");
+  return manager;
+}
+
 export interface RunAgentOptions {
   agent: AgentDefinition;
   cwd: string;
   timeoutSeconds: number;
   prompt: string;
   artifacts: RunArtifacts;
+  /** Controller-owned checkpoint from a completed prior turn. */
+  resumeSession?: ControllerSessionCheckpoint;
   receiptContext?: Record<string, unknown>;
   /** When set, the agent must submit a valid role envelope via submit_envelope as its final action. */
   envelopeRole?: EnvelopeRole;
@@ -308,7 +345,9 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       resourceLoader: isolatedResources(agent.systemPrompt),
       tools: effectiveTools,
       customTools: envelopeRole ? [createSubmitEnvelopeTool(envelopeRole, capture)] : undefined,
-      sessionManager: SessionManager.create(options.cwd, artifacts.sessionsDir),
+      sessionManager: options.resumeSession
+        ? openControllerSession(options.resumeSession, artifacts.sessionsDir, options.cwd)
+        : SessionManager.create(options.cwd, artifacts.sessionsDir),
       settingsManager,
     });
     session = created.session;
