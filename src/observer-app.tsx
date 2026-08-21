@@ -345,20 +345,29 @@ function SegmentDetailPanel({ segment }: { segment: PhaseSegment | undefined }) 
 }
 function SummaryGrid({ detail }: { detail: RunStatusSummary }) {
   return (
-    <div class="summary-grid">
-      <MetricField label="Status" value={detail.status.replaceAll("_", " ")} />
-      <MetricField label="Phase" value={detail.phase || "Waiting"} />
-      <MetricField label="Runtime" value={duration(detail.runtimeMilliseconds)} />
-      <MetricField
-        label="Current phase duration"
-        value={duration(detail.phaseRuntimeMilliseconds)}
-      />
-      <MetricField
-        label="Latest actor or open tool"
-        value={detail.currentTool || detail.actor || "None"}
-      />
-      <MetricField label="Cleanup" value={detail.cleanup || "Not started"} />
-    </div>
+    <>
+      <div class="summary-grid">
+        <MetricField label="Status" value={detail.status.replaceAll("_", " ")} />
+        <MetricField label="Phase" value={detail.phase || "Waiting"} />
+        <MetricField label="Runtime" value={duration(detail.runtimeMilliseconds)} />
+        <MetricField
+          label="Current phase duration"
+          value={duration(detail.phaseRuntimeMilliseconds)}
+        />
+        <MetricField
+          label="Latest actor or open tool"
+          value={detail.currentTool || detail.actor || "None"}
+        />
+        <MetricField label="Cleanup" value={detail.cleanup || "Not started"} />
+      </div>
+      {detail.failure && (
+        <div class="error" role="alert">
+          <strong>Failure: {detail.failure.code}</strong>
+          <br />
+          {detail.failure.message}
+        </div>
+      )}
+    </>
   );
 }
 function EventRow({ event }: { event: TelemetryRecord }) {
