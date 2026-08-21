@@ -65,12 +65,12 @@ Current execution is not a security sandbox. Read-only tools stop mutation but d
 - `src/workflows/plan.ts` — validates planner inputs, snapshots issue context, runs planner, and writes `plan.md`.
 - `src/run-artifacts.ts` — creates `.factory/runs/<run-id>/` and writes evidence.
 - `src/verify.ts` — fail-closed `factory.verify.json` parsing, command execution, exact Git gate.
-- `src/linear.ts`, `src/github.ts`, and `src/intake.ts` — immutable external input snapshots, idempotency hash, and controller-side GitHub publication.
-- `src/run-state.ts` and `src/exe.ts` — atomic PoC state plus tested exe.dev SSH/SCP command boundaries.
+- `src/integrations/linear.ts`, `src/integrations/github.ts`, and `src/intake.ts` — immutable external input snapshots, idempotency hash, and controller-side GitHub publication.
+- `src/run-state.ts` and `src/integrations/exe.ts` — atomic PoC state plus tested exe.dev SSH/SCP command boundaries.
 - `src/controller-lock.ts` and `src/controller.ts` — serial controller ownership, restart reconciliation, remote execution, harvest, and cleanup.
 - `src/telemetry.ts`, `src/remote-protocol.ts`, `src/run-launcher.ts`, and `src/run-status.ts` — bounded live event contract, detached accepted start, and safe status replay.
 - `src/observer.ts`, `src/observer-ui.ts`, and `src/observer-app.tsx` — loopback-only read API, managed server ownership, and Preact polling dashboard bundled by Bun.
-- `src/cli.ts` — `agents list`, setup/doctor, local Pi commands, remote run commands, human dashboard alias, observer machine commands, and exit-code handling.
+- `src/cli/index.ts` — `agents list`, setup/doctor, local Pi commands, remote run commands, human dashboard alias, observer machine commands, and exit-code handling.
 - `factory.verify.json` — this repository's argv verification commands.
 - `src/agents/*.md` — role metadata in YAML frontmatter and role system prompt in Markdown body.
 - `test/*.test.ts` — Node test-runner coverage for CLI, role boundaries, envelopes, failures, and artifact safety.

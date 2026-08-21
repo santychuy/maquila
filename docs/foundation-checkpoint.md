@@ -21,9 +21,9 @@ All four role schemas run locally and through `factory run` in a fresh exe.dev V
 - `src/run-artifacts.ts` creates `.factory/runs/<run-id>/`, snapshots input, appends JSONL events, and writes JSON artifacts.
 - `src/verify.ts` loads `factory.verify.json`, executes repository checks, and evaluates the exact Git diff gate.
 - `src/workflows/worker.ts` runs sequential disjoint worker/documenter writers, deterministic verification, and a separate reviewer with aggregate lifecycle evidence.
-- `src/linear.ts`, `src/github.ts`, and `src/intake.ts` validate and hash immutable external inputs; `src/github.ts` also publishes an idempotent controller-side branch and ready-for-review pull request without storing credentials.
+- `src/integrations/linear.ts`, `src/integrations/github.ts`, and `src/intake.ts` validate and hash immutable external inputs; `src/integrations/github.ts` also publishes an idempotent controller-side branch and ready-for-review pull request without storing credentials.
 - `src/run-state.ts` atomically stores fail-closed controller state with transition validation, idempotency checks, and orphan VM lookup.
-- `src/exe.ts` provides tested command construction for exe.dev SSH, SCP, and retryable deletion without retaining credentials.
+- `src/integrations/exe.ts` provides tested command construction for exe.dev SSH, SCP, and retryable deletion without retaining credentials. Integration boundaries live together under `src/integrations/`.
 - `src/controller-lock.ts` and `src/controller.ts` provide single-host ownership, restart cleanup, remote bootstrap/lifecycle, fail-closed evidence harvest, and unconditional cleanup.
 - `src/telemetry.ts` adds a strict append-only host event ledger with gap-free sequencing, safe replay, bounded public fields, and terminal cleanup reconciliation.
 - `src/remote-protocol.ts` plus streaming exe.dev SSH expose deterministic live phase, agent/tool, gate, and review activity without prompts, tool arguments/results, or raw output. Controller code still owns state transitions and acceptance.
@@ -40,6 +40,12 @@ Telemetry/streaming, detached launcher, local observer server/UI, factory-owned 
 ## Controller limitations
 
 The lock and recovery model is single-host and serial. A timed-out SSH command may continue remotely until VM destruction succeeds; cleanup cannot be guaranteed while exe.dev control-plane deletion is unavailable. The controller restarts failed runs rather than resuming in-flight agent sessions. Publication fails closed if the target base branch moves after intake or if a deterministic factory branch already contains different content. Success currently requires a non-empty repository diff, so a planning outcome delivered only to Linear or another controller-owned external surface needs a later delivery contract. Agents still have OS-level access inside the VM; use trusted, non-sensitive repositories.
+
+## CLI architecture decision
+
+The CLI is split into small, zero-dependency modules under `src/cli/`: `types.ts` holds command/result types, `helpers.ts` shared validation and output helpers, `parse.ts` dispatches, `commands/agents.ts`, `commands/setup-doctor.ts`, `commands/observer.ts`, `commands/run.ts`, and `commands/pi.ts` parse command families, and `index.ts` owns execution and process boundaries. This keeps command parsing separate from side effects while preserving current nested commands.
+
+The architecture council compared Node's built-in `node:util.parseArgs`, Commander, and CAC. It chose `parseArgs` plus a static TypeScript dispatcher: no new dependency, `trustedDependencies` stays empty, and Bun compilation remains direct. CAC was rejected because it does not provide the nested subcommand support required here. Commander was not selected because a framework adds dependency and abstraction cost that this modular command layout does not need.
 
 ## Factory DX
 
