@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fetchGitHubSnapshot, publishGitHubPullRequest } from "../src/github.js";
+import { fetchGitHubSnapshot, publishGitHubPullRequest } from "../src/integrations/github.js";
 import { createIntake } from "../src/intake.js";
-import { fetchLinearIssue } from "../src/linear.js";
+import { fetchLinearIssue } from "../src/integrations/linear.js";
 
 interface FetchReply {
   body?: unknown;

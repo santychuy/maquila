@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { resolve } from "node:path";
-import { externalCommandEnvironment } from "./exe.js";
+import { externalCommandEnvironment } from "./integrations/exe.js";
 import { linuxProcessIdentity } from "./controller-lock.js";
 import { foldRunStatus, type RunStatusSummary } from "./run-status.js";
 import { cliInvocation } from "./runtime.js";

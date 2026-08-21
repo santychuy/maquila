@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
-import { externalCommandEnvironment } from "./exe.js";
+import { externalCommandEnvironment } from "./integrations/exe.js";
 
 const SAFE_NAME = /^[A-Za-z0-9_.-]+$/;
 
