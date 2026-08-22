@@ -2,6 +2,7 @@ import { StringDecoder } from "node:string_decoder";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import { ALLOWED_AGENT_TOOLS } from "./agents/index.js";
+import { WORKFLOW_STEP_IDS, workflowStep, type WorkflowStepId } from "./workflow-step.js";
 
 export const MAX_REMOTE_FRAME_BYTES = 64 * 1024;
 export const MAX_REMOTE_FRAMES = 20_000;
@@ -51,6 +52,10 @@ const TokenSchema = Type.Object(
 );
 export const REMOTE_TOOL_NAMES = [...ALLOWED_AGENT_TOOLS, "submit_envelope"] as const;
 export const ToolNameSchema = Type.String({ enum: REMOTE_TOOL_NAMES });
+const WorkflowStepIdSchema = Type.Unsafe<WorkflowStepId>({
+  type: "string",
+  enum: WORKFLOW_STEP_IDS,
+});
 
 const RemoteEventSchema = Type.Union([
   Type.Object(
@@ -58,6 +63,7 @@ const RemoteEventSchema = Type.Union([
       type: Type.Literal("phase_started"),
       actor: ActorSchema,
       phase: PhaseSchema,
+      stepId: WorkflowStepIdSchema,
       sourceAt: Type.String({ minLength: 1 }),
     },
     { additionalProperties: false },
@@ -67,6 +73,7 @@ const RemoteEventSchema = Type.Union([
       type: Type.Literal("phase_finished"),
       actor: ActorSchema,
       phase: PhaseSchema,
+      stepId: WorkflowStepIdSchema,
       status: StatusSchema,
       sourceAt: Type.String({ minLength: 1 }),
     },
@@ -77,6 +84,7 @@ const RemoteEventSchema = Type.Union([
       type: Type.Literal("agent_started"),
       actor: ActorSchema,
       phase: PhaseSchema,
+      stepId: WorkflowStepIdSchema,
       sourceAt: Type.String({ minLength: 1 }),
     },
     { additionalProperties: false },
@@ -86,6 +94,7 @@ const RemoteEventSchema = Type.Union([
       type: Type.Literal("agent_finished"),
       actor: ActorSchema,
       phase: PhaseSchema,
+      stepId: WorkflowStepIdSchema,
       status: StatusSchema,
       sourceAt: Type.String({ minLength: 1 }),
     },
@@ -96,6 +105,7 @@ const RemoteEventSchema = Type.Union([
       type: Type.Literal("tool_started"),
       actor: ActorSchema,
       phase: PhaseSchema,
+      stepId: WorkflowStepIdSchema,
       toolName: ToolNameSchema,
       toolCallId: Type.String({ minLength: 1, maxLength: 200 }),
       sourceAt: Type.String({ minLength: 1 }),
@@ -107,6 +117,7 @@ const RemoteEventSchema = Type.Union([
       type: Type.Literal("tool_finished"),
       actor: ActorSchema,
       phase: PhaseSchema,
+      stepId: WorkflowStepIdSchema,
       toolName: ToolNameSchema,
       toolCallId: Type.String({ minLength: 1, maxLength: 200 }),
       isError: Type.Boolean(),
@@ -129,6 +140,7 @@ const RemoteEventSchema = Type.Union([
         Type.Literal("documenting"),
         Type.Literal("reviewing"),
       ]),
+      stepId: WorkflowStepIdSchema,
       tokens: TokenSchema,
       reportedCostNanoUsd: Type.Optional(
         Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
@@ -142,6 +154,7 @@ const RemoteEventSchema = Type.Union([
       type: Type.Literal("gate_finished"),
       actor: Type.Literal("verifier"),
       phase: Type.Literal("verifying"),
+      stepId: Type.Literal("verify"),
       passed: Type.Boolean(),
       commandCount: Type.Integer({ minimum: 0 }),
       changedPathCount: Type.Integer({ minimum: 0 }),
@@ -155,6 +168,7 @@ const RemoteEventSchema = Type.Union([
       type: Type.Literal("review_finished"),
       actor: Type.Literal("reviewer"),
       phase: Type.Literal("reviewing"),
+      stepId: Type.Literal("review"),
       verdict: Type.Union([Type.Literal("PASS"), Type.Literal("FAIL")]),
       blockerCount: Type.Integer({ minimum: 0 }),
       sourceAt: Type.String({ minLength: 1 }),
@@ -165,7 +179,7 @@ const RemoteEventSchema = Type.Union([
 
 const EventFrameSchema = Type.Object(
   {
-    protocol: Type.Literal(1),
+    protocol: Type.Literal(2),
     kind: Type.Literal("event"),
     remoteSeq: Type.Integer({ minimum: 1 }),
     event: RemoteEventSchema,
@@ -174,7 +188,7 @@ const EventFrameSchema = Type.Object(
 );
 const ResultFrameSchema = Type.Object(
   {
-    protocol: Type.Literal(1),
+    protocol: Type.Literal(2),
     kind: Type.Literal("result"),
     remoteSeq: Type.Integer({ minimum: 1 }),
     status: StatusSchema,
@@ -207,6 +221,11 @@ function parseFrame(line: string): RemoteFrame {
   }
   if (!Value.Check(RemoteFrameSchema, value)) throw new Error("invalid remote protocol frame");
   const frame = value;
+  if ("event" in frame) {
+    const expected = workflowStep(frame.event.stepId);
+    if (frame.event.phase !== expected.phase || frame.event.actor !== expected.actor)
+      throw new Error("invalid remote protocol step identity");
+  }
   if ("event" in frame && !Number.isFinite(Date.parse(frame.event.sourceAt)))
     throw new Error("invalid remote protocol timestamp");
   if (
@@ -300,10 +319,10 @@ export function createRemoteProtocolWriter(write: (line: string) => void): Remot
   };
   return {
     event(event) {
-      emit({ protocol: 1, kind: "event", remoteSeq: seq, event });
+      emit({ protocol: 2, kind: "event", remoteSeq: seq, event });
     },
     result(value) {
-      emit({ protocol: 1, kind: "result", remoteSeq: seq, ...value });
+      emit({ protocol: 2, kind: "result", remoteSeq: seq, ...value });
     },
   };
 }

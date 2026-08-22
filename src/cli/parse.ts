@@ -28,6 +28,7 @@ export function parseCli(args: string[]): ParsedCli {
       "resume-session": { type: "string" },
       "session-id": { type: "string" },
       "session-sha256": { type: "string" },
+      "workflow-manifest": { type: "string" },
       json: { type: "boolean" },
       port: { type: "string" },
       "linear-token-reference": { type: "string" },

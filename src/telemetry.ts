@@ -13,6 +13,7 @@ import { basename, resolve } from "node:path";
 import { Type, type Static, type TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { estimateReferenceNanoUsd } from "./model-reference.js";
+import { WORKFLOW_STEP_IDS, workflowStep, type WorkflowStepId } from "./workflow-step.js";
 
 export const MAX_TELEMETRY_LINE_BYTES = 64 * 1024;
 export const MAX_TELEMETRY_FILE_BYTES = 32 * 1024 * 1024;
@@ -49,6 +50,7 @@ const PhaseSchema = Type.Object(
   {
     id: Type.String({ minLength: 1 }),
     name: PhaseNameSchema,
+    stepId: Type.Optional(Type.Unsafe<WorkflowStepId>({ type: "string", enum: WORKFLOW_STEP_IDS })),
     attempt: Type.Integer({ minimum: 1 }),
   },
   { additionalProperties: false },
@@ -368,6 +370,11 @@ export function parseTelemetryRecord(value: unknown): TelemetryRecord {
     throw new Error("invalid telemetry recordedAt");
   if (record.sourceAt && !Number.isFinite(Date.parse(record.sourceAt)))
     throw new Error("invalid telemetry sourceAt");
+  if (record.phase?.stepId) {
+    const expected = workflowStep(record.phase.stepId);
+    if (record.phase.name !== expected.phase || record.actor !== expected.actor)
+      throw new Error("invalid telemetry step identity");
+  }
   if (record.type === "agent_context" && record.payload.modelReference) {
     for (const dateValue of [
       record.payload.modelReference.knowledgeCutoff,
@@ -508,6 +515,7 @@ export function readTelemetry(path: string): TelemetryRecord[] {
         !started ||
         started.actor !== record.actor ||
         started.phase.name !== record.phase.name ||
+        started.phase.stepId !== record.phase.stepId ||
         started.phase.attempt !== record.phase.attempt
       )
         throw new Error("agent activity outside matching phase");
@@ -520,9 +528,13 @@ export function readTelemetry(path: string): TelemetryRecord[] {
     if (record.type === "agent_finished" && record.phase) {
       if (agentStates.get(record.phase.id) !== "started")
         throw new Error("agent finish without matching start");
+      if ([...activeTools.values()].some((tool) => tool.phaseId === record.phase!.id))
+        throw new Error("agent finished with active tool calls");
       agentStates.set(record.phase.id, record.payload.status);
     }
     if (record.type === "tool_started" && record.phase) {
+      if (agentStates.get(record.phase.id) !== "started")
+        throw new Error("tool activity outside active agent");
       if (activeTools.has(record.payload.toolCallId)) throw new Error("duplicate active tool");
       activeTools.set(record.payload.toolCallId, {
         phaseId: record.phase.id,
@@ -530,6 +542,8 @@ export function readTelemetry(path: string): TelemetryRecord[] {
       });
     }
     if (record.type === "tool_finished" && record.phase) {
+      if (agentStates.get(record.phase.id) !== "started")
+        throw new Error("tool activity outside active agent");
       const tool = activeTools.get(record.payload.toolCallId);
       if (!tool || tool.phaseId !== record.phase.id || tool.name !== record.payload.toolName)
         throw new Error("tool finish without matching start");
@@ -543,6 +557,7 @@ export function readTelemetry(path: string): TelemetryRecord[] {
         !started ||
         started.actor !== record.actor ||
         started.phase.name !== record.phase.name ||
+        started.phase.stepId !== record.phase.stepId ||
         started.phase.attempt !== record.phase.attempt
       )
         throw new Error("agent telemetry outside active phase");
@@ -573,13 +588,15 @@ export function readTelemetry(path: string): TelemetryRecord[] {
         !started ||
         started.actor !== record.actor ||
         started.phase.name !== record.phase.name ||
+        started.phase.stepId !== record.phase.stepId ||
         started.phase.attempt !== record.phase.attempt
       )
         throw new Error("phase closure does not match active phase");
       if (
         record.payload.status === "completed" &&
         ([...activeTools.values()].some((tool) => tool.phaseId === record.phase!.id) ||
-          (["planner", "worker", "documenter", "reviewer"].includes(record.actor) &&
+          (record.phase.stepId &&
+            ["planner", "worker", "documenter", "reviewer"].includes(record.actor) &&
             (agentStates.get(record.phase.id) !== "completed" || !usages.has(record.phase.id))))
       )
         throw new Error("completed phase has incomplete agent activity");
@@ -647,11 +664,13 @@ export function createTelemetryWriter(root: string, runId: string): TelemetryWri
           finished ||
           started.actor !== record.actor ||
           started.phase?.name !== record.phase.name ||
+          started.phase?.stepId !== record.phase.stepId ||
           started.phase?.attempt !== record.phase.attempt
         )
           throw new Error("phase closure does not match active phase");
         if (
           record.payload.status === "completed" &&
+          record.phase.stepId &&
           ["planner", "worker", "documenter", "reviewer"].includes(record.actor) &&
           (!phaseEvents.some(
             (event) => event.type === "agent_finished" && event.payload.status === "completed",
@@ -669,6 +688,7 @@ export function createTelemetryWriter(root: string, runId: string): TelemetryWri
           !started ||
           started.actor !== record.actor ||
           started.phase?.name !== record.phase.name ||
+          started.phase?.stepId !== record.phase.stepId ||
           started.phase?.attempt !== record.phase.attempt
         )
           throw new Error("agent activity outside matching phase");
@@ -685,6 +705,24 @@ export function createTelemetryWriter(root: string, runId: string): TelemetryWri
             phaseEvents.some((event) => event.type === "agent_finished"))
         )
           throw new Error("agent finish without matching start");
+        const agentIsActive =
+          phaseEvents.filter((event) => event.type === "agent_started").length === 1 &&
+          !phaseEvents.some((event) => event.type === "agent_finished");
+        if ((record.type === "tool_started" || record.type === "tool_finished") && !agentIsActive)
+          throw new Error("tool activity outside active agent");
+        if (
+          record.type === "agent_finished" &&
+          phaseEvents.some(
+            (event) =>
+              event.type === "tool_started" &&
+              !phaseEvents.some(
+                (end) =>
+                  end.type === "tool_finished" &&
+                  end.payload.toolCallId === event.payload.toolCallId,
+              ),
+          )
+        )
+          throw new Error("agent finished with active tool calls");
         if (record.type === "tool_started") {
           const open = previous.findLast(
             (event) =>

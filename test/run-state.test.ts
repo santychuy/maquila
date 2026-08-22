@@ -11,14 +11,19 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { FEATURE_PR_BLOCKS } from "../src/workflows/feature-pr.js";
+import { featurePrDefinitionSha256 } from "../src/workflows/manifest.js";
 import {
   beginControllerDecisionWait,
+  completeControllerWorkflow,
   createControllerState,
   findOrphanVms,
+  pinControllerWorkflowManifest,
   readControllerState,
   recordControllerCleanup,
   recoverStaleControllerClaims,
   recordControllerVm,
+  recordControllerWorkflowStep,
   scanRecoverableControllerStates,
   transitionControllerState,
   type ControllerStateInput,
@@ -28,6 +33,7 @@ function input(runId: string, idempotencyKey = "a".repeat(64)): ControllerStateI
   return {
     runId,
     idempotencyKey,
+    workflow: { id: "feature-pr", version: 1, definitionSha256: featurePrDefinitionSha256() },
     issueUuid: "7c3cd7a0-2503-40fe-9f33-56588786452a",
     issueSnapshotSha256: "b".repeat(64),
     repositoryId: 123,
@@ -137,11 +143,12 @@ test("duplicate active and completed inputs are rejected; failed and legacy read
     const decisionRoot = mkdtempSync(join(tmpdir(), "factory-state-decision-"));
     try {
       const decisionDir = runDir(decisionRoot, "run-1");
-      createControllerState(decisionDir, input("run-1"));
-      for (const next of ["creating_vm", "bootstrapping", "planning"] as const)
-        transitionControllerState(decisionDir, next);
-      recordControllerCleanup(decisionDir, "complete");
-      transitionControllerState(decisionDir, "awaiting_decision");
+      const created = createControllerState(decisionDir, input("run-1"));
+      const { workflow: _workflow, ...common } = created;
+      writeFileSync(
+        join(decisionDir, "controller-state.json"),
+        `${JSON.stringify({ ...common, version: 1, state: "awaiting_decision" })}\n`,
+      );
       createControllerState(runDir(decisionRoot, "run-2"), input("run-2"));
     } finally {
       rmSync(decisionRoot, { recursive: true, force: true });
@@ -151,16 +158,13 @@ test("duplicate active and completed inputs are rejected; failed and legacy read
     try {
       const readyDir = runDir(readyRoot, "run-1");
       createControllerState(readyDir, input("run-1"));
-      for (const next of [
-        "creating_vm",
-        "bootstrapping",
-        "planning",
-        "implementing",
-        "verifying",
-        "reviewing",
-        "ready_for_publication",
-      ] as const)
+      for (const next of ["creating_vm", "bootstrapping", "executing"] as const)
         transitionControllerState(readyDir, next);
+      recordControllerWorkflowStep(readyDir, "plan", 1);
+      pinControllerWorkflowManifest(readyDir, "f".repeat(64));
+      for (const step of ["document", "verify", "review"] as const)
+        recordControllerWorkflowStep(readyDir, step, 1);
+      completeControllerWorkflow(readyDir, "f".repeat(64));
       createControllerState(runDir(readyRoot, "run-2"), input("run-2"));
     } finally {
       rmSync(readyRoot, { recursive: true, force: true });
@@ -170,19 +174,15 @@ test("duplicate active and completed inputs are rejected; failed and legacy read
     try {
       const completeDir = runDir(completeRoot, "run-1");
       createControllerState(completeDir, input("run-1"));
-      for (const next of [
-        "creating_vm",
-        "bootstrapping",
-        "planning",
-        "implementing",
-        "verifying",
-        "reviewing",
-        "ready_for_publication",
-        "publishing",
-        "completed",
-      ] as const) {
+      for (const next of ["creating_vm", "bootstrapping", "executing"] as const)
         transitionControllerState(completeDir, next);
-      }
+      recordControllerWorkflowStep(completeDir, "plan", 1);
+      pinControllerWorkflowManifest(completeDir, "f".repeat(64));
+      for (const step of ["implement", "document", "verify", "review"] as const)
+        recordControllerWorkflowStep(completeDir, step, 1);
+      completeControllerWorkflow(completeDir, "f".repeat(64));
+      for (const next of ["publishing", "completed"] as const)
+        transitionControllerState(completeDir, next);
       assert.throws(
         () => createControllerState(runDir(completeRoot, "run-2"), input("run-2")),
         /duplicate active or completed/,
@@ -202,7 +202,9 @@ test("retained decision wait keeps claim and can resume planning", () => {
     createControllerState(dir, input("run-1"));
     transitionControllerState(dir, "creating_vm");
     recordControllerVm(dir, { name: "vm-1", sshDest: "vm.exe.xyz", status: "running" });
-    for (const next of ["bootstrapping", "planning"] as const) transitionControllerState(dir, next);
+    for (const next of ["bootstrapping", "executing"] as const)
+      transitionControllerState(dir, next);
+    recordControllerWorkflowStep(dir, "plan", 1);
     const waiting = beginControllerDecisionWait(dir, {
       generation: 1,
       expiresAt: "2026-01-02T00:00:00.000Z",
@@ -218,7 +220,7 @@ test("retained decision wait keeps claim and can resume planning", () => {
       () => createControllerState(runDir(root, "run-2"), input("run-2")),
       /duplicate active or completed/,
     );
-    assert.equal(transitionControllerState(dir, "planning").state, "planning");
+    assert.equal(transitionControllerState(dir, "executing").state, "executing");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -247,17 +249,108 @@ test("ready state requires cleanup and is excluded from recovery", () => {
   const dir = runDir(root, "run-1");
   try {
     createControllerState(dir, input("run-1"));
-    for (const next of [
-      "creating_vm",
-      "bootstrapping",
-      "planning",
-      "implementing",
-      "verifying",
-      "reviewing",
-      "ready_for_publication",
-    ] as const)
+    for (const next of ["creating_vm", "bootstrapping", "executing"] as const)
       transitionControllerState(dir, next);
+    recordControllerWorkflowStep(dir, "plan", 1);
+    pinControllerWorkflowManifest(dir, "f".repeat(64));
+    for (const step of ["implement", "document", "verify", "review"] as const)
+      recordControllerWorkflowStep(dir, step, 1);
+    completeControllerWorkflow(dir, "f".repeat(64));
     assert.deepEqual(scanRecoverableControllerStates(join(root, ".factory", "runs")), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("v2 workflow cursor and manifest pinning fail closed", () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-state-workflow-"));
+  const dir = runDir(root, "run-1");
+  try {
+    const created = createControllerState(dir, input("run-1"));
+    assert.equal(created.version, 2);
+    assert.deepEqual(created.workflow, input("run-1").workflow);
+    assert.throws(() => recordControllerWorkflowStep(dir, "plan", 1), /executing state v2/);
+    for (const next of ["creating_vm", "bootstrapping", "executing"] as const)
+      transitionControllerState(dir, next);
+    assert.throws(() => recordControllerWorkflowStep(dir, "document", 1), /cursor transition/);
+    assert.throws(() => recordControllerWorkflowStep(dir, "plan", 0), /invalid workflow cursor/);
+    recordControllerWorkflowStep(dir, "plan", 1);
+    assert.throws(() => recordControllerWorkflowStep(dir, "plan", 3), /cursor transition/);
+    assert.throws(() => pinControllerWorkflowManifest(dir, "bad"), /manifest hash/);
+    pinControllerWorkflowManifest(dir, "f".repeat(64));
+    assert.throws(
+      () => pinControllerWorkflowManifest(dir, "a".repeat(64)),
+      /manifest hash changed/,
+    );
+    assert.throws(
+      () => completeControllerWorkflow(dir, "f".repeat(64)),
+      /not ready for publication/,
+    );
+    for (const step of ["document", "verify", "review"] as const)
+      recordControllerWorkflowStep(dir, step, 1);
+    assert.throws(
+      () => completeControllerWorkflow(dir, "a".repeat(64)),
+      /not ready for publication/,
+    );
+    assert.equal(completeControllerWorkflow(dir, "f".repeat(64)).state, "ready_for_publication");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("v2 full cursor progression follows code-owned feature-pr blocks", () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-state-blocks-"));
+  const dir = runDir(root, "run-1");
+  try {
+    createControllerState(dir, input("run-1"));
+    for (const next of ["creating_vm", "bootstrapping", "executing"] as const)
+      transitionControllerState(dir, next);
+    recordControllerWorkflowStep(dir, "plan", 1);
+    pinControllerWorkflowManifest(dir, "f".repeat(64));
+    for (const step of FEATURE_PR_BLOCKS)
+      assert.equal(recordControllerWorkflowStep(dir, step, 1).workflow.currentStepId, step);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("legacy retained decision wait reads and resumes without version rewrite", () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-state-legacy-"));
+  const dir = runDir(root, "run-1");
+  try {
+    const created = createControllerState(dir, input("run-1"));
+    const { workflow: _workflow, ...common } = created;
+    writeFileSync(
+      join(dir, "controller-state.json"),
+      `${JSON.stringify({
+        ...common,
+        version: 1,
+        state: "awaiting_decision",
+        cleanup: "pending",
+        vm: { name: "vm-1", sshDest: "vm.exe.xyz", status: "running" },
+        decisionWait: {
+          generation: 1,
+          expiresAt: "2026-01-02T00:00:00.000Z",
+          plannerRunId: "planner-run-1",
+          plannerSessionId: "session-1",
+          plannerSessionSha256: "e".repeat(64),
+          checkpointSha256: "f".repeat(64),
+        },
+      })}\n`,
+    );
+    assert.equal(readControllerState(dir).version, 1);
+    assert.equal(scanRecoverableControllerStates(join(root, ".factory", "runs")).length, 1);
+    assert.deepEqual(findOrphanVms(join(root, ".factory", "runs")), [
+      {
+        runId: "run-1",
+        vm: { name: "vm-1", sshDest: "vm.exe.xyz", status: "running" },
+        cleanup: "pending",
+      },
+    ]);
+    const resumed = transitionControllerState(dir, "planning");
+    assert.equal(resumed.version, 1);
+    assert.equal(resumed.state, "planning");
+    assert.equal(readControllerState(dir).version, 1);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

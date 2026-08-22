@@ -328,6 +328,30 @@ test("worker lifecycle command parses immutable inputs", () => {
   assert.match(HELP, /factory pi worker/);
   assert.throws(() => parseCli(["pi", "worker"]), /--planner/);
   assert.throws(() => parseCli(["unknown"]), /pi worker/);
+  assert.deepEqual(
+    parseCli([
+      "pi",
+      "worker",
+      "--repo",
+      "/tmp/repo",
+      "--issue",
+      "/tmp/issue.md",
+      "--planner",
+      "/tmp/planner.json",
+      "--base-sha",
+      "a".repeat(40),
+      "--workflow-manifest",
+      "/tmp/workflow-manifest.json",
+    ]),
+    {
+      repo: "/tmp/repo",
+      issue: "/tmp/issue.md",
+      plannerEnvelope: "/tmp/planner.json",
+      baseSha: "a".repeat(40),
+      timeoutSeconds: 300,
+      workflowManifest: "/tmp/workflow-manifest.json",
+    },
+  );
 });
 
 test("planner rejects missing input and timeouts beyond run ceiling", () => {

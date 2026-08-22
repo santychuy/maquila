@@ -24,6 +24,8 @@ import {
   runController,
   type ControllerExe,
 } from "../src/controller.js";
+import { createFeaturePrExecution } from "../src/workflows/execution.js";
+import { createFeaturePrManifest, featurePrDefinitionSha256 } from "../src/workflows/manifest.js";
 import { acquireControllerLock } from "../src/controller-lock.js";
 import { ExeCommandError } from "../src/integrations/exe.js";
 import { createLinearDecisionComment } from "../src/integrations/linear.js";
@@ -158,11 +160,57 @@ test("recovery terminalizes an accepted child that died before intake state", ()
     rmSync(root, { recursive: true, force: true });
   }
 });
-const HARVEST_EXPECTED = {
-  baseSha: BASE_SHA,
-  allowedPaths: ["docs/a.md", "src/a.ts"],
-  patchSha256: PATCH_SHA256,
-};
+function mixedHarvest(patchSha256 = PATCH_SHA256) {
+  const manifest = createFeaturePrManifest({
+    plannerRunId: ids[0]!,
+    baseSha: BASE_SHA,
+    plan: {
+      summary: "Document architecture assessment",
+      evidence: ["RIFF-39 requests documentation"],
+      changes: [
+        { path: "src/a.ts", action: "add", rationale: "Implement assessment" },
+        { path: "docs/a.md", action: "add", rationale: "Document assessment" },
+      ],
+      verification: ["Run bun run check"],
+      risks: [],
+      decisionsNeeded: [],
+    },
+  });
+  return {
+    manifest,
+    execution: createFeaturePrExecution({
+      manifest,
+      implementRunId: ids[1]!,
+      documenterRunId: ids[2]!,
+      reviewerRunId: ids[3]!,
+      reviewedPatchSha256: patchSha256,
+    }),
+  };
+}
+function docsHarvest() {
+  const manifest = createFeaturePrManifest({
+    plannerRunId: ids[0]!,
+    baseSha: BASE_SHA,
+    plan: {
+      summary: "Docs",
+      evidence: ["fact"],
+      changes: [{ path: "docs/a.md", action: "add", rationale: "Docs" }],
+      verification: ["check"],
+      risks: [],
+      decisionsNeeded: [],
+    },
+  });
+  return {
+    manifest,
+    execution: createFeaturePrExecution({
+      manifest,
+      documenterRunId: ids[2]!,
+      reviewerRunId: ids[3]!,
+      reviewedPatchSha256: DOCS_PATCH_SHA256,
+    }),
+  };
+}
+const HARVEST_EXPECTED = mixedHarvest();
 function file(root: string, run: string, name: string, value = "{}") {
   const path = join(root, ".factory", "runs", run, name);
   mkdirSync(join(path, ".."), { recursive: true });
@@ -246,6 +294,7 @@ function validArchive(root: string, unsafeLink = false, reviewDigest = PATCH_SHA
       "lifecycle.json",
       "verification.json",
       "review-diff.sha256",
+      "workflow-execution.json",
     ]),
   );
   file(
@@ -262,6 +311,12 @@ function validArchive(root: string, unsafeLink = false, reviewDigest = PATCH_SHA
   file(root, ids[1]!, "lifecycle.json", JSON.stringify(lifecycle));
   file(root, ids[1]!, "verification.json", JSON.stringify(verification));
   file(root, ids[1]!, "review-diff.sha256", `${reviewDigest}\n`);
+  file(
+    root,
+    ids[1]!,
+    "workflow-execution.json",
+    JSON.stringify(mixedHarvest(reviewDigest).execution),
+  );
   file(root, ids[2]!, "receipt.json", receipt(ids[2]!, "documenter", ["envelope.json"]));
   file(
     root,
@@ -356,11 +411,13 @@ function validDocsOnlyArchive(root: string): string {
       "lifecycle.json",
       "verification.json",
       "review-diff.sha256",
+      "workflow-execution.json",
     ]),
   );
   file(root, ids[2]!, "lifecycle.json", JSON.stringify(lifecycle));
   file(root, ids[2]!, "verification.json", JSON.stringify(verification));
   file(root, ids[2]!, "review-diff.sha256", `${DOCS_PATCH_SHA256}\n`);
+  file(root, ids[2]!, "workflow-execution.json", JSON.stringify(docsHarvest().execution));
   file(
     root,
     ids[3]!,
@@ -400,7 +457,7 @@ test("controller patch fixtures are valid Git patches", () => {
 test("harvest validates evidence requirements", () => {
   const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
   try {
-    harvest(validArchive(root), join(root, "out"), ids, HARVEST_EXPECTED);
+    harvest(validArchive(root), join(root, "out"), HARVEST_EXPECTED);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -408,11 +465,43 @@ test("harvest validates evidence requirements", () => {
 test("harvest accepts docs-only evidence without a worker receipt", () => {
   const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
   try {
-    harvest(validDocsOnlyArchive(root), join(root, "out"), [ids[0]!, ids[2]!, ids[3]!], {
-      ...HARVEST_EXPECTED,
-      allowedPaths: ["docs/a.md"],
-      patchSha256: DOCS_PATCH_SHA256,
-    });
+    harvest(validDocsOnlyArchive(root), join(root, "out"), docsHarvest());
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("harvest rejects missing or mismatched workflow execution", () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
+  try {
+    validArchive(root);
+    rmSync(join(root, ".factory", "runs", ids[1]!, "workflow-execution.json"));
+    const missing = join(root, "missing-execution.tar");
+    execFileSync("tar", ["-cf", missing, "-C", root, ".factory/runs"]);
+    assert.throws(
+      () => harvest(missing, join(root, "missing"), HARVEST_EXPECTED),
+      /required remote evidence missing/,
+    );
+    const hashed = mixedHarvest();
+    hashed.execution = { ...hashed.execution, workflowManifestSha256: "0".repeat(64) };
+    assert.throws(
+      () => harvest(validArchive(join(root, "hash-src")), join(root, "hash"), hashed),
+      /manifest hash mismatch/,
+    );
+    const skipped = mixedHarvest();
+    skipped.execution = {
+      ...skipped.execution,
+      steps: [
+        { id: "implement", status: "skipped", skipReason: "docs-only" },
+        skipped.execution.steps[1],
+        skipped.execution.steps[2],
+        skipped.execution.steps[3],
+      ],
+    };
+    assert.throws(
+      () => harvest(validArchive(join(root, "skip-src")), join(root, "skip"), skipped),
+      /does not match manifest/,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -423,13 +512,23 @@ test("harvest rejects traversal run identifiers", () => {
   try {
     assert.throws(
       () =>
-        harvest(
-          validArchive(root),
-          join(root, "out"),
-          ["../bad", ids[1]!, ids[2]!],
-          HARVEST_EXPECTED,
-        ),
-      /unsafe remote run id/,
+        harvest(validArchive(root), join(root, "out"), {
+          ...HARVEST_EXPECTED,
+          execution: {
+            ...HARVEST_EXPECTED.execution,
+            steps: [
+              {
+                id: "implement",
+                status: "completed",
+                runId: "../bad",
+              },
+              HARVEST_EXPECTED.execution.steps[1],
+              HARVEST_EXPECTED.execution.steps[2],
+              HARVEST_EXPECTED.execution.steps[3],
+            ],
+          },
+        }),
+      /invalid workflow execution|unsafe remote run id/,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -442,14 +541,29 @@ test("harvest rejects duplicate run identities and mismatched receipts", () => {
     const archive = validArchive(root);
     assert.throws(
       () =>
-        harvest(archive, join(root, "duplicate"), [ids[0]!, ids[0]!, ids[2]!], HARVEST_EXPECTED),
-      /distinct/,
+        harvest(archive, join(root, "duplicate"), {
+          ...HARVEST_EXPECTED,
+          execution: {
+            ...HARVEST_EXPECTED.execution,
+            steps: [
+              {
+                id: "implement",
+                status: "completed",
+                runId: ids[1]!,
+              },
+              { id: "document", status: "completed", runId: ids[1]! },
+              HARVEST_EXPECTED.execution.steps[2],
+              HARVEST_EXPECTED.execution.steps[3],
+            ],
+          },
+        }),
+      /does not match manifest|distinct|unexpected runs/,
     );
     file(root, ids[0]!, "receipt.json", receipt(ids[1]!, "planner", ["envelope.json", "plan.md"]));
     const mismatched = join(root, "mismatched.tar");
     execFileSync("tar", ["-cf", mismatched, "-C", root, ".factory/runs"]);
     assert.throws(
-      () => harvest(mismatched, join(root, "mismatch"), ids, HARVEST_EXPECTED),
+      () => harvest(mismatched, join(root, "mismatch"), HARVEST_EXPECTED),
       /did not pass/,
     );
   } finally {
@@ -530,7 +644,7 @@ test("harvest binds verification, role links, base SHA, and reviewed patch", () 
       const archive = join(root, `${item.name.replaceAll(" ", "-")}.tar`);
       execFileSync("tar", ["-cf", archive, "-C", root, ".factory/runs"]);
       assert.throws(
-        () => harvest(archive, join(root, "out"), ids, HARVEST_EXPECTED),
+        () => harvest(archive, join(root, "out"), HARVEST_EXPECTED),
         /did not pass/,
         item.name,
       );
@@ -544,7 +658,7 @@ test("harvest rejects symbolic links", () => {
   const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
   try {
     assert.throws(
-      () => harvest(validArchive(root, true), join(root, "out"), ids, HARVEST_EXPECTED),
+      () => harvest(validArchive(root, true), join(root, "out"), HARVEST_EXPECTED),
       /unsafe/,
     );
   } finally {
@@ -558,6 +672,7 @@ class FakeExe implements ControllerExe {
   documenterLifecycleStatus: "completed" | "failed" = "failed";
   documenterFailure =
     "documenter blocked: missing approved path docs/native-architecture-assessment.md";
+  toolLifecycleViolation?: "before-start" | "after-finish" | "finish-with-open-tool";
 
   constructor(
     private readonly failPlanner = false,
@@ -602,6 +717,7 @@ class FakeExe implements ControllerExe {
         type: "phase_started",
         actor: "planner",
         phase: "planning",
+        stepId: "plan",
         sourceAt: new Date().toISOString(),
       });
       onStdout(Buffer.from(`${output.join("")}{malformed}\n`));
@@ -612,40 +728,84 @@ class FakeExe implements ControllerExe {
     const sourceAt = "1970-01-01T00:00:00.000+00:00";
     if (argv.includes("plan")) {
       if (this.invalidSequence)
-        protocol.event({ type: "phase_started", actor: "worker", phase: "implementing", sourceAt });
-      else protocol.event({ type: "phase_started", actor: "planner", phase: "planning", sourceAt });
+        protocol.event({
+          type: "phase_started",
+          actor: "worker",
+          phase: "implementing",
+          stepId: "implement",
+          sourceAt,
+        });
+      else
+        protocol.event({
+          type: "phase_started",
+          actor: "planner",
+          phase: "planning",
+          stepId: "plan",
+          sourceAt,
+        });
       if (!this.invalidSequence) {
-        protocol.event({ type: "agent_started", actor: "planner", phase: "planning", sourceAt });
+        if (this.toolLifecycleViolation === "before-start")
+          protocol.event({
+            type: "tool_started",
+            actor: "planner",
+            phase: "planning",
+            stepId: "plan",
+            toolName: "read",
+            toolCallId: "early-tool",
+            sourceAt,
+          });
+        protocol.event({
+          type: "agent_started",
+          actor: "planner",
+          phase: "planning",
+          stepId: "plan",
+          sourceAt,
+        });
         protocol.event({
           type: "tool_started",
           actor: "planner",
           phase: "planning",
+          stepId: "plan",
           toolName: this.invalidToolActivity ? "bash" : "read",
           toolCallId: "remote-private-path-content",
           sourceAt,
         });
-        protocol.event({
-          type: "tool_finished",
-          actor: "planner",
-          phase: "planning",
-          toolName: this.invalidToolActivity ? "bash" : "read",
-          toolCallId: this.mismatchedToolFinish
-            ? "different-remote-id"
-            : "remote-private-path-content",
-          isError: false,
-          sourceAt,
-        });
+        if (this.toolLifecycleViolation !== "finish-with-open-tool")
+          protocol.event({
+            type: "tool_finished",
+            actor: "planner",
+            phase: "planning",
+            stepId: "plan",
+            toolName: this.invalidToolActivity ? "bash" : "read",
+            toolCallId: this.mismatchedToolFinish
+              ? "different-remote-id"
+              : "remote-private-path-content",
+            isError: false,
+            sourceAt,
+          });
         protocol.event({
           type: "agent_finished",
           actor: "planner",
           phase: "planning",
+          stepId: "plan",
           status: "completed",
           sourceAt,
         });
+        if (this.toolLifecycleViolation === "after-finish")
+          protocol.event({
+            type: "tool_started",
+            actor: "planner",
+            phase: "planning",
+            stepId: "plan",
+            toolName: "read",
+            toolCallId: "late-tool",
+            sourceAt,
+          });
         protocol.event({
           type: "agent_usage",
           actor: "planner",
           phase: "planning",
+          stepId: "plan",
           tokens: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, total: 14 },
           sourceAt,
         });
@@ -654,6 +814,7 @@ class FakeExe implements ControllerExe {
         type: "phase_finished",
         actor: this.invalidSequence ? "worker" : "planner",
         phase: this.invalidSequence ? "implementing" : "planning",
+        stepId: this.invalidSequence ? "implement" : "plan",
         status: "completed",
         sourceAt,
       });
@@ -665,12 +826,25 @@ class FakeExe implements ControllerExe {
           : {}),
       });
     } else {
-      protocol.event({ type: "phase_started", actor: "worker", phase: "implementing", sourceAt });
-      protocol.event({ type: "agent_started", actor: "worker", phase: "implementing", sourceAt });
+      protocol.event({
+        type: "phase_started",
+        actor: "worker",
+        phase: "implementing",
+        stepId: "implement",
+        sourceAt,
+      });
+      protocol.event({
+        type: "agent_started",
+        actor: "worker",
+        phase: "implementing",
+        stepId: "implement",
+        sourceAt,
+      });
       protocol.event({
         type: "agent_finished",
         actor: "worker",
         phase: "implementing",
+        stepId: "implement",
         status: "completed",
         sourceAt,
       });
@@ -678,6 +852,7 @@ class FakeExe implements ControllerExe {
         type: "agent_usage",
         actor: "worker",
         phase: "implementing",
+        stepId: "implement",
         tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
         sourceAt,
       });
@@ -686,10 +861,17 @@ class FakeExe implements ControllerExe {
           type: "phase_finished",
           actor: "worker",
           phase: "implementing",
+          stepId: "implement",
           status: "failed",
           sourceAt,
         });
-        protocol.event({ type: "phase_started", actor: "verifier", phase: "verifying", sourceAt });
+        protocol.event({
+          type: "phase_started",
+          actor: "verifier",
+          phase: "verifying",
+          stepId: "verify",
+          sourceAt,
+        });
         protocol.result({
           status: "failed",
           runDir: `/home/exedev/factory/.factory/runs/${ids[1]}`,
@@ -701,6 +883,7 @@ class FakeExe implements ControllerExe {
         type: "phase_finished",
         actor: "worker",
         phase: "implementing",
+        stepId: "implement",
         status: "completed",
         sourceAt,
       });
@@ -708,18 +891,21 @@ class FakeExe implements ControllerExe {
         type: "phase_started",
         actor: "documenter",
         phase: "documenting",
+        stepId: "document",
         sourceAt,
       });
       protocol.event({
         type: "agent_started",
         actor: "documenter",
         phase: "documenting",
+        stepId: "document",
         sourceAt,
       });
       protocol.event({
         type: "agent_finished",
         actor: "documenter",
         phase: "documenting",
+        stepId: "document",
         status: "completed",
         sourceAt,
       });
@@ -727,6 +913,7 @@ class FakeExe implements ControllerExe {
         type: "agent_usage",
         actor: "documenter",
         phase: "documenting",
+        stepId: "document",
         tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
         sourceAt,
       });
@@ -734,6 +921,7 @@ class FakeExe implements ControllerExe {
         type: "phase_finished",
         actor: "documenter",
         phase: "documenting",
+        stepId: "document",
         status: this.normalFailedDocumenter ? "failed" : "completed",
         sourceAt,
       });
@@ -746,12 +934,19 @@ class FakeExe implements ControllerExe {
         onStdout(Buffer.from(output.join("")));
         return { stderr: "" };
       }
-      protocol.event({ type: "phase_started", actor: "verifier", phase: "verifying", sourceAt });
+      protocol.event({
+        type: "phase_started",
+        actor: "verifier",
+        phase: "verifying",
+        stepId: "verify",
+        sourceAt,
+      });
       if (!this.missingGate)
         protocol.event({
           type: "gate_finished",
           actor: "verifier",
           phase: "verifying",
+          stepId: "verify",
           passed: !this.failedGateProgression && !this.normalFailedGate,
           commandCount: 1,
           changedPathCount: 1,
@@ -762,6 +957,7 @@ class FakeExe implements ControllerExe {
         type: "phase_finished",
         actor: "verifier",
         phase: "verifying",
+        stepId: "verify",
         status: this.normalFailedGate ? "failed" : "completed",
         sourceAt,
       });
@@ -773,12 +969,25 @@ class FakeExe implements ControllerExe {
         onStdout(Buffer.from(output.join("")));
         return { stderr: "" };
       }
-      protocol.event({ type: "phase_started", actor: "reviewer", phase: "reviewing", sourceAt });
-      protocol.event({ type: "agent_started", actor: "reviewer", phase: "reviewing", sourceAt });
+      protocol.event({
+        type: "phase_started",
+        actor: "reviewer",
+        phase: "reviewing",
+        stepId: "review",
+        sourceAt,
+      });
+      protocol.event({
+        type: "agent_started",
+        actor: "reviewer",
+        phase: "reviewing",
+        stepId: "review",
+        sourceAt,
+      });
       protocol.event({
         type: "agent_finished",
         actor: "reviewer",
         phase: "reviewing",
+        stepId: "review",
         status: "completed",
         sourceAt,
       });
@@ -786,6 +995,7 @@ class FakeExe implements ControllerExe {
         type: "agent_usage",
         actor: "reviewer",
         phase: "reviewing",
+        stepId: "review",
         tokens: { input: 3, output: 2, cacheRead: 0, cacheWrite: 0, total: 5 },
         sourceAt,
       });
@@ -793,6 +1003,7 @@ class FakeExe implements ControllerExe {
         type: "review_finished",
         actor: "reviewer",
         phase: "reviewing",
+        stepId: "review",
         verdict: this.failedReviewProgression || this.normalFailedReview ? "FAIL" : "PASS",
         blockerCount: this.failedReviewProgression || this.normalFailedReview ? 1 : 0,
         sourceAt,
@@ -801,6 +1012,7 @@ class FakeExe implements ControllerExe {
         type: "phase_finished",
         actor: "reviewer",
         phase: "reviewing",
+        stepId: "review",
         status: this.normalFailedReview ? "failed" : "completed",
         sourceAt,
       });
@@ -848,6 +1060,12 @@ class FakeExe implements ControllerExe {
     if (argv[0] === "sha256sum") {
       return {
         stdout: "472655581fb851559730c48763e0c9d3bc25975c59d518003fc0849d3e4ba0f6  node.tar.xz\n",
+        stderr: "",
+      };
+    }
+    if (argv[0] === "cat" && argv[1]?.endsWith("/workflow-execution.json")) {
+      return {
+        stdout: JSON.stringify(mixedHarvest().execution),
         stderr: "",
       };
     }
@@ -905,6 +1123,22 @@ class FakeExe implements ControllerExe {
   }
 }
 
+class MisleadingLifecycleExe extends FakeExe {
+  override async exec(destination: string, argv: string[], timeoutMs?: number) {
+    if (argv[0] === "cat" && argv[1]?.endsWith("/lifecycle.json")) {
+      this.calls.push({ operation: "exec", value: { destination, argv, timeoutMs } });
+      return {
+        stdout: JSON.stringify({
+          documenterRunDir:
+            "/home/exedev/factory/.factory/runs/55555555-5555-4555-8555-555555555555",
+        }),
+        stderr: "",
+      };
+    }
+    return super.exec(destination, argv, timeoutMs);
+  }
+}
+
 class BlockedPlannerExe extends FakeExe {
   override async exec(destination: string, argv: string[], timeoutMs?: number) {
     if (argv[0] === "cat" && argv[1]?.endsWith("/receipt.json")) {
@@ -946,6 +1180,11 @@ class BlockedPlannerExe extends FakeExe {
 
 class ResumingPlannerExe extends FakeExe {
   private envelopes = 0;
+  private checkpoints = 0;
+
+  constructor(private readonly blockedEnvelopes = 1) {
+    super();
+  }
 
   override async exec(destination: string, argv: string[], timeoutMs?: number) {
     if (argv[0] === "cat" && argv[1]?.endsWith("/receipt.json")) {
@@ -960,7 +1199,7 @@ class ResumingPlannerExe extends FakeExe {
     }
     if (argv[0] === "cat" && argv[1]?.endsWith("/envelope.json")) {
       this.envelopes += 1;
-      if (this.envelopes === 1) {
+      if (this.envelopes <= this.blockedEnvelopes) {
         this.calls.push({ operation: "exec", value: { destination, argv, timeoutMs } });
         return {
           stdout: JSON.stringify({
@@ -981,7 +1220,11 @@ class ResumingPlannerExe extends FakeExe {
   override async copyFrom(destination: string, remotePath: string, localPath: string) {
     if (remotePath.endsWith("planner.jsonl")) {
       this.calls.push({ operation: "copyFrom", value: { destination, remotePath, localPath } });
-      writeFileSync(localPath, '{"type":"session"}\n');
+      this.checkpoints += 1;
+      writeFileSync(
+        localPath,
+        `${JSON.stringify({ type: "session", checkpoint: this.checkpoints })}\n`,
+      );
       return;
     }
     return super.copyFrom(destination, remotePath, localPath);
@@ -1012,12 +1255,25 @@ class DocsOnlyExe extends FakeExe {
     const output: string[] = [];
     const protocol = createRemoteProtocolWriter((line) => output.push(line));
     const sourceAt = "1970-01-01T00:00:00.000+00:00";
-    protocol.event({ type: "phase_started", actor: "documenter", phase: "documenting", sourceAt });
-    protocol.event({ type: "agent_started", actor: "documenter", phase: "documenting", sourceAt });
+    protocol.event({
+      type: "phase_started",
+      actor: "documenter",
+      phase: "documenting",
+      stepId: "document",
+      sourceAt,
+    });
+    protocol.event({
+      type: "agent_started",
+      actor: "documenter",
+      phase: "documenting",
+      stepId: "document",
+      sourceAt,
+    });
     protocol.event({
       type: "agent_finished",
       actor: "documenter",
       phase: "documenting",
+      stepId: "document",
       status: "completed",
       sourceAt,
     });
@@ -1025,6 +1281,7 @@ class DocsOnlyExe extends FakeExe {
       type: "agent_usage",
       actor: "documenter",
       phase: "documenting",
+      stepId: "document",
       tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
       sourceAt,
     });
@@ -1032,14 +1289,22 @@ class DocsOnlyExe extends FakeExe {
       type: "phase_finished",
       actor: "documenter",
       phase: "documenting",
+      stepId: "document",
       status: "completed",
       sourceAt,
     });
-    protocol.event({ type: "phase_started", actor: "verifier", phase: "verifying", sourceAt });
+    protocol.event({
+      type: "phase_started",
+      actor: "verifier",
+      phase: "verifying",
+      stepId: "verify",
+      sourceAt,
+    });
     protocol.event({
       type: "gate_finished",
       actor: "verifier",
       phase: "verifying",
+      stepId: "verify",
       passed: true,
       commandCount: 1,
       changedPathCount: 1,
@@ -1050,15 +1315,29 @@ class DocsOnlyExe extends FakeExe {
       type: "phase_finished",
       actor: "verifier",
       phase: "verifying",
+      stepId: "verify",
       status: "completed",
       sourceAt,
     });
-    protocol.event({ type: "phase_started", actor: "reviewer", phase: "reviewing", sourceAt });
-    protocol.event({ type: "agent_started", actor: "reviewer", phase: "reviewing", sourceAt });
+    protocol.event({
+      type: "phase_started",
+      actor: "reviewer",
+      phase: "reviewing",
+      stepId: "review",
+      sourceAt,
+    });
+    protocol.event({
+      type: "agent_started",
+      actor: "reviewer",
+      phase: "reviewing",
+      stepId: "review",
+      sourceAt,
+    });
     protocol.event({
       type: "agent_finished",
       actor: "reviewer",
       phase: "reviewing",
+      stepId: "review",
       status: "completed",
       sourceAt,
     });
@@ -1066,6 +1345,7 @@ class DocsOnlyExe extends FakeExe {
       type: "agent_usage",
       actor: "reviewer",
       phase: "reviewing",
+      stepId: "review",
       tokens: { input: 3, output: 2, cacheRead: 0, cacheWrite: 0, total: 5 },
       sourceAt,
     });
@@ -1073,6 +1353,7 @@ class DocsOnlyExe extends FakeExe {
       type: "review_finished",
       actor: "reviewer",
       phase: "reviewing",
+      stepId: "review",
       verdict: "PASS",
       blockerCount: 0,
       sourceAt,
@@ -1081,6 +1362,7 @@ class DocsOnlyExe extends FakeExe {
       type: "phase_finished",
       actor: "reviewer",
       phase: "reviewing",
+      stepId: "review",
       status: "completed",
       sourceAt,
     });
@@ -1094,6 +1376,10 @@ class DocsOnlyExe extends FakeExe {
   }
 
   override async exec(destination: string, argv: string[], timeoutMs?: number) {
+    if (argv[0] === "cat" && argv[1]?.endsWith("/workflow-execution.json")) {
+      this.calls.push({ operation: "exec", value: { destination, argv, timeoutMs } });
+      return { stdout: JSON.stringify(docsHarvest().execution), stderr: "" };
+    }
     if (argv[0] === "cat" && argv[1]?.endsWith("/envelope.json")) {
       this.calls.push({ operation: "exec", value: { destination, argv, timeoutMs } });
       return {
@@ -1241,6 +1527,13 @@ test("controller requests an assigned engineer decision without failing", async 
     assert.equal(result.decisionRequest?.commentId, "decision-comment-1");
     const state = readControllerState(result.runDir);
     assert.equal(state.state, "awaiting_decision");
+    assert.equal(state.version, 2);
+    if (state.version === 2) {
+      assert.equal(state.workflow.id, "feature-pr");
+      assert.equal(state.workflow.currentStepId, "plan");
+      assert.equal(state.workflow.attempt, 1);
+      assert.equal(state.workflow.manifestSha256, undefined);
+    }
     const requested = readTelemetry(telemetryPath(root, state.runId)).find(
       (event) => event.type === "decision_requested",
     );
@@ -1324,7 +1617,16 @@ test("controller resumes a persisted wait after the original process exits", asy
   try {
     const waiting = await runController(controllerOptions(root, exe));
     assert.equal(waiting.status, "awaiting_decision");
-    const runId = readControllerState(waiting.runDir).runId;
+    const waitingState = readControllerState(waiting.runDir);
+    const runId = waitingState.runId;
+    assert.equal(waitingState.version, 2);
+    const { workflow: _workflow, ...legacy } = waitingState as typeof waitingState & {
+      workflow: unknown;
+    };
+    writeFileSync(
+      join(waiting.runDir, "controller-state.json"),
+      `${JSON.stringify({ ...legacy, version: 1 })}\n`,
+    );
     const result = await runController({
       ...controllerOptions(root, exe),
       runId,
@@ -1337,7 +1639,9 @@ test("controller resumes a persisted wait after the original process exits", asy
       }),
     });
     assert.equal(result.status, "completed", result.error);
-    assert.equal(readControllerState(result.runDir).runId, runId);
+    const resumedState = readControllerState(result.runDir);
+    assert.equal(resumedState.runId, runId);
+    assert.equal(resumedState.version, 1);
     assert.equal(exe.calls.filter((call) => call.operation === "create").length, 1);
     const plannerCalls = exe.calls.filter(
       (call) =>
@@ -1346,6 +1650,90 @@ test("controller resumes a persisted wait after the original process exits", asy
     );
     assert.equal(plannerCalls.length, 2);
     assert.ok((plannerCalls[1]!.value as { argv: string[] }).argv.includes("--resume-session"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("persisted round-2 decision wait keeps same-session evidence and remains resumable", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
+  const exe = new ResumingPlannerExe(2);
+  const options = controllerOptions(root, exe);
+  try {
+    const waiting = await runController(options);
+    const first = readControllerState(waiting.runDir);
+    assert.ok(first.version === 2 && first.decisionWait);
+    const firstCheckpointSha256 = first.decisionWait.checkpointSha256;
+
+    const round2Invocation: Parameters<typeof runController>[0] = {
+      ...options,
+      runId: first.runId,
+      resumeExisting: true,
+    };
+    round2Invocation.inlineDecisionWaiter = async (request) => {
+      assert.equal(request.generation, 1);
+      round2Invocation.inlineDecisionWaiter = undefined;
+      return {
+        commentId: "reply-1",
+        body: "Keep it",
+        createdAt: "2026-01-02T00:00:00.000Z",
+        sha256: "a".repeat(64),
+      };
+    };
+    const round2 = await runController(round2Invocation);
+    assert.equal(round2.status, "awaiting_decision");
+    const second = readControllerState(waiting.runDir);
+    assert.ok(second.version === 2 && second.decisionWait);
+    assert.equal(second.decisionWait.generation, 2);
+    assert.equal(second.workflow.currentStepId, "plan");
+    assert.equal(second.workflow.attempt, 2);
+    assert.equal(second.decisionWait.plannerSessionId, first.decisionWait.plannerSessionId);
+    assert.notEqual(second.decisionWait.checkpointSha256, firstCheckpointSha256);
+    assert.equal(
+      second.decisionWait.checkpointSha256,
+      createHash("sha256")
+        .update(readFileSync(join(waiting.runDir, "planner-session.jsonl")))
+        .digest("hex"),
+    );
+    assert.equal(second.decisionWait.plannerSessionSha256, second.decisionWait.checkpointSha256);
+    const plannerCalls = exe.calls.filter(
+      (call) =>
+        call.operation === "execStream" && (call.value as { argv: string[] }).argv.includes("plan"),
+    );
+    const round2Argv = (plannerCalls[1]!.value as { argv: string[] }).argv;
+    assert.ok(round2Argv.includes("--resume-session"));
+    assert.equal(round2Argv[round2Argv.indexOf("--session-id") + 1], "planner-session");
+    const decisionPhases = readTelemetry(telemetryPath(root, first.runId)).filter(
+      (event) => event.type === "phase_started" && event.phase?.name === "awaiting_decision",
+    );
+    assert.equal(decisionPhases.at(-1)?.phase?.id, "awaiting_decision:2");
+    assert.equal(decisionPhases.at(-1)?.phase?.attempt, 2);
+
+    const completed = await runController({
+      ...options,
+      runId: first.runId,
+      resumeExisting: true,
+      inlineDecisionWaiter: async (request) => {
+        assert.equal(request.generation, 2);
+        return {
+          commentId: "reply-2",
+          body: "Keep it",
+          createdAt: "2026-01-02T00:00:00.000Z",
+          sha256: "b".repeat(64),
+        };
+      },
+    });
+    assert.equal(completed.status, "completed", completed.error);
+    const completedState = readControllerState(waiting.runDir);
+    assert.equal(completedState.version, 2);
+    const finalPlannerCalls = exe.calls.filter(
+      (call) =>
+        call.operation === "execStream" && (call.value as { argv: string[] }).argv.includes("plan"),
+    );
+    assert.equal(finalPlannerCalls.length, 3);
+    const round3Argv = (finalPlannerCalls[2]!.value as { argv: string[] }).argv;
+    assert.ok(round3Argv.includes("--resume-session"));
+    assert.equal(round3Argv[round3Argv.indexOf("--session-id") + 1], "planner-session");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1441,8 +1829,38 @@ test("controller reaches ready only after remote evidence and VM cleanup", async
     const state = readControllerState(result.runDir);
     assert.equal(state.state, "completed");
     assert.equal(state.cleanup, "complete");
+    assert.equal(state.version, 2);
+    if (state.version === 2) {
+      assert.equal(state.workflow.currentStepId, "review");
+      assert.equal(state.workflow.attempt, 1);
+      assert.equal(
+        state.workflow.manifestSha256,
+        createHash("sha256")
+          .update(readFileSync(join(result.runDir, "workflow-manifest.json")))
+          .digest("hex"),
+      );
+    }
     assert.ok(statSync(join(result.runDir, "change.patch")).isFile());
     assert.ok(statSync(join(result.runDir, "evidence-manifest.json")).isFile());
+    const workflowManifest = JSON.parse(
+      readFileSync(join(result.runDir, "workflow-manifest.json"), "utf8"),
+    ) as {
+      plannerRunId: string;
+      baseSha: string;
+      steps: Array<{ id: string; status: string; skipReason?: string }>;
+    };
+    assert.equal(workflowManifest.plannerRunId, ids[0]);
+    assert.equal(workflowManifest.baseSha, BASE_SHA);
+    assert.equal(workflowManifest.steps[0]?.id, "implement");
+    assert.equal(workflowManifest.steps[0]?.status, "pending");
+    assert.ok(
+      exe.calls.some(
+        (call) =>
+          call.operation === "copyTo" &&
+          JSON.stringify(call.value).includes("/home/exedev/workflow-manifest.json"),
+      ),
+    );
+    assert.match(JSON.stringify(exe.calls), /--workflow-manifest/);
     assert.ok(statSync(join(result.runDir, "publication.json")).isFile());
     assert.equal(statSync(result.runDir).mode & 0o777, 0o700);
     assert.equal(statSync(join(result.runDir, "remote-evidence")).mode & 0o777, 0o700);
@@ -1540,8 +1958,9 @@ test("controller reaches ready only after remote evidence and VM cleanup", async
 
 test("controller completes docs-only remote lifecycle without a worker run", async () => {
   const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
+  const exe = new DocsOnlyExe();
   try {
-    const result = await runController(controllerOptions(root, new DocsOnlyExe()));
+    const result = await runController(controllerOptions(root, exe));
     assert.equal(result.status, "completed", result.error);
     const runs = JSON.parse(
       readFileSync(join(result.runDir, "remote-runs.json"), "utf8"),
@@ -1554,6 +1973,42 @@ test("controller completes docs-only remote lifecycle without a worker run", asy
     assert.equal(phases.includes("implementing"), false);
     assert.ok(phases.includes("documenting"));
     assert.ok(statSync(join(result.runDir, "evidence-manifest.json")).isFile());
+    const workflowManifest = JSON.parse(
+      readFileSync(join(result.runDir, "workflow-manifest.json"), "utf8"),
+    ) as { steps: Array<{ id: string; status: string; skipReason?: string }> };
+    assert.deepEqual(workflowManifest.steps[0], {
+      id: "implement",
+      status: "skipped",
+      skipReason: "docs-only",
+    });
+    assert.match(JSON.stringify(exe.calls), /--workflow-manifest/);
+    assert.equal(
+      JSON.parse(readFileSync(join(result.runDir, "remote-runs.json"), "utf8")).reviewerRun,
+      `/home/exedev/factory/.factory/runs/${ids[3]}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("successful archive selection uses execution run IDs not lifecycle identity", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
+  const exe = new MisleadingLifecycleExe();
+  try {
+    const result = await runController(controllerOptions(root, exe));
+    assert.equal(result.status, "completed", result.error);
+    const runs = JSON.parse(
+      readFileSync(join(result.runDir, "remote-runs.json"), "utf8"),
+    ) as Record<string, unknown>;
+    assert.equal(runs.documenterRun, `/home/exedev/factory/.factory/runs/${ids[2]}`);
+    assert.equal(runs.reviewerRun, `/home/exedev/factory/.factory/runs/${ids[3]}`);
+    assert.equal(runs.workerRun, `/home/exedev/factory/.factory/runs/${ids[1]}`);
+    assert.doesNotMatch(JSON.stringify(exe.calls), /lifecycle\.json/);
+    const tar = exe.calls.find(
+      (call) => call.operation === "exec" && JSON.stringify(call.value).includes("evidence.tar"),
+    );
+    assert.match(JSON.stringify(tar), new RegExp(ids[2]!));
+    assert.doesNotMatch(JSON.stringify(tar), /55555555-5555-4555-8555-555555555555/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1841,7 +2296,10 @@ test("post-review patch mutation fails digest binding", async () => {
   try {
     const result = await runController(controllerOptions(root, exe));
     assert.equal(result.status, "failed");
-    assert.match(result.error ?? "", /lifecycle did not pass/);
+    assert.match(
+      result.error ?? "",
+      /lifecycle did not pass|archived workflow execution does not match/,
+    );
     assert.equal(exe.calls.filter((call) => call.operation === "destroy").length, 1);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -1918,6 +2376,11 @@ test("recovery reports complete cleanup for a derived creating_vm name", async (
     createControllerState(runDir, {
       runId,
       idempotencyKey: "d".repeat(64),
+      workflow: {
+        id: "feature-pr",
+        version: 1,
+        definitionSha256: featurePrDefinitionSha256(),
+      },
       issueUuid: "issue",
       issueSnapshotSha256: "b".repeat(64),
       repositoryId: 1,
@@ -2086,6 +2549,7 @@ test("negative gate and review evidence terminate remote progression", async () 
         true,
       ),
       phase: "verifying",
+      stepId: "verify",
       forbidden: "reviewing",
     },
     {
@@ -2106,6 +2570,7 @@ test("negative gate and review evidence terminate remote progression", async () 
         true,
       ),
       phase: "reviewing",
+      stepId: "review",
       forbidden: undefined,
     },
   ] as const;
@@ -2158,6 +2623,7 @@ test("normal failed gate and review streams close phases before failed terminal 
         true,
       ),
       phase: "verifying",
+      stepId: "verify",
     },
     {
       exe: new FakeExe(
@@ -2179,6 +2645,7 @@ test("normal failed gate and review streams close phases before failed terminal 
         true,
       ),
       phase: "reviewing",
+      stepId: "review",
     },
   ] as const;
   for (const { exe, phase } of cases) {
@@ -2233,6 +2700,21 @@ test("remote tool IDs and invalid role tools cannot enter public telemetry", asy
       const state = readControllerState(result.runDir);
       const serialized = JSON.stringify(readTelemetry(telemetryPath(root, state.runId)));
       assert.doesNotMatch(serialized, /remote-private-path-content|different-remote-id/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("controller rejects tools outside active remote agent lifecycle", async () => {
+  for (const violation of ["before-start", "after-finish", "finish-with-open-tool"] as const) {
+    const root = mkdtempSync(join(tmpdir(), "factory-controller-"));
+    const exe = new FakeExe();
+    exe.toolLifecycleViolation = violation;
+    try {
+      const result = await runController(controllerOptions(root, exe));
+      assert.equal(result.status, "failed", violation);
+      assert.equal(exe.calls.filter((call) => call.operation === "destroy").length, 1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

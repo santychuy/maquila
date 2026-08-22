@@ -302,6 +302,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
             plannerEnvelope: options.plannerEnvelope,
             baseSha: options.baseSha,
             timeoutSeconds: options.timeoutSeconds,
+            ...(options.workflowManifest ? { workflowManifest: options.workflowManifest } : {}),
             onEvent: protocol ? (event) => protocol.event(event) : undefined,
           })
         : await runPlan({

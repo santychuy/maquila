@@ -6,7 +6,7 @@ compatibility: Requires the factory CLI on PATH, Node.js, controller credentials
 
 # Software Factory
 
-Route user intent through checked-in deterministic commands. Controller owns workflow state, acceptance, VM lifecycle, and cleanup; skill only starts or reads a run. Planner, worker, and reviewer use their per-agent authoritative pinned OpenRouter models. Model catalog is not bundled. Linear/GitHub credentials stay outside VM; dedicated capped OpenRouter key is transient VM exception. VM is not a security sandbox.
+Route user intent through checked-in deterministic commands. Controller owns workflow state, acceptance, VM lifecycle, and cleanup; skill only starts or reads a run. Planner, worker, documenter, and reviewer use their per-agent authoritative pinned OpenRouter models. Model catalog is not bundled. Linear/GitHub credentials stay outside VM; dedicated capped OpenRouter key is transient VM exception. VM is not a security sandbox.
 
 ## Start a run
 

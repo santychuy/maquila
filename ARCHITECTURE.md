@@ -9,35 +9,39 @@ A validated Linear feature issue triggers a local controller. Controller runs bo
 - Controller owns workflow state, deadlines, budgets, approvals, cancellation, VM lifecycle, publication commits, and pull requests.
 - VM owns source checkout, Pi sessions, edits, verification, review, and raw evidence.
 - Planner and reviewer are read-only. Worker and documenter write sequentially with disjoint authority: worker owns approved non-documentation paths, and documenter owns approved `docs/` paths.
-- Linear credentials and GitHub write credentials stay outside VM. OpenRouter uses a dedicated capped key as deliberate transient exception, injected only into VM-local Pi config for agent calls, best-effort removed before VM destruction, and revoked if cleanup fails.
+- Linear credentials and GitHub write credentials stay outside VM. OpenRouter uses a dedicated capped key as deliberate transient exception, injected only into VM-local Pi config for agent calls and best-effort removed before VM destruction. Controller still destroys VM after removal failure; cleanup failure reports require manual revocation of dedicated key.
 - Agent output is a proposal. Deterministic code decides acceptance.
 
-## Target flow
+## Modular workflow design
+
+Workflow remains code-controlled. A trusted TypeScript **recipe** defines ordered work blocks and policy. After planning, controller generates a run-specific **manifest**: a work order and evidence record, not user-authored workflow logic. Serial executor follows that manifest. Successful execution writes a second record binding completed role runs to exact manifest and reviewed patch.
+
+Controller is general contractor. It selects current built-in recipe, pins inputs, controls state and credentials, checks remote sequence and harvested evidence, destroys VM, and publishes. Agents propose or perform bounded work; they do not select recipe, accept evidence, commit, push, or merge.
+
+Current `feature-pr` recipe runs `plan`, then `implement` when non-documentation work exists, `document`, deterministic `verify`, and fresh `review`. A docs-only manifest records trusted implementation skip. Verification may point to primary writer run because it is a code gate, not a synthetic agent run. Publication starts only after manifest, execution record, verification, reviewer verdict, base SHA, and reviewed patch agree.
+
+See [code-controlled workflows](docs/workflows.md) for contracts, artifacts, and change guide.
+
+## Current flow
 
 ```text
-Linear Ready
-  -> claim immutable issue snapshot
-  -> create exe.dev VM at pinned base SHA
-  -> plan
-  -> risk approval when required
-  -> implement non-documentation changes when planned
-  -> update planned documentation
-  -> verify aggregate diff
-  -> independent review
-  -> one fix pass when needed
-  -> final verify and review
-  -> harvest reviewed patch and evidence
-  -> controller creates publication commit and opens PR
-  -> human decision
+Linear Todo -> immutable intake -> fresh VM at pinned SHA -> plan
+  -> implement? -> document -> verify -> review
+  -> harvest and bind evidence -> destroy VM -> publish ready PR -> human decision
 ```
 
-## State machine
+Planner decisions may pause and resume same run before manifest generation. Fix pass remains a target, not current behavior.
+
+## Current controller state
+
+New runs use controller state v2:
 
 ```text
-queued -> planning -> awaiting_approval? -> implementing? -> documenting -> verifying
-       -> reviewing -> fixing? -> final_verification -> publishing
-       -> completed | failed | cancelled
+intake -> creating_vm -> bootstrapping -> executing <-> awaiting_decision
+       -> ready_for_publication -> publishing -> completed | failed | cancelled
 ```
+
+Workflow cursor inside `executing` records current step and attempt. State v1 remains readable and can resume retained decision waits for compatibility.
 
 ## Build order
 
@@ -52,7 +56,7 @@ queued -> planning -> awaiting_approval? -> implementing? -> documenting -> veri
 
 ## Current slice
 
-Remote controller composition, local observation, GitHub publication, and OpenRouter-backed role execution are implemented. Each agent definition owns its pinned `openrouter/<provider>/<model>` identifier; current defaults are Gemini 3.7 Flash for documenter/reviewer, GLM 5.3 for planner, and Grok 4.6 for worker. Runtime does not ship a complete model catalog; doctor and remote bootstrap validate pinned identifiers against OpenRouter's live catalog. VM is not a security sandbox. `factory run` snapshots a Linear `Todo` issue and GitHub base SHA, holds a single-host lock, reconciles abandoned VMs, bootstraps pinned runtimes in a fresh exe.dev VM, streams safe telemetry through deterministic phase boundaries, runs planner, sequential worker/documenter, verification, and fresh-reviewer sessions, binds harvested evidence to the reviewed patch, and destroys the VM. The trusted controller then checks the pinned base, applies the patch in a temporary clone, creates a deterministic bot branch and commit, opens a ready-for-review pull request, and records publication metadata before completion.
+Remote controller composition, local observation, GitHub publication, and OpenRouter-backed role execution are implemented. Each agent definition owns its pinned `openrouter/<provider>/<model>` identifier; current defaults are `openrouter/google/gemini-3.7-flash` for worker/documenter/reviewer and `openrouter/z-ai/glm-5.3` for planner. Runtime does not ship a complete model catalog; doctor and remote bootstrap validate pinned identifiers against OpenRouter's live catalog. VM is not a security sandbox. `factory run` snapshots a Linear `Todo` issue and GitHub base SHA, holds a single-host lock, reconciles abandoned VMs, bootstraps pinned runtimes in a fresh exe.dev VM, streams safe telemetry through deterministic phase boundaries, runs planner, sequential worker/documenter, verification, and fresh-reviewer sessions, binds harvested evidence to the reviewed patch, and destroys the VM. The trusted controller then checks the pinned base, applies the patch in a temporary clone, creates a deterministic bot branch and commit, opens a ready-for-review pull request, and records publication metadata before completion.
 
 `factory run start` returns accepted run identity before completion. Persistent on-demand observer binds loopback, replays canonical host JSONL, serves read-only run list/detail/event views, and links the completed pull request. Factory-owned Pi skill routes start/status requests through these commands. Observer and skill hold no workflow authority.
 
@@ -62,4 +66,4 @@ RIFF-39 proved pre-publication remote composition live. Publication and observer
 
 ## Non-goals for v1
 
-Generic workflow DSL, dynamic swarm, concurrent writers, automatic merge, deployment, Temporal, and self-hosted sandbox fleet.
+No YAML or generic workflow DSL, user-defined workflows, plugins, inheritance, DAG, parallel writers, dynamic recipe registry or selector, report-only result, automatic merge, deployment, Temporal, dynamic swarm, or self-hosted sandbox fleet.

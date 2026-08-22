@@ -22,6 +22,7 @@ import {
   formatTimestamp,
   formatTokens,
   sumReportedCosts,
+  workflowCheckpointDisplay,
 } from "../src/observer-app.js";
 import { parseAgentDefinition } from "../src/agents/index.js";
 import { createTelemetryWriter, telemetryPath } from "../src/telemetry.js";
@@ -100,6 +101,12 @@ test("observer serves loopback-only read-only API and accessible static UI", asy
     payload: {},
   });
   writer.append({
+    type: "agent_started",
+    actor: "planner",
+    phase: { id: "planning:1", name: "planning", attempt: 1 },
+    payload: {},
+  });
+  writer.append({
     type: "tool_started",
     actor: "planner",
     phase: { id: "planning:1", name: "planning", attempt: 1 },
@@ -143,7 +150,7 @@ test("observer serves loopback-only read-only API and accessible static UI", asy
     writer.append({ type: "heartbeat", actor: "controller", payload: {} });
     assert.equal(
       readFileSync(telemetryPath(root, runId), "utf8").split("\n").filter(Boolean).length,
-      4,
+      5,
     );
     rmSync(root, { recursive: true, force: true });
   }
@@ -349,10 +356,27 @@ test("observer UI preserves accessible safe rendering intent", () => {
   assert.match(observerAppSource, /role="region" aria-labelledby=\{ids\.button\}/);
   assert.match(observerAppSource, /phaseStatus\(segment\)\.replaceAll\("_", " "\)/);
   assert.match(observerAppSource, /segment\.start\.phase\.attempt > 1/);
+  assert.match(observerAppSource, /segment\.start\.phase\.stepId &&/);
+  assert.match(OBSERVER_JS, /Last step \/ phase/);
   assert.match(observerAppSource, /No phase telemetry recorded yet\.<\/li>/);
   assert.doesNotMatch(observerAppSource, /style=\{\{ width:/);
   assert.doesNotMatch(observerAppSource, /innerHTML/);
   assert.doesNotMatch(observerAppSource, /Date\.now\(\)/);
+});
+
+test("observer formats workflow checkpoints without inventing legacy steps", () => {
+  assert.deepEqual(workflowCheckpointDisplay("review", "publishing"), {
+    label: "Last step / phase",
+    value: "review · publishing",
+  });
+  assert.deepEqual(workflowCheckpointDisplay(null, "planning"), {
+    label: "Phase",
+    value: "planning",
+  });
+  assert.deepEqual(workflowCheckpointDisplay(null, null), {
+    label: "Phase",
+    value: "Waiting",
+  });
 });
 
 test("observer UI preserves focus and truthful partial telemetry state", () => {

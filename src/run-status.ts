@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { readTelemetry, telemetryPath, type TelemetryActor } from "./telemetry.js";
+import type { WorkflowStepId } from "./workflow-step.js";
 
 export type RunStatusName =
   | "unknown"
@@ -18,6 +19,7 @@ export interface RunStatusSummary {
   runId: string;
   status: RunStatusName;
   phase: string | null;
+  currentStepId: WorkflowStepId | null;
   actor: TelemetryActor | null;
   currentTool: string | null;
   cleanup: "pending" | "complete" | "not-needed" | "failed" | null;
@@ -49,6 +51,7 @@ function base(runId: string, status: RunStatusName): RunStatusSummary {
     runId,
     status,
     phase: null,
+    currentStepId: null,
     actor: null,
     currentTool: null,
     cleanup: null,
@@ -105,6 +108,7 @@ export function foldRunStatus(options: FoldRunStatusOptions): RunStatusSummary {
     if (record.type === "run_started") runStartedAt = recordedAt;
     if (record.type === "phase_started" && record.phase) {
       summary.phase = record.phase.name;
+      if (record.phase.stepId) summary.currentStepId = record.phase.stepId;
       phaseStartedAt = recordedAt;
       summary.actor = record.actor;
       if (record.phase.name !== "awaiting_decision") summary.decision = null;

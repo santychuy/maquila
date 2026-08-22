@@ -58,6 +58,7 @@ function activityEvent(activity: AgentActivity): Parameters<RemoteEventSink>[0] 
       type: "tool_started",
       actor: "planner",
       phase: "planning",
+      stepId: "plan",
       sourceAt: activity.at,
       toolName: activity.toolName,
       toolCallId: activity.toolCallId,
@@ -69,6 +70,7 @@ function activityEvent(activity: AgentActivity): Parameters<RemoteEventSink>[0] 
       type: "tool_finished",
       actor: "planner",
       phase: "planning",
+      stepId: "plan",
       sourceAt: activity.at,
       toolName: activity.toolName,
       toolCallId: activity.toolCallId,
@@ -76,7 +78,7 @@ function activityEvent(activity: AgentActivity): Parameters<RemoteEventSink>[0] 
     };
   }
   const { at, ...event } = activity;
-  return { ...event, sourceAt: at, actor: "planner", phase: "planning" };
+  return { ...event, sourceAt: at, actor: "planner", phase: "planning", stepId: "plan" };
 }
 
 export async function runPlan(options: PlanOptions): Promise<PlanResult> {
@@ -110,6 +112,7 @@ export async function runPlan(options: PlanOptions): Promise<PlanResult> {
     type: "phase_started",
     actor: "planner",
     phase: "planning",
+    stepId: "plan",
     sourceAt: phaseStartedAt,
   });
   try {
@@ -142,6 +145,7 @@ export async function runPlan(options: PlanOptions): Promise<PlanResult> {
       type: "phase_finished",
       actor: "planner",
       phase: "planning",
+      stepId: "plan",
       status: result.status,
       sourceAt: new Date().toISOString(),
     });
@@ -157,6 +161,7 @@ export async function runPlan(options: PlanOptions): Promise<PlanResult> {
       type: "phase_finished",
       actor: "planner",
       phase: "planning",
+      stepId: "plan",
       status: "failed",
       sourceAt: new Date().toISOString(),
     });

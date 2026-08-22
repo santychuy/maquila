@@ -113,6 +113,14 @@ async function get<T>(url: string): Promise<T> {
   return (await response.json()) as T;
 }
 
+export function workflowCheckpointDisplay(
+  stepId: RunStatusSummary["currentStepId"],
+  phase: RunStatusSummary["phase"],
+): { label: string; value: string } {
+  return stepId
+    ? { label: "Last step / phase", value: `${stepId} · ${phase || "Waiting"}` }
+    : { label: "Phase", value: phase || "Waiting" };
+}
 function MetricField({ label, value }: { label: string; value: string }) {
   return (
     <div class="metric">
@@ -122,6 +130,7 @@ function MetricField({ label, value }: { label: string; value: string }) {
   );
 }
 function RunCard({ run }: { run: RunStatusSummary }) {
+  const checkpoint = workflowCheckpointDisplay(run.currentStepId, run.phase);
   return (
     <a class="run" href={`/runs/${encodeURIComponent(run.runId)}`}>
       <div>
@@ -133,8 +142,8 @@ function RunCard({ run }: { run: RunStatusSummary }) {
         <span class={`status ${run.status}`}>{run.status.replaceAll("_", " ")}</span>
       </div>
       <div>
-        <span class="label">Phase</span>
-        <span>{run.phase || "Waiting"}</span>
+        <span class="label">{checkpoint.label}</span>
+        <span>{checkpoint.value}</span>
       </div>
       <div>
         <span class="label">Last activity</span>
@@ -411,6 +420,12 @@ function SegmentDetailPanel({ segment }: { segment: PhaseSegment }) {
       <details>
         <summary>Phase metadata</summary>
         <dl>
+          {segment.start.phase.stepId && (
+            <>
+              <dt>Workflow step</dt>
+              <dd>{segment.start.phase.stepId}</dd>
+            </>
+          )}
           <dt>Started</dt>
           <dd>
             <time dateTime={segment.start.recordedAt}>
@@ -477,11 +492,12 @@ function SummaryGrid({
   detail: RunStatusSummary;
   totalReportedCost: number | undefined;
 }) {
+  const checkpoint = workflowCheckpointDisplay(detail.currentStepId, detail.phase);
   return (
     <>
       <div class="summary-grid">
         <MetricField label="Status" value={detail.status.replaceAll("_", " ")} />
-        <MetricField label="Phase" value={detail.phase || "Waiting"} />
+        <MetricField label={checkpoint.label} value={checkpoint.value} />
         <MetricField label="Runtime" value={formatDuration(detail.runtimeMilliseconds)} />
         <MetricField
           label="Total reported cost"

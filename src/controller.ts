@@ -25,13 +25,33 @@ import {
 import { publishGitHubPullRequest, type GitHubPublication } from "./integrations/github.js";
 import { parseEnvelope, type EnvelopeParseResult, type PlannerEnvelope } from "./envelope.js";
 import { assertSafeRepoPath } from "./verify.js";
+import {
+  assertFeaturePrExecution,
+  completedExecutionRunIds,
+  completedStepRunId,
+  implementRunId,
+  parseWorkflowExecution,
+  primaryRunId,
+  type WorkflowExecution,
+} from "./workflows/execution.js";
+import { featurePrRemoteStepsFromManifest, isDocumentationPath } from "./workflows/feature-pr.js";
+import {
+  createFeaturePrManifest,
+  featurePrDefinitionSha256,
+  type WorkflowManifest,
+} from "./workflows/manifest.js";
+import { FEATURE_PR_WORKFLOW_ID, FEATURE_PR_WORKFLOW_VERSION } from "./workflows/feature-pr.js";
 import { ExeClient, ExeCommandError } from "./integrations/exe.js";
 import {
   beginControllerDecisionWait,
+  completeControllerWorkflow,
   createControllerState,
+  isControllerStateV2,
+  pinControllerWorkflowManifest,
   readControllerState,
   recordControllerCleanup,
   recordControllerVm,
+  recordControllerWorkflowStep,
   replaceControllerDecisionVm,
   recoverStaleControllerClaims,
   scanRecoverableControllerStates,
@@ -46,6 +66,7 @@ import {
   type RemoteFailure,
   type RemoteResultFrame,
 } from "./remote-protocol.js";
+import { workflowStep, type WorkflowStepDescriptor, type WorkflowStepId } from "./workflow-step.js";
 import {
   createTelemetryWriter,
   readTelemetry,
@@ -74,19 +95,12 @@ const MAX_SESSION_CHECKPOINT = 8 * 1024 * 1024;
 const REMOTE_RUN = `${REMOTE_FACTORY}/.factory/runs/`;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 type RemotePhase = RemoteEvent["phase"];
-type RemoteActor = RemoteEvent["actor"];
-const PHASE_OWNER: Record<RemotePhase, RemoteActor> = {
-  planning: "planner",
-  implementing: "worker",
-  documenting: "documenter",
-  verifying: "verifier",
-  reviewing: "reviewer",
-};
 function telemetryPhase(
-  phase: RemotePhase,
+  stepId: WorkflowStepId,
   attempt = 1,
-): { id: string; name: RemotePhase; attempt: number } {
-  return { id: `${phase}:${attempt}`, name: phase, attempt };
+): { id: string; name: RemotePhase; stepId: WorkflowStepId; attempt: number } {
+  const { phase } = workflowStep(stepId);
+  return { id: `${stepId}:${attempt}`, name: phase, stepId, attempt };
 }
 
 function claimedPaths(paths: string[]): string[] | undefined {
@@ -98,9 +112,6 @@ function claimedPaths(paths: string[]): string[] | undefined {
   }
 }
 
-function isDocs(path: string): boolean {
-  return path === "docs" || path.startsWith("docs/");
-}
 export interface ControllerOptions {
   issue: string;
   owner: string;
@@ -236,17 +247,11 @@ function assertArtifactSafe(path: string, secrets: string[], label: string): voi
   }
 }
 export interface HarvestExpectations {
-  baseSha: string;
-  allowedPaths: string[];
-  patchSha256: string;
+  manifest: WorkflowManifest;
+  execution: WorkflowExecution;
 }
 
-export function harvest(
-  archive: string,
-  runDir: string,
-  runs: string[],
-  expected: HarvestExpectations,
-): void {
+export function harvest(archive: string, runDir: string, expected: HarvestExpectations): void {
   const names = execFileSync("tar", ["-tf", archive], { encoding: "utf8" })
     .split("\n")
     .filter(Boolean);
@@ -264,20 +269,17 @@ export function harvest(
   mkdirSync(target, { recursive: true, mode: 0o700 });
   execFileSync("tar", ["-xf", archive, "-C", target]);
   privatizeTree(target);
-  for (const run of runs) {
-    if (!UUID.test(run)) throw new Error("unsafe remote run id");
-  }
+  assertFeaturePrExecution(expected.execution, expected.manifest);
+  if (!UUID.test(expected.manifest.plannerRunId)) throw new Error("unsafe remote run id");
+  const plannerRun = expected.manifest.plannerRunId;
+  const workerRun = implementRunId(expected.execution);
+  const docsOnly = workerRun === undefined;
+  const documenterRun = completedStepRunId(expected.execution, "document");
+  const reviewerRun = completedStepRunId(expected.execution, "review");
+  const primaryRun = primaryRunId(expected.execution);
+  const runs = [plannerRun, ...completedExecutionRunIds(expected.execution)];
+  if (runs.some((run) => !UUID.test(run))) throw new Error("unsafe remote run id");
   if (new Set(runs).size !== runs.length) throw new Error("remote run ids must be distinct");
-  const docsOnly = expected.allowedPaths.every((path) => {
-    const safe = assertSafeRepoPath(path);
-    return safe === "docs" || safe.startsWith("docs/");
-  });
-  if (runs.length !== (docsOnly ? 3 : 4)) throw new Error("remote lifecycle run count is invalid");
-  const plannerRun = runs[0]!;
-  const workerRun = docsOnly ? undefined : runs[1]!;
-  const documenterRun = runs[docsOnly ? 1 : 2]!;
-  const reviewerRun = runs[docsOnly ? 2 : 3]!;
-  const primaryRun = workerRun ?? documenterRun;
   const required = [
     [plannerRun, "receipt.json"],
     [plannerRun, "envelope.json"],
@@ -286,6 +288,7 @@ export function harvest(
     [primaryRun, "lifecycle.json"],
     [primaryRun, "verification.json"],
     [primaryRun, "review-diff.sha256"],
+    [primaryRun, "workflow-execution.json"],
     [documenterRun, "envelope.json"],
     [reviewerRun, "receipt.json"],
     [reviewerRun, "envelope.json"],
@@ -309,7 +312,7 @@ export function harvest(
       !isRecord(value) ||
       value.runId !== run ||
       value.status !== "completed" ||
-      value.baseSha !== expected.baseSha ||
+      value.baseSha !== expected.manifest.baseSha ||
       !isRecord(value.agent) ||
       value.agent.name !== role ||
       !Array.isArray(value.artifacts)
@@ -332,11 +335,14 @@ export function harvest(
         "lifecycle.json",
         "verification.json",
         "review-diff.sha256",
+        "workflow-execution.json",
       ])
     : undefined;
   const documenterReceipt = receipt(documenterRun, "documenter", [
     "envelope.json",
-    ...(docsOnly ? ["lifecycle.json", "verification.json", "review-diff.sha256"] : []),
+    ...(docsOnly
+      ? ["lifecycle.json", "verification.json", "review-diff.sha256", "workflow-execution.json"]
+      : []),
   ]);
   const reviewerReceipt = receipt(reviewerRun, "reviewer", ["envelope.json", "lifecycle.json"]);
   const planner = parseEnvelope(
@@ -359,7 +365,12 @@ export function harvest(
     "reviewer",
     json(resolve(target, ".factory", "runs", reviewerRun, "envelope.json")),
   );
-  const allowed = new Set(expected.allowedPaths.map(assertSafeRepoPath));
+  const archivedExecution = parseWorkflowExecution(
+    json(resolve(target, ".factory", "runs", primaryRun, "workflow-execution.json")),
+  );
+  if (JSON.stringify(archivedExecution) !== JSON.stringify(expected.execution))
+    throw new Error("archived workflow execution does not match");
+  const allowed = new Set(expected.manifest.allowedPaths.map(assertSafeRepoPath));
   const pathAllowed = (path: unknown): path is string =>
     typeof path === "string" &&
     (() => {
@@ -414,20 +425,20 @@ export function harvest(
     isRecord(reviewerLifecycle) &&
     worker.status === "completed" &&
     worker.stage === "reviewer" &&
-    worker.baseSha === expected.baseSha &&
+    worker.baseSha === expected.manifest.baseSha &&
     worker.documenterRunId === documenterRun &&
     worker.reviewerRunId === reviewerRun &&
     typeof worker.documenterRunDir === "string" &&
     basename(worker.documenterRunDir) === documenterRun &&
     typeof worker.reviewerRunDir === "string" &&
     basename(worker.reviewerRunDir) === reviewerRun &&
-    worker.reviewPatchSha256 === expected.patchSha256 &&
+    worker.reviewPatchSha256 === expected.execution.reviewedPatchSha256 &&
     reviewerLifecycle.status === "completed" &&
     reviewerLifecycle.stage === "reviewer" &&
-    reviewerLifecycle.baseSha === expected.baseSha &&
+    reviewerLifecycle.baseSha === expected.manifest.baseSha &&
     reviewerLifecycle.documenterRunId === documenterRun &&
     reviewerLifecycle.reviewerRunId === reviewerRun &&
-    reviewerLifecycle.reviewPatchSha256 === expected.patchSha256 &&
+    reviewerLifecycle.reviewPatchSha256 === expected.execution.reviewedPatchSha256 &&
     (docsOnly
       ? worker.workerRunId === undefined && reviewerLifecycle.workerRunId === undefined
       : worker.workerRunId === workerRun && reviewerLifecycle.workerRunId === workerRun) &&
@@ -454,19 +465,20 @@ export function harvest(
       (!workerEnvelope?.ok ||
         !workerClaims ||
         JSON.stringify(workerClaims) !==
-          JSON.stringify(verifiedPaths.filter((path) => !isDocs(path))))) ||
+          JSON.stringify(verifiedPaths.filter((path) => !isDocumentationPath(path))))) ||
     !documenterClaims ||
-    JSON.stringify(documenterClaims) !== JSON.stringify(verifiedPaths.filter(isDocs)) ||
+    JSON.stringify(documenterClaims) !==
+      JSON.stringify(verifiedPaths.filter(isDocumentationPath)) ||
     (documenter.ok &&
       (documenter.envelope.outcome === "updated") !== documenterClaims.length > 0) ||
-    reviewedDigest !== expected.patchSha256 ||
+    reviewedDigest !== expected.execution.reviewedPatchSha256 ||
     !isRecord(verification) ||
     verification.passed !== true ||
     !commandsPass ||
     !isRecord(verification.git) ||
     verification.git.passed !== true ||
-    verification.git.baseSha !== expected.baseSha ||
-    verification.git.headSha !== expected.baseSha ||
+    verification.git.baseSha !== expected.manifest.baseSha ||
+    verification.git.headSha !== expected.manifest.baseSha ||
     !Array.isArray(verification.git.changedPaths) ||
     verification.git.changedPaths.length === 0 ||
     !verification.git.changedPaths.every(pathAllowed) ||
@@ -940,12 +952,22 @@ export async function runController(options: ControllerOptions): Promise<Control
   }
   let heartbeatStopped = false;
   const heartbeat = setInterval(() => {
+    const phase =
+      state && isControllerStateV2(state) && state.state === "executing"
+        ? state.workflow.currentStepId && state.workflow.attempt
+          ? {
+              id: `${workflowStep(state.workflow.currentStepId).phase}:${state.workflow.attempt}`,
+              name: workflowStep(state.workflow.currentStepId).phase,
+              attempt: state.workflow.attempt,
+            }
+          : undefined
+        : state && state.state !== "executing"
+          ? { id: `${state.state}:1`, name: state.state, attempt: 1 as const }
+          : undefined;
     bestEffortEmit({
       type: "heartbeat",
       actor: "controller",
-      ...(state
-        ? { phase: { id: `${state.state}:1`, name: state.state, attempt: 1 as const } }
-        : {}),
+      ...(phase ? { phase } : {}),
       payload: {},
     });
   }, heartbeatMilliseconds);
@@ -977,14 +999,25 @@ export async function runController(options: ControllerOptions): Promise<Control
     actor: TelemetryInput["actor"] = "controller",
     sourceAt?: string,
     attempt = 1,
+    stepId?: WorkflowStepId,
   ): ControllerState => {
     closeHostPhase();
-    const nextState = state?.state === next ? state : transitionControllerState(runDir, next);
+    let nextState: ControllerState;
+    if (stepId && state && isControllerStateV2(state)) {
+      if (state.state === "bootstrapping") state = transitionControllerState(runDir, "executing");
+      nextState = recordControllerWorkflowStep(runDir, stepId, attempt);
+    } else {
+      nextState = state?.state === next ? state : transitionControllerState(runDir, next);
+    }
     state = nextState;
     emit({
       type: "phase_started",
       actor,
-      phase: { id: `${next}:${attempt}`, name: next, attempt },
+      phase: stepId
+        ? telemetryPhase(stepId, attempt)
+        : next === "executing"
+          ? undefined
+          : { id: `${next}:${attempt}`, name: next, attempt },
       ...(sourceAt ? { sourceAt } : {}),
       payload: {},
     });
@@ -1190,7 +1223,10 @@ export async function runController(options: ControllerOptions): Promise<Control
         `${readFileSync(localIssue, "utf8").trimEnd()}\n\n## Engineer decision ${wait.generation}\n\n${decision.body}\n`,
         { mode: 0o600 },
       );
-      state = transitionControllerState(runDir, "planning");
+      state = transitionControllerState(
+        runDir,
+        isControllerStateV2(state) ? "executing" : "planning",
+      );
       emit({
         type: "phase_finished",
         actor: "controller",
@@ -1229,6 +1265,11 @@ export async function runController(options: ControllerOptions): Promise<Control
       stage = "state";
       state = createControllerState(runDir, {
         runId: basename(runDir),
+        workflow: {
+          id: FEATURE_PR_WORKFLOW_ID,
+          version: FEATURE_PR_WORKFLOW_VERSION,
+          definitionSha256: featurePrDefinitionSha256(),
+        },
         idempotencyKey,
         issueUuid: intake.issue.uuid,
         issueSnapshotSha256: intake.issue.snapshotSha256,
@@ -1490,12 +1531,9 @@ export async function runController(options: ControllerOptions): Promise<Control
         30_000,
       );
       let nextPublicToolId = 1;
-      const remoteSequence = (
-        expected: Array<"planning" | "implementing" | "documenting" | "verifying" | "reviewing">,
-        attempt = 1,
-      ) => {
+      const remoteSequence = (expected: WorkflowStepDescriptor[], attempt = 1) => {
         let index = 0;
-        let open: (typeof expected)[number] | undefined;
+        let open: WorkflowStepDescriptor | undefined;
         let terminated = false;
         let negative = false;
         let pendingNegativeClosure: "failed" | "timed_out" | undefined;
@@ -1509,17 +1547,16 @@ export async function runController(options: ControllerOptions): Promise<Control
           verifier: new Set(),
           reviewer: new Set([...archivedRoles.reviewer.tools, "submit_envelope"]),
         };
-        const contextSeen = new Set<RemotePhase>();
-        const usageSeen = new Set<RemotePhase>();
-        const agentStarted = new Set<RemotePhase>();
-        const agentFinished = new Map<RemotePhase, "completed" | "failed" | "timed_out">();
+        const contextSeen = new Set<WorkflowStepId>();
+        const usageSeen = new Set<WorkflowStepId>();
+        const agentStarted = new Set<WorkflowStepId>();
+        const agentFinished = new Map<WorkflowStepId, "completed" | "failed" | "timed_out">();
         const closeOpen = (status: "failed" | "timed_out" = "failed"): void => {
           if (!open) return;
-          const actor = PHASE_OWNER[open];
           emit({
             type: "phase_finished",
-            actor,
-            phase: telemetryPhase(open, attempt),
+            actor: open.actor,
+            phase: telemetryPhase(open.id, attempt),
             sourceAt: new Date().toISOString(),
             payload: { status },
           });
@@ -1533,19 +1570,27 @@ export async function runController(options: ControllerOptions): Promise<Control
           if (pendingNegativeClosure && event.type !== "phase_finished")
             throw new Error("remote negative result requires phase closure");
           const sourceAt = new Date(event.sourceAt).toISOString();
-          const owner = PHASE_OWNER[event.phase];
-          if (event.actor !== owner) throw new Error("invalid remote phase owner");
+          const declared = workflowStep(event.stepId);
+          if (event.phase !== declared.phase || event.actor !== declared.actor)
+            throw new Error("invalid remote step identity");
           if (event.type === "phase_started") {
-            if (open || event.phase !== expected[index])
+            const next = expected[index];
+            if (
+              open ||
+              !next ||
+              event.stepId !== next.id ||
+              event.phase !== next.phase ||
+              event.actor !== next.actor
+            )
               throw new Error("invalid remote phase sequence");
-            open = event.phase;
-            advance(runDir, event.phase, event.actor, sourceAt, attempt);
+            open = next;
+            advance(runDir, event.phase, event.actor, sourceAt, attempt, event.stepId);
             if (event.actor !== "verifier") {
               const role = archivedRoles[event.actor];
               emit({
                 type: "agent_context",
                 actor: event.actor,
-                phase: telemetryPhase(event.phase, attempt),
+                phase: telemetryPhase(event.stepId, attempt),
                 payload: {
                   model: role.model,
                   description: role.description,
@@ -1555,26 +1600,32 @@ export async function runController(options: ControllerOptions): Promise<Control
                   systemPromptSha256: createHash("sha256").update(role.systemPrompt).digest("hex"),
                 },
               });
-              contextSeen.add(event.phase);
+              contextSeen.add(event.stepId);
             }
             return;
           }
-          if (!open || event.phase !== open) throw new Error("remote event outside active phase");
           if (
-            usageSeen.has(event.phase) &&
+            !open ||
+            event.stepId !== open.id ||
+            event.phase !== open.phase ||
+            event.actor !== open.actor
+          )
+            throw new Error("remote event outside active phase");
+          if (
+            usageSeen.has(event.stepId) &&
             ["agent_started", "agent_finished", "tool_started", "tool_finished"].includes(
               event.type,
             )
           )
             throw new Error("remote agent activity after usage");
-          const phase = telemetryPhase(event.phase, attempt);
+          const phase = telemetryPhase(event.stepId, attempt);
           switch (event.type) {
             case "phase_finished":
               if (tools.size) throw new Error("remote phase finished with active tool calls");
               if (
                 event.actor !== "verifier" &&
                 event.status === "completed" &&
-                (agentFinished.get(event.phase) !== "completed" || !usageSeen.has(event.phase))
+                (agentFinished.get(event.stepId) !== "completed" || !usageSeen.has(event.stepId))
               )
                 throw new Error("completed remote agent phase lacks completed agent usage");
               if (pendingNegativeClosure && event.status !== pendingNegativeClosure)
@@ -1595,15 +1646,15 @@ export async function runController(options: ControllerOptions): Promise<Control
               index += 1;
               break;
             case "agent_started":
-              if (agentStarted.has(event.phase) || agentFinished.has(event.phase))
+              if (agentStarted.has(event.stepId) || agentFinished.has(event.stepId))
                 throw new Error("invalid remote agent lifecycle");
-              agentStarted.add(event.phase);
+              agentStarted.add(event.stepId);
               emit({ type: "agent_started", actor: event.actor, phase, sourceAt, payload: {} });
               break;
             case "agent_finished":
-              if (!agentStarted.has(event.phase) || agentFinished.has(event.phase))
+              if (!agentStarted.has(event.stepId) || agentFinished.has(event.stepId) || tools.size)
                 throw new Error("invalid remote agent lifecycle");
-              agentFinished.set(event.phase, event.status);
+              agentFinished.set(event.stepId, event.status);
               emit({
                 type: "agent_finished",
                 actor: event.actor,
@@ -1614,13 +1665,13 @@ export async function runController(options: ControllerOptions): Promise<Control
               break;
             case "agent_usage":
               if (
-                !contextSeen.has(event.phase) ||
-                agentFinished.get(event.phase) !== "completed" ||
+                !contextSeen.has(event.stepId) ||
+                agentFinished.get(event.stepId) !== "completed" ||
                 tools.size ||
-                usageSeen.has(event.phase)
+                usageSeen.has(event.stepId)
               )
                 throw new Error("invalid remote agent usage");
-              usageSeen.add(event.phase);
+              usageSeen.add(event.stepId);
               emit({
                 type: "agent_usage",
                 actor: event.actor,
@@ -1635,7 +1686,12 @@ export async function runController(options: ControllerOptions): Promise<Control
               });
               break;
             case "tool_started": {
-              if (!allowedTools[event.actor].has(event.toolName) || tools.has(event.toolCallId))
+              if (
+                !agentStarted.has(event.stepId) ||
+                agentFinished.has(event.stepId) ||
+                !allowedTools[event.actor].has(event.toolName) ||
+                tools.has(event.toolCallId)
+              )
                 throw new Error("invalid remote tool activity");
               const publicId = `tool-${nextPublicToolId}`;
               nextPublicToolId += 1;
@@ -1651,7 +1707,12 @@ export async function runController(options: ControllerOptions): Promise<Control
             }
             case "tool_finished": {
               const tool = tools.get(event.toolCallId);
-              if (!tool || tool.name !== event.toolName)
+              if (
+                !agentStarted.has(event.stepId) ||
+                agentFinished.has(event.stepId) ||
+                !tool ||
+                tool.name !== event.toolName
+              )
                 throw new Error("invalid remote tool activity");
               tools.delete(event.toolCallId);
               emit({
@@ -1718,8 +1779,8 @@ export async function runController(options: ControllerOptions): Promise<Control
               (index !== expected.length ||
                 negative ||
                 terminated ||
-                (expected.includes("verifying") && !gateSeen) ||
-                (expected.includes("reviewing") && !reviewSeen))
+                (expected.some((step) => step.id === "verify") && !gateSeen) ||
+                (expected.some((step) => step.id === "review") && !reviewSeen))
             )
               throw new Error("remote completed result contradicts phase evidence");
           },
@@ -1741,7 +1802,7 @@ export async function runController(options: ControllerOptions): Promise<Control
       let plannerRun = "";
       let parsedPlan: EnvelopeParseResult<PlannerEnvelope> | undefined;
       for (;;) {
-        const plannerSequence = remoteSequence(["planning"], plannerAttempt);
+        const plannerSequence = remoteSequence([workflowStep("plan")], plannerAttempt);
         let plannerResult: RemoteResultFrame;
         const plannerArgv = [
           "env",
@@ -1947,7 +2008,10 @@ export async function runController(options: ControllerOptions): Promise<Control
           requestCommentId: comment.commentId,
           decision,
         });
-        state = transitionControllerState(runDir, "planning");
+        state = transitionControllerState(
+          runDir,
+          isControllerStateV2(state) ? "executing" : "planning",
+        );
         writeFileSync(
           localIssue,
           `${readFileSync(localIssue, "utf8").trimEnd()}\n\n## Engineer decision ${plannerAttempt}\n\n${decision.body}\n`,
@@ -1997,17 +2061,24 @@ export async function runController(options: ControllerOptions): Promise<Control
         decisionRequest = undefined;
       }
       if (!parsedPlan?.ok) throw new Error("remote planner envelope is invalid");
-      publicFailureMessage = "planner change path validation failed";
-      const hasWorker = parsedPlan.envelope.changes.some((change) => {
-        const path = assertSafeRepoPath(change.path);
-        return path !== "docs" && !path.startsWith("docs/");
+      publicFailureMessage = "workflow manifest generation failed";
+      const workflowManifest = createFeaturePrManifest({
+        plannerRunId: basename(plannerRun),
+        baseSha: state.baseSha,
+        plan: parsedPlan.envelope,
       });
-      const workerSequence = remoteSequence([
-        ...(hasWorker ? (["implementing"] as const) : []),
-        "documenting",
-        "verifying",
-        "reviewing",
-      ]);
+      const hasWorker = workflowManifest.steps.some(
+        (step) => step.id === "implement" && step.status === "pending",
+      );
+      const localManifest = resolve(runDir, "workflow-manifest.json");
+      writeJson(localManifest, workflowManifest);
+      if (isControllerStateV2(state))
+        state = pinControllerWorkflowManifest(runDir, hash(localManifest));
+      const remoteManifest = "/home/exedev/workflow-manifest.json";
+      await exe.copyTo(vm.sshDest, localManifest, remoteManifest);
+      const workerSequence = remoteSequence(
+        featurePrRemoteStepsFromManifest(workflowManifest.steps),
+      );
       let workerResult: RemoteResultFrame;
       try {
         workerResult = await streamed(
@@ -2031,6 +2102,8 @@ export async function runController(options: ControllerOptions): Promise<Control
             state.baseSha,
             "--timeout-seconds",
             String(options.timeoutSeconds),
+            "--workflow-manifest",
+            remoteManifest,
             "--machine",
           ],
           options.timeoutSeconds * 3000 + 120_000,
@@ -2042,25 +2115,21 @@ export async function runController(options: ControllerOptions): Promise<Control
         throw error;
       }
       const workerRun = outputPath(workerResult.runDir, "Run evidence");
-      let lifecycle: unknown;
-      try {
-        lifecycle = JSON.parse(
-          await remote(exe, vm.sshDest, ["cat", `${workerRun}/lifecycle.json`], 30_000),
-        );
-      } catch (error) {
-        if (workerResult.status === "completed") throw error;
-      }
       if (workerResult.status !== "completed") {
+        try {
+          await remote(exe, vm.sshDest, ["cat", `${workerRun}/lifecycle.json`], 30_000);
+        } catch {
+          // Failure evidence stays in the remote run directory for harvest/debug copies.
+        }
         if (workerResult.failure) publicFailureMessage = remoteFailureMessage(workerResult.failure);
         throw new Error("remote worker lifecycle failed");
       }
-      const documenterRun = outputPath(
-        isRecord(lifecycle) && typeof lifecycle.documenterRunDir === "string"
-          ? lifecycle.documenterRunDir
-          : undefined,
-        "Documenter evidence",
+      publicFailureMessage = "workflow execution retrieval failed";
+      const remoteExecution = parseWorkflowExecution(
+        JSON.parse(
+          await remote(exe, vm.sshDest, ["cat", `${workerRun}/workflow-execution.json`], 30_000),
+        ) as unknown,
       );
-      const reviewerRun = outputPath(workerResult.reviewerRunDir, "Reviewer evidence");
       stage = "harvesting";
       const patch = await remote(
         exe,
@@ -2086,12 +2155,16 @@ export async function runController(options: ControllerOptions): Promise<Control
         actor: "controller",
         payload: { name: "change.patch", size: Buffer.byteLength(patch), sha256: patchSha256 },
       });
-      const runIds = [
-        plannerRun,
-        ...(hasWorker ? [workerRun] : []),
-        documenterRun,
-        reviewerRun,
-      ].map((path) => basename(path));
+      publicFailureMessage = "workflow execution validation failed";
+      assertFeaturePrExecution(remoteExecution, workflowManifest, patchSha256);
+      const reviewerRun = outputPath(workerResult.reviewerRunDir, "Reviewer evidence");
+      if (completedStepRunId(remoteExecution, "review") !== basename(reviewerRun))
+        throw new Error("workflow execution reviewer run mismatch");
+      const documenterRun = outputPath(
+        `${REMOTE_RUN}${completedStepRunId(remoteExecution, "document")}`,
+        "Documenter evidence",
+      );
+      const runIds = [basename(plannerRun), ...completedExecutionRunIds(remoteExecution)];
       await remote(
         exe,
         vm.sshDest,
@@ -2112,10 +2185,9 @@ export async function runController(options: ControllerOptions): Promise<Control
         [options.openRouterKey],
         "evidence archive",
       );
-      harvest(resolve(runDir, "evidence.tar"), runDir, runIds, {
-        baseSha: state.baseSha,
-        allowedPaths: parsedPlan.envelope.changes.map((change) => change.path),
-        patchSha256,
+      harvest(resolve(runDir, "evidence.tar"), runDir, {
+        manifest: workflowManifest,
+        execution: remoteExecution,
       });
       emit({
         type: "artifact_available",
@@ -2337,12 +2409,18 @@ export async function runController(options: ControllerOptions): Promise<Control
     } else if (!state || failure) {
       result = failedResult(failure ?? "intake failed");
     } else if (decisionRequest) {
+      const decisionGeneration = decisionRequest.generation;
+      if (decisionGeneration === undefined) throw new Error("decision generation missing");
       if (state.state !== "awaiting_decision")
         state = transitionControllerState(runDir, "awaiting_decision");
       bestEffortEmit({
         type: "phase_started",
         actor: "controller",
-        phase: { id: "awaiting_decision:1", name: "awaiting_decision", attempt: 1 },
+        phase: {
+          id: `awaiting_decision:${decisionGeneration}`,
+          name: "awaiting_decision",
+          attempt: decisionGeneration,
+        },
         payload: {},
       });
       stopHeartbeat();
@@ -2366,7 +2444,19 @@ export async function runController(options: ControllerOptions): Promise<Control
       try {
         if (!intakeSnapshot || !reviewedPatchSha256)
           throw new Error("publication evidence is incomplete");
-        advance(runDir, "ready_for_publication");
+        closeHostPhase();
+        state = isControllerStateV2(state)
+          ? completeControllerWorkflow(runDir, hash(resolve(runDir, "workflow-manifest.json")))
+          : transitionControllerState(runDir, "ready_for_publication");
+        emit({
+          type: "phase_started",
+          actor: "controller",
+          phase: { id: "ready_for_publication:1", name: "ready_for_publication", attempt: 1 },
+          payload: {},
+        });
+        openHostPhase = "ready_for_publication";
+        stage = "ready_for_publication";
+        publicFailureMessage = "controller stage failed";
         advance(runDir, "publishing");
         const pullRequest = await (options.publish ?? publishGitHubPullRequest)({
           token: options.githubToken,

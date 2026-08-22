@@ -6,7 +6,15 @@ export function parsePiCommand(
   values: Record<string, unknown>,
 ): PlanCliOptions | WorkerCliOptions {
   if (subcommand === "worker") {
-    rejectOptions(values, ["repo", "issue", "planner", "base-sha", "timeout-seconds", "machine"]);
+    rejectOptions(values, [
+      "repo",
+      "issue",
+      "planner",
+      "base-sha",
+      "timeout-seconds",
+      "machine",
+      "workflow-manifest",
+    ]);
     if (
       typeof values.repo !== "string" ||
       typeof values.issue !== "string" ||
@@ -23,6 +31,9 @@ export function parsePiCommand(
         typeof values["timeout-seconds"] === "string" ? values["timeout-seconds"] : undefined,
         "300",
       ),
+      ...(typeof values["workflow-manifest"] === "string"
+        ? { workflowManifest: values["workflow-manifest"] }
+        : {}),
       ...(values.machine ? { machine: true } : {}),
     };
   }

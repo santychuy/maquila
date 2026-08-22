@@ -69,6 +69,213 @@ test("telemetry schema rejects unknown fields and inconsistent identity", () => 
   );
 });
 
+test("telemetry accepts legacy phases and strictly validates new workflow steps", () => {
+  assert.doesNotThrow(() =>
+    parseTelemetryRecord(
+      record({
+        type: "phase_started",
+        actor: "planner",
+        phase: { id: "planning:1", name: "planning", attempt: 1 },
+        payload: {},
+      }),
+    ),
+  );
+  assert.doesNotThrow(() =>
+    parseTelemetryRecord(
+      record({
+        type: "phase_started",
+        actor: "planner",
+        phase: { id: "plan:1", name: "planning", stepId: "plan", attempt: 1 },
+        payload: {},
+      }),
+    ),
+  );
+  for (const phase of [
+    { id: "plan:1", name: "implementing", stepId: "plan", attempt: 1 },
+    { id: "plan:1", name: "planning", stepId: "unknown", attempt: 1 },
+  ])
+    assert.throws(
+      () =>
+        parseTelemetryRecord(
+          record({ type: "phase_started", actor: "planner", phase, payload: {} }),
+        ),
+      /invalid telemetry|step identity/,
+    );
+});
+
+test("full telemetry replay preserves legacy agent ledgers without context or usage", () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-telemetry-legacy-"));
+  try {
+    const path = createTelemetryWriter(root, runId).path;
+    const phase = { id: "planning:1", name: "planning", attempt: 1 };
+    const inputs = [
+      { type: "run_created", actor: "controller", payload: { status: "created" } },
+      { type: "phase_started", actor: "planner", phase, payload: {} },
+      { type: "agent_started", actor: "planner", phase, payload: {} },
+      {
+        type: "tool_started",
+        actor: "planner",
+        phase,
+        payload: { toolName: "read", toolCallId: "tool-1" },
+      },
+      {
+        type: "tool_finished",
+        actor: "planner",
+        phase,
+        payload: { toolName: "read", toolCallId: "tool-1", isError: false },
+      },
+      { type: "agent_finished", actor: "planner", phase, payload: { status: "completed" } },
+      { type: "phase_finished", actor: "planner", phase, payload: { status: "completed" } },
+    ];
+    writeFileSync(
+      path,
+      inputs
+        .map((input, index) =>
+          JSON.stringify(
+            record({
+              ...input,
+              seq: index + 1,
+              eventId: `${runId}:${index + 1}`,
+            }),
+          ),
+        )
+        .join("\n") + "\n",
+    );
+    assert.equal(readTelemetry(path).length, inputs.length);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("full telemetry replay requires completed metadata for step-tagged agent phases", () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-telemetry-step-"));
+  try {
+    const path = createTelemetryWriter(root, runId).path;
+    const phase = { id: "plan:1", name: "planning", stepId: "plan", attempt: 1 };
+    const inputs = [
+      { type: "run_created", actor: "controller", payload: { status: "created" } },
+      { type: "phase_started", actor: "planner", phase, payload: {} },
+      { type: "agent_started", actor: "planner", phase, payload: {} },
+      { type: "agent_finished", actor: "planner", phase, payload: { status: "completed" } },
+      { type: "phase_finished", actor: "planner", phase, payload: { status: "completed" } },
+    ];
+    writeFileSync(
+      path,
+      inputs
+        .map((input, index) =>
+          JSON.stringify(record({ ...input, seq: index + 1, eventId: `${runId}:${index + 1}` })),
+        )
+        .join("\n") + "\n",
+    );
+    assert.throws(() => readTelemetry(path), /incomplete agent activity/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("full telemetry replay binds tools to legacy and step-tagged agent lifecycles", () => {
+  for (const phase of [
+    { id: "planning:1", name: "planning", attempt: 1 },
+    { id: "plan:1", name: "planning", stepId: "plan", attempt: 1 },
+  ] as const) {
+    const started = { type: "agent_started", actor: "planner", phase, payload: {} };
+    const finished = {
+      type: "agent_finished",
+      actor: "planner",
+      phase,
+      payload: { status: "completed" },
+    };
+    const toolStarted = {
+      type: "tool_started",
+      actor: "planner",
+      phase,
+      payload: { toolName: "read", toolCallId: "tool-1" },
+    };
+    for (const [name, activity] of [
+      ["before-start", [toolStarted]],
+      ["after-finish", [started, finished, toolStarted]],
+      ["finish-with-open-tool", [started, toolStarted, finished]],
+    ] as const) {
+      const root = mkdtempSync(join(tmpdir(), `factory-telemetry-${name}-`));
+      try {
+        const path = createTelemetryWriter(root, runId).path;
+        const inputs = [
+          { type: "run_created", actor: "controller", payload: { status: "created" } },
+          { type: "phase_started", actor: "planner", phase, payload: {} },
+          ...activity,
+        ];
+        writeFileSync(
+          path,
+          inputs
+            .map((input, index) =>
+              JSON.stringify(
+                record({ ...input, seq: index + 1, eventId: `${runId}:${index + 1}` }),
+              ),
+            )
+            .join("\n") + "\n",
+        );
+        assert.throws(() => readTelemetry(path), /active agent|active tool/, `${phase.id}:${name}`);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  }
+});
+
+test("telemetry writer binds tools to active unfinished agents before usage", () => {
+  const phase = { id: "plan:1", name: "planning" as const, stepId: "plan" as const, attempt: 1 };
+  const append = (
+    name: string,
+    activity: (writer: ReturnType<typeof createTelemetryWriter>) => void,
+    expected: RegExp,
+  ) => {
+    const root = mkdtempSync(join(tmpdir(), `factory-telemetry-writer-${name}-`));
+    try {
+      const writer = createTelemetryWriter(root, runId);
+      writer.append({ type: "phase_started", actor: "planner", phase, payload: {} });
+      assert.throws(() => activity(writer), expected, name);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  };
+  const startAgent = (writer: ReturnType<typeof createTelemetryWriter>) =>
+    writer.append({ type: "agent_started", actor: "planner", phase, payload: {} });
+  const startTool = (writer: ReturnType<typeof createTelemetryWriter>) =>
+    writer.append({
+      type: "tool_started",
+      actor: "planner",
+      phase,
+      payload: { toolName: "read", toolCallId: "tool-1" },
+    });
+  const finishAgent = (writer: ReturnType<typeof createTelemetryWriter>) =>
+    writer.append({
+      type: "agent_finished",
+      actor: "planner",
+      phase,
+      payload: { status: "failed" },
+    });
+
+  append("before-start", startTool, /outside active agent/);
+  append(
+    "after-finish",
+    (writer) => {
+      startAgent(writer);
+      finishAgent(writer);
+      startTool(writer);
+    },
+    /outside active agent/,
+  );
+  append(
+    "finish-with-open-tool",
+    (writer) => {
+      startAgent(writer);
+      startTool(writer);
+      finishAgent(writer);
+    },
+    /active tool/,
+  );
+});
+
 test("agent context and usage are strict, ordered, and prompt/cost free", () => {
   const root = mkdtempSync(join(tmpdir(), "factory-telemetry-agent-"));
   try {

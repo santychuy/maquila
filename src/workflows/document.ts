@@ -6,11 +6,8 @@ import { runAgent, type AgentActivity, type AgentRunResult } from "../run-agent.
 import { isRemoteToolName, type RemoteEventSink } from "../remote-protocol.js";
 import type { RunArtifacts } from "../run-artifacts.js";
 import { assertSafeRepoPath, changedPaths } from "../verify.js";
+import { isDocumentationPath, resolveFeaturePr } from "./feature-pr.js";
 import { resolve } from "node:path";
-
-function isDocumentation(path: string): boolean {
-  return path === "docs" || path.startsWith("docs/");
-}
 
 function pathState(repo: string, path: string): string {
   const target = resolve(repo, path);
@@ -28,13 +25,13 @@ function pathState(repo: string, path: string): string {
 function nonDocumentationSnapshot(repo: string): Map<string, string> {
   return new Map(
     changedPaths(repo)
-      .filter((path) => !isDocumentation(path))
+      .filter((path) => !isDocumentationPath(path))
       .map((path) => [path, pathState(repo, path)]),
   );
 }
 
 export function documentPaths(plan: PlannerEnvelope): string[] {
-  return plan.changes.map((change) => assertSafeRepoPath(change.path)).filter(isDocumentation);
+  return resolveFeaturePr(plan).documentPaths;
 }
 
 export function assertOwnedPaths(
@@ -43,8 +40,8 @@ export function assertOwnedPaths(
   owner: "worker" | "documenter",
 ): void {
   const unexpected = changedPaths(repo).filter((path) => {
-    if (owner === "documenter" && !isDocumentation(path)) return false;
-    const owned = owner === "documenter" ? isDocumentation(path) : !isDocumentation(path);
+    if (owner === "documenter" && !isDocumentationPath(path)) return false;
+    const owned = owner === "documenter" ? isDocumentationPath(path) : !isDocumentationPath(path);
     return !owned || !allowed.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
   });
   if (unexpected.length)
@@ -59,6 +56,7 @@ function activityEvent(activity: AgentActivity): Parameters<RemoteEventSink>[0] 
       type: "tool_started",
       actor: "documenter",
       phase: "documenting",
+      stepId: "document",
       sourceAt: activity.at,
       toolName: activity.toolName,
       toolCallId: activity.toolCallId,
@@ -71,6 +69,7 @@ function activityEvent(activity: AgentActivity): Parameters<RemoteEventSink>[0] 
       type: "tool_finished",
       actor: "documenter",
       phase: "documenting",
+      stepId: "document",
       sourceAt: activity.at,
       toolName: activity.toolName,
       toolCallId: activity.toolCallId,
@@ -78,7 +77,13 @@ function activityEvent(activity: AgentActivity): Parameters<RemoteEventSink>[0] 
     };
   }
   const { at, ...event } = activity;
-  return { ...event, sourceAt: at, actor: "documenter", phase: "documenting" };
+  return {
+    ...event,
+    sourceAt: at,
+    actor: "documenter",
+    phase: "documenting",
+    stepId: "document",
+  };
 }
 
 export async function runDocumenter(options: {
@@ -97,6 +102,7 @@ export async function runDocumenter(options: {
     type: "phase_started",
     actor: "documenter",
     phase: "documenting",
+    stepId: "document",
     sourceAt: new Date().toISOString(),
   });
   let status: AgentRunResult["status"] = "failed";
@@ -123,7 +129,7 @@ export async function runDocumenter(options: {
     const after = nonDocumentationSnapshot(options.repo);
     if (JSON.stringify([...before]) !== JSON.stringify([...after]))
       throw new Error("documenter changed existing non-documentation content");
-    const actual = changedPaths(options.repo).filter(isDocumentation).toSorted();
+    const actual = changedPaths(options.repo).filter(isDocumentationPath).toSorted();
     const reported = envelope.changedFiles.map(assertSafeRepoPath).toSorted();
     if (JSON.stringify(actual) !== JSON.stringify(reported))
       throw new Error("documenter envelope changedFiles does not match documentation diff");
@@ -137,6 +143,7 @@ export async function runDocumenter(options: {
       type: "phase_finished",
       actor: "documenter",
       phase: "documenting",
+      stepId: "document",
       status,
       sourceAt: new Date().toISOString(),
     });

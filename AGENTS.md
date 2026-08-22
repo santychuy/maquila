@@ -23,12 +23,14 @@ Implemented now:
 - Typed planner, worker, documenter, and reviewer envelopes with structural and semantic validation.
 - A `submit_envelope` tool and one same-session correction attempt.
 - Executable read-only planner command: `factory pi plan`.
-- Executable local worker/documenter/reviewer lifecycle: `factory pi worker`; worker owns approved non-doc paths, documenter owns approved docs paths, then deterministic verification and fresh review cover aggregate diff. Docs-only runs skip worker.
+- Code-controlled `feature-pr` recipe: accepted plan becomes strict `workflow-manifest.json`; serial blocks run implement (or trusted docs-only skip), document, deterministic verify, and fresh review; completed work writes `workflow-execution.json` bound to manifest and reviewed patch.
+- Executable local worker/documenter/reviewer lifecycle: `factory pi worker`; worker owns approved non-doc paths, documenter owns approved docs paths, then deterministic verification and fresh review cover aggregate diff. Omitted local manifest uses compatibility/dev fallback; `factory run` supplies canonical controller manifest.
 - Deterministic verification: `factory.verify.json` argv commands plus exact Git diff gate (`src/verify.ts`).
 - Controller-side assigned Linear `Todo` issue and GitHub base-SHA snapshot primitives with credential-free hashes.
 - Planner decision handoff: blocked plans pause the same run as `awaiting_decision`; the controller retains the VM, checkpoints the completed planner session, removes transient model credentials, and polls a numbered Linear thread for a pinned-assignee `Decision:` reply before resuming the same session. Waits expire after 24 hours and allow at most three rounds.
 - Executable `factory run`: single-host lock, restart cleanup, pinned Node/Bun bootstrap, remote planner/worker/documenter/verification/reviewer, evidence and patch harvest, VM destruction, then controller-side bot branch and ready-for-review pull-request publication.
-- Strict host telemetry with streaming remote phase/activity frames, accepted detached `run start`, and read-only `run status`.
+- Remote protocol v2 and host telemetry carry strict workflow step identity. New controller state v2 records recipe, manifest hash, step, and attempt; state v1 remains readable and resumable for retained decision waits. `run status` and observer expose current workflow checkpoint.
+- Accepted detached `run start` and read-only `run status`.
 - Managed loopback observer server/UI with replay/cursor polling, human `factory dashboard` startup alias, and factory-owned `.pi/skills/software-factory` command routing.
 - Global `factory` executable through a Bun-compiled binary and `bun link`, with cwd target inference, `--target` override, human output, and explicit `--json` mode.
 - `factory setup` and `factory doctor` for strict XDG config, optional Linear and OpenRouter `op://` references, optional user-scope Pi skill, credential checks, and remediation.
@@ -42,13 +44,14 @@ Not implemented yet:
 - Guaranteed hard termination when exe.dev cleanup itself is unavailable.
 - Runtime state is still stored under the Factory checkout. Linear OAuth, native keychain storage, and credential profiles are not implemented.
 
-See `ARCHITECTURE.md` for target design and build order. See `docs/foundation-checkpoint.md` for verified current state.
+See `ARCHITECTURE.md` for design boundaries, `docs/foundation-checkpoint.md` for verified current state, and `docs/workflows.md` before changing workflow behavior.
 
 ## Authority and Safety Invariants
 
 Preserve these boundaries:
 
-- Controller owns orchestration and external authority.
+- Controller owns recipe selection, orchestration, manifest pinning, deterministic acceptance, cleanup, and external authority.
+- Workflow recipes and blocks are trusted TypeScript. Generated manifests are work orders and evidence, not user-authored orchestration.
 - Planner and reviewer are read-only.
 - Worker and documenter are sequential disjoint writers: worker owns approved non-doc paths; documenter owns approved docs paths. Docs-only runs skip worker. Verification and reviewer cover aggregate diff.
 - Linear credentials and GitHub write credentials stay outside execution VM. OpenRouter uses a dedicated capped key as deliberate transient VM exception; controller injects it into VM-local Pi config for agent calls.
@@ -63,7 +66,9 @@ Current execution is not a security sandbox. Read-only tools stop mutation but d
 - `src/agents/index.ts` — loads and fail-closed validates specialist definitions.
 - `src/run-agent.ts` — generic Pi session runner, lifecycle capture, timeout, envelope flow, and receipts.
 - `src/envelope.ts` — TypeBox schemas, semantic validation, correction prompt, submit tool, and planner rendering.
+- `src/workflow-step.ts` — canonical workflow step, phase, and actor identity.
 - `src/workflows/plan.ts` — validates planner inputs, snapshots issue context, runs planner, and writes `plan.md`.
+- `src/workflows/feature-pr.ts`, `manifest.ts`, `execution.ts`, and `worker.ts` — code-owned recipe resolution, strict work-order/completion contracts, and serial block execution.
 - `src/run-artifacts.ts` — creates `.factory/runs/<run-id>/` and writes evidence.
 - `src/verify.ts` — fail-closed `factory.verify.json` parsing, command execution, exact Git gate.
 - `src/integrations/linear.ts`, `src/integrations/github.ts`, and `src/intake.ts` — immutable external input snapshots, assigned-engineer decision comments/replies, idempotency hash, and controller-side GitHub publication.
@@ -76,6 +81,7 @@ Current execution is not a security sandbox. Read-only tools stop mutation but d
 - `src/agents/*.md` — role metadata in YAML frontmatter and role system prompt in Markdown body.
 - `test/*.test.ts` — Node test-runner coverage for CLI, role boundaries, envelopes, failures, and artifact safety.
 - `docs/envelopes.md` — envelope contract and limitations.
+- `docs/workflows.md` — agent guide for workflow architecture, artifacts, invariants, and safe changes.
 - `docs/foundation-checkpoint.md` — evidence-backed implementation checkpoint.
 - `examples/issue.md` — sample feature issue.
 
@@ -160,7 +166,7 @@ In envelope mode, `submit_envelope` must be the agent's final action. Invalid or
 
 ## Evidence Contract
 
-Each run lives at `.factory/runs/<run-id>/` and may contain:
+Each role run lives at `.factory/runs/<run-id>/` and may contain:
 
 - `issue.md` — snapshotted input.
 - `events.jsonl` — concise lifecycle and envelope events.
@@ -170,6 +176,8 @@ Each run lives at `.factory/runs/<run-id>/` and may contain:
 - `plan.md` — completed planner output only.
 
 Failed or timed-out runs must not expose a successful envelope. Keep receipts honest: skipped, failed, or unavailable checks must never be reported as passing.
+
+Controller evidence lives at `.factory/controllers/<run-id>/`. Current workflow artifacts include `workflow-manifest.json` version 1, harvested `workflow-execution.json` version 1, `controller-state.json` version 2, `change.patch`, `evidence-manifest.json`, and `publication.json` after publication. Host telemetry lives at `.factory/telemetry/<run-id>.jsonl`. Hash links prove consistency, not authenticity against a compromised VM.
 
 ## Git Hooks
 
@@ -181,10 +189,10 @@ Use `node:test` and `node:assert/strict`, matching existing tests. Add the small
 
 Before finishing:
 
-1. Run focused tests while developing.
+1. Run focused tests while developing. Workflow changes must cover recipe, manifest, execution, state, protocol, telemetry/status, controller harvest, and observer checkpoint as applicable.
 2. Run `bun run check`.
-3. Confirm generated files remain untracked.
-4. Reconcile documentation with implemented code, especially when a milestone moves from planned to current.
+3. Confirm generated files remain untracked and no staged files remain.
+4. Reconcile `docs/workflows.md` and current-state documentation with implemented code.
 
 ## Scope Discipline
 

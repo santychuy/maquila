@@ -9,7 +9,11 @@ import {
 } from "node:fs";
 import { basename, resolve } from "node:path";
 
-export const controllerStates = [
+import { WORKFLOW_STEP_IDS, type WorkflowStepId } from "./workflow-step.js";
+import { FEATURE_PR_WORKFLOW_ID, FEATURE_PR_WORKFLOW_VERSION } from "./workflows/feature-pr.js";
+import { featurePrDefinitionSha256 } from "./workflows/manifest.js";
+
+export const controllerStatesV1 = [
   "intake",
   "creating_vm",
   "bootstrapping",
@@ -26,7 +30,22 @@ export const controllerStates = [
   "failed",
   "cancelled",
 ] as const;
-export type ControllerStateName = (typeof controllerStates)[number];
+export const controllerStatesV2 = [
+  "intake",
+  "creating_vm",
+  "bootstrapping",
+  "executing",
+  "awaiting_decision",
+  "ready_for_publication",
+  "publishing",
+  "completed",
+  "failed",
+  "cancelled",
+] as const;
+export const controllerStates = controllerStatesV1;
+export type ControllerStateNameV1 = (typeof controllerStatesV1)[number];
+export type ControllerStateNameV2 = (typeof controllerStatesV2)[number];
+export type ControllerStateName = ControllerStateNameV1 | ControllerStateNameV2;
 export type CleanupState = "pending" | "complete" | "not-needed" | "failed";
 
 export interface ControllerVm {
@@ -44,10 +63,8 @@ export interface ControllerDecisionWait {
   checkpointSha256: string;
 }
 
-export interface ControllerState {
-  version: 1;
+interface ControllerStateCommon {
   runId: string;
-  state: ControllerStateName;
   idempotencyKey: string;
   issueUuid: string;
   issueSnapshotSha256: string;
@@ -64,8 +81,34 @@ export interface ControllerState {
   decisionWait?: ControllerDecisionWait;
 }
 
+export interface ControllerStateV1 extends ControllerStateCommon {
+  version: 1;
+  state: ControllerStateNameV1;
+}
+
+export interface ControllerWorkflowState {
+  id: string;
+  version: number;
+  definitionSha256: string;
+  manifestSha256?: string;
+  /** Latest started/checkpointed workflow step; may remain review during publication. */
+  currentStepId?: WorkflowStepId;
+  attempt?: number;
+}
+
+export interface ControllerStateV2 extends ControllerStateCommon {
+  version: 2;
+  state: ControllerStateNameV2;
+  workflow: ControllerWorkflowState;
+}
+
+export type ControllerState = ControllerStateV1 | ControllerStateV2;
+export type ControllerWorkflowInput = Pick<
+  ControllerWorkflowState,
+  "id" | "version" | "definitionSha256"
+>;
 export type ControllerStateInput = Pick<
-  ControllerState,
+  ControllerStateCommon,
   | "runId"
   | "idempotencyKey"
   | "issueUuid"
@@ -75,7 +118,19 @@ export type ControllerStateInput = Pick<
   | "repositorySnapshotSha256"
   | "baseRef"
   | "baseSha"
->;
+> & { workflow: ControllerWorkflowInput };
+
+export function isControllerStateV2(state: ControllerState): state is ControllerStateV2 {
+  return state.version === 2;
+}
+
+function isControllerStateNameV1(value: ControllerStateName): value is ControllerStateNameV1 {
+  return controllerStatesV1.some((state) => state === value);
+}
+
+function isControllerStateNameV2(value: ControllerStateName): value is ControllerStateNameV2 {
+  return controllerStatesV2.some((state) => state === value);
+}
 
 const terminal = new Set<ControllerStateName>(["completed", "failed", "cancelled"]);
 const retryableClaim = new Set<ControllerStateName>([
@@ -90,7 +145,7 @@ function retryable(state: ControllerState): boolean {
   );
 }
 
-const transitions: Record<ControllerStateName, ControllerStateName[]> = {
+const transitionsV1: Record<ControllerStateNameV1, ControllerStateNameV1[]> = {
   intake: ["creating_vm", "failed", "cancelled"],
   creating_vm: ["bootstrapping", "failed", "cancelled"],
   bootstrapping: ["planning", "failed", "cancelled"],
@@ -101,6 +156,19 @@ const transitions: Record<ControllerStateName, ControllerStateName[]> = {
   verifying: ["reviewing", "fixing", "failed", "cancelled"],
   reviewing: ["fixing", "ready_for_publication", "failed", "cancelled"],
   fixing: ["verifying", "failed", "cancelled"],
+  ready_for_publication: ["publishing", "failed"],
+  publishing: ["completed", "failed", "cancelled"],
+  completed: [],
+  failed: [],
+  cancelled: [],
+};
+
+const transitionsV2: Record<ControllerStateNameV2, ControllerStateNameV2[]> = {
+  intake: ["creating_vm", "failed", "cancelled"],
+  creating_vm: ["bootstrapping", "failed", "cancelled"],
+  bootstrapping: ["executing", "failed", "cancelled"],
+  executing: ["awaiting_decision", "failed", "cancelled"],
+  awaiting_decision: ["executing", "failed", "cancelled"],
   ready_for_publication: ["publishing", "failed"],
   publishing: ["completed", "failed", "cancelled"],
   completed: [],
@@ -162,7 +230,7 @@ function isVm(value: unknown): value is ControllerVm {
   );
 }
 
-function isControllerState(value: unknown): value is ControllerState {
+function isControllerStateV1(value: unknown): value is ControllerStateV1 {
   if (!isRecord(value)) return false;
   const allowed = [
     "version",
@@ -186,7 +254,7 @@ function isControllerState(value: unknown): value is ControllerState {
   if (
     value.version !== 1 ||
     !nonBlank(value.runId) ||
-    !controllerStates.some((state) => state === value.state) ||
+    !controllerStatesV1.some((state) => state === value.state) ||
     !isHash(value.idempotencyKey, 64) ||
     !nonBlank(value.issueUuid) ||
     !isHash(value.issueSnapshotSha256, 64) ||
@@ -222,6 +290,122 @@ function isControllerState(value: unknown): value is ControllerState {
   }
   if (value.decisionWait !== undefined) return false;
   return true;
+}
+
+function isWorkflowState(value: unknown): value is ControllerWorkflowState {
+  if (!isRecord(value)) return false;
+  const allowed = [
+    "id",
+    "version",
+    "definitionSha256",
+    ...(value.manifestSha256 === undefined ? [] : ["manifestSha256"]),
+    ...(value.currentStepId === undefined ? [] : ["currentStepId"]),
+    ...(value.attempt === undefined ? [] : ["attempt"]),
+  ];
+  return (
+    exactKeys(value, allowed) &&
+    value.id === FEATURE_PR_WORKFLOW_ID &&
+    value.version === FEATURE_PR_WORKFLOW_VERSION &&
+    isHash(value.definitionSha256, 64) &&
+    (value.manifestSha256 === undefined || isHash(value.manifestSha256, 64)) &&
+    (value.currentStepId === undefined ||
+      WORKFLOW_STEP_IDS.some((step) => step === value.currentStepId)) &&
+    (value.attempt === undefined ||
+      (Number.isInteger(value.attempt) &&
+        Number(value.attempt) >= 1 &&
+        Number(value.attempt) <= 4)) &&
+    ((value.currentStepId === undefined && value.attempt === undefined) ||
+      (value.currentStepId !== undefined && value.attempt !== undefined))
+  );
+}
+
+function isControllerStateV2Value(value: unknown): value is ControllerStateV2 {
+  if (!isRecord(value)) return false;
+  const allowed = [
+    "version",
+    "runId",
+    "state",
+    "idempotencyKey",
+    "issueUuid",
+    "issueSnapshotSha256",
+    "repositoryId",
+    "repositoryFullName",
+    "repositorySnapshotSha256",
+    "baseRef",
+    "baseSha",
+    "createdAt",
+    "updatedAt",
+    "cleanup",
+    "workflow",
+    ...(value.vm === undefined ? [] : ["vm"]),
+    ...(value.decisionWait === undefined ? [] : ["decisionWait"]),
+  ];
+  if (!exactKeys(value, allowed)) return false;
+  if (
+    value.version !== 2 ||
+    !nonBlank(value.runId) ||
+    !controllerStatesV2.some((state) => state === value.state) ||
+    !isHash(value.idempotencyKey, 64) ||
+    !nonBlank(value.issueUuid) ||
+    !isHash(value.issueSnapshotSha256, 64) ||
+    typeof value.repositoryId !== "number" ||
+    !Number.isSafeInteger(value.repositoryId) ||
+    value.repositoryId < 1 ||
+    typeof value.repositoryFullName !== "string" ||
+    !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value.repositoryFullName) ||
+    !isHash(value.repositorySnapshotSha256, 64) ||
+    !nonBlank(value.baseRef) ||
+    !isHash(value.baseSha, 40) ||
+    !isTimestamp(value.createdAt) ||
+    !isTimestamp(value.updatedAt) ||
+    !["pending", "complete", "not-needed", "failed"].includes(String(value.cleanup)) ||
+    !isWorkflowState(value.workflow) ||
+    (value.vm !== undefined && !isVm(value.vm)) ||
+    (value.decisionWait !== undefined && !isDecisionWait(value.decisionWait))
+  )
+    return false;
+  if (value.vm === undefined && !["not-needed", "complete"].includes(String(value.cleanup)))
+    return false;
+  if (value.vm !== undefined && value.cleanup === "not-needed") return false;
+  if (value.state === "awaiting_decision")
+    return (
+      value.decisionWait !== undefined &&
+      value.vm !== undefined &&
+      value.cleanup === "pending" &&
+      value.workflow.currentStepId === "plan" &&
+      value.workflow.attempt === value.decisionWait.generation
+    );
+  if (value.decisionWait !== undefined) return false;
+  if (
+    ["intake", "creating_vm", "bootstrapping"].includes(String(value.state)) &&
+    (value.workflow.currentStepId !== undefined || value.workflow.manifestSha256 !== undefined)
+  )
+    return false;
+  if (value.workflow.manifestSha256 !== undefined && value.workflow.currentStepId === undefined)
+    return false;
+  if (
+    value.workflow.currentStepId !== undefined &&
+    value.workflow.currentStepId !== "plan" &&
+    value.workflow.manifestSha256 === undefined
+  )
+    return false;
+  if (
+    ["ready_for_publication", "publishing", "completed"].includes(String(value.state)) &&
+    (value.workflow.currentStepId !== "review" ||
+      value.workflow.attempt !== 1 ||
+      value.workflow.manifestSha256 === undefined)
+  )
+    return false;
+  if (
+    (value.state === "completed" || value.state === "ready_for_publication") &&
+    !["complete", "not-needed"].includes(String(value.cleanup))
+  )
+    return false;
+  return true;
+}
+
+function isControllerState(value: unknown): value is ControllerState {
+  return isControllerStateV1(value) || isControllerStateV2Value(value);
 }
 
 function statePath(runDir: string): string {
@@ -302,11 +486,17 @@ function acquireClaim(runsDir: string, state: ControllerState): void {
 export function createControllerState(
   runDir: string,
   input: ControllerStateInput,
-): ControllerState {
+): ControllerStateV2 {
   if (basename(runDir) !== input.runId) throw new Error("run directory must match runId");
+  if (
+    input.workflow.id !== FEATURE_PR_WORKFLOW_ID ||
+    input.workflow.version !== FEATURE_PR_WORKFLOW_VERSION ||
+    input.workflow.definitionSha256 !== featurePrDefinitionSha256()
+  )
+    throw new Error("invalid controller workflow input");
   const now = new Date().toISOString();
-  const state: ControllerState = {
-    version: 1,
+  const state: ControllerStateV2 = {
+    version: 2,
     ...input,
     state: "intake",
     createdAt: now,
@@ -336,17 +526,27 @@ export function transitionControllerState(
   next: ControllerStateName,
 ): ControllerState {
   const current = readControllerState(runDir);
-  if (!transitions[current.state].includes(next)) {
-    throw new Error(`invalid transition: ${current.state} -> ${next}`);
+  let state: ControllerState;
+  if (isControllerStateV2(current)) {
+    if (
+      !isControllerStateNameV2(next) ||
+      !transitionsV2[current.state].some((value) => value === next) ||
+      next === "ready_for_publication"
+    )
+      throw new Error(`invalid transition: ${current.state} -> ${next}`);
+    const { decisionWait: _decisionWait, ...withoutDecisionWait } = current;
+    state = { ...withoutDecisionWait, state: next, updatedAt: new Date().toISOString() };
+  } else {
+    if (
+      !isControllerStateNameV1(next) ||
+      !transitionsV1[current.state].some((value) => value === next)
+    )
+      throw new Error(`invalid transition: ${current.state} -> ${next}`);
+    if (current.state === "awaiting_decision" && !current.decisionWait && next === "planning")
+      throw new Error("legacy decision wait cannot resume");
+    const { decisionWait: _decisionWait, ...withoutDecisionWait } = current;
+    state = { ...withoutDecisionWait, state: next, updatedAt: new Date().toISOString() };
   }
-  if (current.state === "awaiting_decision" && !current.decisionWait && next === "planning")
-    throw new Error("legacy decision wait cannot resume");
-  const { decisionWait: _decisionWait, ...withoutDecisionWait } = current;
-  const state = {
-    ...withoutDecisionWait,
-    state: next,
-    updatedAt: new Date().toISOString(),
-  };
   writeControllerState(runDir, state);
   if (
     next === "failed" ||
@@ -357,13 +557,97 @@ export function transitionControllerState(
   return state;
 }
 
+export function recordControllerWorkflowStep(
+  runDir: string,
+  stepId: WorkflowStepId,
+  attempt: number,
+): ControllerStateV2 {
+  const current = readControllerState(runDir);
+  if (!isControllerStateV2(current) || current.state !== "executing")
+    throw new Error("workflow step requires executing state v2");
+  if (
+    !WORKFLOW_STEP_IDS.includes(stepId) ||
+    !Number.isInteger(attempt) ||
+    attempt < 1 ||
+    attempt > 4
+  )
+    throw new Error("invalid workflow cursor");
+  const previous = current.workflow.currentStepId;
+  const previousAttempt = current.workflow.attempt;
+  const valid =
+    (previous === undefined && stepId === "plan" && attempt === 1) ||
+    (previous === "plan" && stepId === "plan" && attempt === (previousAttempt ?? 0) + 1) ||
+    (previous === "plan" && (stepId === "implement" || stepId === "document") && attempt === 1) ||
+    (previous === "implement" && stepId === "document" && attempt === 1) ||
+    (previous === "document" && stepId === "verify" && attempt === 1) ||
+    (previous === "verify" && stepId === "review" && attempt === 1);
+  if (!valid) throw new Error("invalid workflow cursor transition");
+  const state: ControllerStateV2 = {
+    ...current,
+    workflow: { ...current.workflow, currentStepId: stepId, attempt },
+    updatedAt: new Date().toISOString(),
+  };
+  writeControllerState(runDir, state);
+  return state;
+}
+
+export function pinControllerWorkflowManifest(
+  runDir: string,
+  manifestSha256: string,
+): ControllerStateV2 {
+  if (!isHash(manifestSha256, 64)) throw new Error("invalid workflow manifest hash");
+  const current = readControllerState(runDir);
+  if (
+    !isControllerStateV2(current) ||
+    current.state !== "executing" ||
+    current.workflow.currentStepId !== "plan"
+  )
+    throw new Error("workflow manifest can only be pinned after planning");
+  if (current.workflow.manifestSha256 && current.workflow.manifestSha256 !== manifestSha256)
+    throw new Error("workflow manifest hash changed");
+  const state: ControllerStateV2 = {
+    ...current,
+    workflow: { ...current.workflow, manifestSha256 },
+    updatedAt: new Date().toISOString(),
+  };
+  writeControllerState(runDir, state);
+  return state;
+}
+
+export function completeControllerWorkflow(
+  runDir: string,
+  manifestSha256: string,
+): ControllerStateV2 {
+  const current = readControllerState(runDir);
+  if (
+    !isControllerStateV2(current) ||
+    current.state !== "executing" ||
+    current.workflow.currentStepId !== "review" ||
+    current.workflow.attempt !== 1 ||
+    current.workflow.manifestSha256 !== manifestSha256
+  )
+    throw new Error("workflow is not ready for publication");
+  const state: ControllerStateV2 = {
+    ...current,
+    state: "ready_for_publication",
+    updatedAt: new Date().toISOString(),
+  };
+  writeControllerState(runDir, state);
+  return state;
+}
+
 export function beginControllerDecisionWait(
   runDir: string,
   decisionWait: ControllerDecisionWait,
 ): ControllerState {
   if (!isDecisionWait(decisionWait)) throw new Error("invalid decision wait");
   const current = readControllerState(runDir);
-  if (current.state !== "planning" || !current.vm || current.cleanup !== "pending")
+  const waitingFrom = isControllerStateV2(current)
+    ? current.state === "executing" &&
+      current.workflow.currentStepId === "plan" &&
+      current.workflow.attempt === decisionWait.generation
+    : current.state === "planning";
+  if (!waitingFrom || !current.vm || current.cleanup !== "pending")
     throw new Error("decision wait requires a live planning VM");
   const state: ControllerState = {
     ...current,

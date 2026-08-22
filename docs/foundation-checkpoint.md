@@ -1,32 +1,39 @@
 # Foundation checkpoint
 
-Verified snapshot updated 2026-08-21. This page describes current code and evidence. See [ARCHITECTURE.md](../ARCHITECTURE.md), [envelopes](envelopes.md), and [local observer](observer.md).
+Verified snapshot updated 2026-08-21. Runtime implementation covers M1–M5; M6 completes its documentation. This page describes current code and deterministic evidence. See [architecture](../ARCHITECTURE.md), [workflows](workflows.md), [envelopes](envelopes.md), and [local observer](observer.md).
 
 ## Current boundary
 
-Milestones through remote controller composition are complete:
+Implemented foundation through M1–M5:
 
-- **3A runner:** generic `runAgent()` owns one bounded Pi session, isolated resources, events, receipts, artifacts, and cooperative timeout handling.
-- **3B envelope kernel:** typed planner, worker, documenter, and reviewer schemas; structural and semantic validation; `submit_envelope`; one same-session correction; accepted envelope and receipt evidence.
-- **Verification gate:** `src/verify.ts` fail-closed parses `factory.verify.json`, runs argv commands serially with `execFile` semantics, and applies an exact Git diff gate. Structured results provide consistency evidence, not authenticity against a process with VM OS access.
+- Generic `runAgent()` owns one bounded Pi session, isolated resources, events, receipts, artifacts, and cooperative timeout handling.
+- Typed planner, worker, documenter, and reviewer envelopes fail closed on invalid claims.
+- `feature-pr` is one code-owned recipe. Accepted plan resolves approved paths and generates strict version-1 `workflow-manifest.json` bound to recipe definition, planner run, and base SHA.
+- Serial block executor runs implement (or trusted docs-only skip), document, deterministic verify, and fresh review. Successful result writes version-1 `workflow-execution.json` bound to manifest and reviewed patch.
+- Remote protocol v2 carries canonical step identity. New controller state v2 records recipe, pinned manifest hash, current step, and attempt; state v1 remains readable and resumable for retained decision waits.
+- Host telemetry, `run status`, and observer preserve current workflow checkpoint. Observer remains read-only.
 
-All four role schemas run locally and through `factory run` in a fresh exe.dev VM. Worker owns approved non-doc paths, then documenter owns approved docs paths; docs-only runs skip worker. Verification and reviewer inspect aggregate diff. The controller snapshots immutable intake, serializes execution with a local lock, reconciles abandoned controller VMs, bootstraps pinned Node and target runtimes, invokes planner/worker/documenter/reviewer sessions, checks structural links among deterministic and review evidence, binds the reviewed diff to the harvested patch, and destroys the VM. The trusted controller then verifies the pinned base in a temporary clone, applies the reviewed patch, creates a deterministic commit and branch, and opens a ready-for-review pull request before reporting `completed`. GitHub write credentials never enter the VM. OpenRouter uses a dedicated capped key as deliberate transient exception: controller creates mode-`0600` VM-local Pi provider config for agent calls, best-effort removes it before VM destruction, and tells user to revoke key if cleanup fails. These checks detect inconsistency but are not cryptographic authenticity because VM agents retain OS-level access; VM is not a security sandbox.
+All four role schemas run locally and through `factory run` in a fresh exe.dev VM. Worker owns approved non-doc paths, then documenter owns approved docs paths. Verification and reviewer inspect aggregate diff. Verification is deterministic code, so execution record may link verify to primary writer run rather than inventing verifier session. Controller creates canonical host manifest, copies it into VM, validates remote serial sequence, checks manifest/execution/receipt/envelope/verification/review links, binds reviewed diff to harvested patch, and destroys VM. Trusted controller then verifies pinned base in temporary clone, applies reviewed patch, creates deterministic commit and branch, and opens ready-for-review pull request before reporting `completed`.
+
+GitHub write credentials never enter VM. OpenRouter uses dedicated capped key as transient exception. Consistency checks are deterministic but not cryptographic authenticity: VM processes retain OS-level access and could forge consistent evidence. VM is not security sandbox.
 
 ## Implemented primitives
 
-- `src/agents/index.ts` loads and fail-closed validates Markdown agent definitions, including authoritative pinned OpenRouter model fields. Current role defaults are Gemini 3.7 Flash for worker/documenter/reviewer and GLM 5.3 for planner; no complete model catalog is bundled, so doctor and remote bootstrap validate against OpenRouter's live catalog. Agent requests cap maximum output at 16,384 tokens.
+- `src/agents/index.ts` loads and fail-closed validates Markdown agent definitions, including authoritative pinned OpenRouter model fields. Current role defaults are `openrouter/google/gemini-3.7-flash` for worker/documenter/reviewer and `openrouter/z-ai/glm-5.3` for planner; no complete model catalog is bundled, so doctor and remote bootstrap validate against OpenRouter's live catalog. Agent requests cap maximum output at 16,384 tokens.
 - `src/run-agent.ts` exposes generic `runAgent()` and records session, lifecycle events, receipt, timeout, and envelope results.
 - `src/envelope.ts` defines role schemas, `parseEnvelope()`, correction prompt, submit tool, and planner rendering.
-- `src/workflows/plan.ts` exposes the executable planner path and writes `plan.md` from its accepted planner envelope.
+- `src/workflows/plan.ts` exposes executable planner path and writes `plan.md` from accepted planner envelope.
+- `src/workflow-step.ts` defines canonical step, actor, and phase identity.
+- `src/workflows/feature-pr.ts`, `manifest.ts`, and `execution.ts` define current recipe, strict manifest, definition/manifest hashes, completed run links, and reviewed-patch binding.
 - `src/run-artifacts.ts` creates `.factory/runs/<run-id>/`, snapshots input, appends JSONL events, and writes JSON artifacts.
 - `src/verify.ts` loads `factory.verify.json`, executes repository checks, and evaluates the exact Git diff gate.
 - `src/workflows/worker.ts` runs sequential disjoint worker/documenter writers, deterministic verification, and a separate reviewer with aggregate lifecycle evidence.
 - `src/integrations/linear.ts`, `src/integrations/github.ts`, and `src/intake.ts` validate and hash immutable external inputs. Linear intake requires an assignee. A decision request pins that assignee, issue, round, question hash, and request time; only a later numbered `Decision:` reply from that pinned assignee is eligible. `src/integrations/github.ts` publishes an idempotent controller-side branch and ready-for-review pull request without storing credentials.
-- `src/run-state.ts` atomically stores fail-closed controller state with transition validation, idempotency checks, and orphan VM lookup.
+- `src/run-state.ts` atomically stores fail-closed controller state. New runs use v2 `executing` state plus workflow cursor; readers and decision resume retain v1 compatibility.
 - `src/integrations/exe.ts` provides tested command construction for exe.dev SSH, SCP, and retryable deletion without retaining credentials. Integration boundaries live together under `src/integrations/`.
 - `src/controller-lock.ts`, `src/controller.ts`, and `src/controller-chain.ts` provide single-host ownership, restart cleanup, remote bootstrap/lifecycle, fail-closed evidence harvest, bounded decision-thread polling, and same-run planner-session continuation on a retained VM.
 - `src/telemetry.ts` adds a strict append-only host event ledger with gap-free sequencing, safe replay, bounded public fields, and terminal cleanup reconciliation.
-- `src/remote-protocol.ts` plus streaming exe.dev SSH expose deterministic live phase, agent/tool, gate, and review activity without prompts, tool arguments/results, or raw output. Controller code still owns state transitions and acceptance.
+- `src/remote-protocol.ts` protocol v2 plus streaming exe.dev SSH expose step-tagged phase, agent/tool, gate, and review activity without prompts, tool arguments/results, or raw output. Mixed binaries and mismatched step/actor/phase identity fail closed. Controller still owns state and acceptance.
 - `src/target.ts`, `src/run-launcher.ts`, and `src/run-status.ts` add target-repository inference, accepted detached controller startup with a preallocated run ID, and read-only telemetry status folding.
 - `src/observer.ts`, `src/observer-ui.ts`, and Preact components in `src/observer-app.tsx` add a managed loopback-only GET/HEAD server, ownership-checked process lifecycle, replay/cursor API, and accessible polling UI bundled into the binary.
 - `.pi/skills/software-factory/SKILL.md` provides a thin factory-owned Pi command router for observed start and status flows.
@@ -87,9 +94,7 @@ An empty `trustedDependencies` list keeps dependency lifecycle scripts blocked u
 
 ## Tests
 
-The decision-resume implementation passed 211 tests with `bun run test`; lint, format, type-check, binary build, help smoke, and `git diff --check` also passed. Full `bun run check` currently stops only because its generated observer-bundle diff gate sees preserved observer changes that predate this feature. Counts record this checkpoint; they are not evergreen promises.
-
-`bun run test` covers role boundaries, envelopes, local worker/reviewer lifecycle failures, controller lock/recovery and fake remote lifecycle paths, tar and patch trust boundaries, artifact safety, verification and Git gates, Linear/GitHub input validation and publication, credential redaction, deterministic intake and publication identities, detached startup, telemetry replay, observer ownership, read-only HTTP boundaries, UI routes, and skill wiring.
+`bun run test` covers recipe resolution, strict manifest and execution hashes, docs-only skip, serial stop behavior, local manifest fallback, state v2 cursor and v1 resume compatibility, protocol v2 rejection, telemetry identity, status/observer checkpoint display, controller sequence checks, harvest bindings, publication, role boundaries, credentials, and existing intake/observer behavior. Test counts are not promises; run current full gate.
 
 ## Failure and security limits
 

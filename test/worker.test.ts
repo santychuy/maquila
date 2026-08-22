@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import { test } from "node:test";
 import type { Envelope } from "../src/envelope.js";
 import type { AgentRunResult, RunAgentOptions, RunReceipt } from "../src/run-agent.js";
 import type { VerificationResult, VerifyOptions } from "../src/verify.js";
+import { createFeaturePrManifest, LOCAL_PLANNER_RUN_ID } from "../src/workflows/manifest.js";
 import { runWorkerLifecycle } from "../src/workflows/worker.js";
 import type { RemoteEvent } from "../src/remote-protocol.js";
 
@@ -276,6 +278,14 @@ test("successful worker invokes separate reviewer with untracked patch", async (
     assert.ok(events.some((event) => event.type === "gate_finished" && event.passed));
     assert.ok(events.some((event) => event.type === "review_finished" && event.verdict === "PASS"));
     await readFile(join(result.reviewerRunDir, "lifecycle.json"));
+    const execution = (await json(join(result.runDir, "workflow-execution.json"))) as {
+      status: string;
+      steps: Array<{ status: string }>;
+    };
+    assert.equal(execution.status, "completed");
+    assert.equal(execution.steps[0]?.status, "completed");
+    const workerReceipt = await json(join(result.runDir, "receipt.json"));
+    assert.ok((workerReceipt.artifacts as string[]).includes("workflow-execution.json"));
   } finally {
     await rm(f.root, { recursive: true, force: true });
   }
@@ -466,6 +476,7 @@ test("reviewer FAIL fails lifecycle", async () => {
     });
     assert.equal(result.status, "failed");
     assert.equal(result.reviewer?.verdict, "FAIL");
+    assert.equal(existsSync(join(result.runDir, "workflow-execution.json")), false);
   } finally {
     await rm(f.root, { recursive: true, force: true });
   }
@@ -709,6 +720,119 @@ test("documenter cannot alter worker-owned content and closes its phase failed",
         .map((event) => event.status),
       ["failed"],
     );
+  } finally {
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("supplied workflow manifest is validated", async () => {
+  const f = await fixture();
+  const calls: RunAgentOptions[] = [];
+  try {
+    const validPath = join(f.root, "workflow-manifest.json");
+    await writeFile(
+      validPath,
+      `${JSON.stringify(
+        createFeaturePrManifest({
+          plannerRunId: LOCAL_PLANNER_RUN_ID,
+          baseSha: f.baseSha,
+          plan: planner,
+        }),
+      )}\n`,
+    );
+    await mkdir(join(f.repo, "src"), { recursive: true });
+    const ok = await runWorkerLifecycle({
+      ...options(f),
+      workflowManifest: validPath,
+      runAgent: agentStub(
+        [
+          {
+            status: "completed",
+            envelope: workerEnvelope,
+            mutate: () => writeFile(join(f.repo, "src", "x.ts"), "export const x = 1;\n"),
+          },
+          { status: "completed", envelope: reviewerPass },
+        ],
+        calls,
+      ),
+      verifyRepository: async () => verification(true),
+    });
+    assert.equal(ok.status, "completed");
+    assert.ok(calls.length > 0);
+
+    const tampered = join(f.root, "tampered-manifest.json");
+    const parsed = createFeaturePrManifest({
+      plannerRunId: LOCAL_PLANNER_RUN_ID,
+      baseSha: f.baseSha,
+      plan: planner,
+    });
+    await writeFile(tampered, `${JSON.stringify({ ...parsed, baseSha: "b".repeat(40) })}\n`);
+    const failed = await runWorkerLifecycle({
+      ...options(f),
+      workflowManifest: tampered,
+      runAgent: agentStub([], calls),
+    });
+    assert.equal(failed.status, "failed");
+    assert.equal((await json(join(failed.runDir, "lifecycle.json"))).stage, "planner");
+  } finally {
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("failed implement block does not run later blocks", async () => {
+  const f = await fixture();
+  const calls: RunAgentOptions[] = [];
+  let verified = false;
+  try {
+    const result = await runWorkerLifecycle({
+      ...options(f),
+      runAgent: agentStub([{ status: "failed", error: "worker stopped" }], calls),
+      verifyRepository: async () => {
+        verified = true;
+        return verification(true);
+      },
+    });
+    assert.equal(result.status, "failed");
+    assert.equal(result.failure?.phase, "implementing");
+    assert.deepEqual(
+      calls.map((call) => call.agent.name),
+      ["worker"],
+    );
+    assert.equal(verified, false);
+  } finally {
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("omitted workflow manifest derives equivalent local manifest and still runs", async () => {
+  const f = await fixture();
+  const calls: RunAgentOptions[] = [];
+  try {
+    const expected = createFeaturePrManifest({
+      plannerRunId: LOCAL_PLANNER_RUN_ID,
+      baseSha: f.baseSha,
+      plan: planner,
+    });
+    assert.equal(expected.plannerRunId, LOCAL_PLANNER_RUN_ID);
+    assert.equal("workflowManifest" in options(f), false);
+    await mkdir(join(f.repo, "src"), { recursive: true });
+    const result = await runWorkerLifecycle({
+      ...options(f),
+      runAgent: agentStub(
+        [
+          {
+            status: "completed",
+            envelope: workerEnvelope,
+            mutate: () => writeFile(join(f.repo, "src", "x.ts"), "export const x = 1;\n"),
+          },
+          { status: "completed", envelope: reviewerPass },
+        ],
+        calls,
+      ),
+      verifyRepository: async () => verification(true),
+    });
+    assert.equal(result.status, "completed");
+    assert.ok(calls.length > 0);
   } finally {
     await rm(f.root, { recursive: true, force: true });
   }

@@ -12,6 +12,70 @@ function temporary(): string {
   return mkdtempSync(resolve(tmpdir(), "factory-status-"));
 }
 
+const agentContext = {
+  model: "provider/model",
+  description: "Workflow agent",
+  tools: ["read"],
+  thinking: "high" as const,
+  access: "read-only" as const,
+  systemPromptSha256: "a".repeat(64),
+};
+
+function completePlan(telemetry: ReturnType<typeof createTelemetryWriter>): void {
+  const phase = { id: "plan:1", name: "planning" as const, stepId: "plan" as const, attempt: 1 };
+  telemetry.append({ type: "phase_started", actor: "planner", phase, payload: {} });
+  telemetry.append({ type: "agent_context", actor: "planner", phase, payload: agentContext });
+  telemetry.append({ type: "agent_started", actor: "planner", phase, payload: {} });
+  telemetry.append({
+    type: "agent_finished",
+    actor: "planner",
+    phase,
+    payload: { status: "completed" },
+  });
+  telemetry.append({
+    type: "agent_usage",
+    actor: "planner",
+    phase,
+    payload: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+  });
+  telemetry.append({
+    type: "phase_finished",
+    actor: "planner",
+    phase,
+    payload: { status: "completed" },
+  });
+}
+
+function completeReview(telemetry: ReturnType<typeof createTelemetryWriter>): void {
+  const phase = {
+    id: "review:1",
+    name: "reviewing" as const,
+    stepId: "review" as const,
+    attempt: 1,
+  };
+  telemetry.append({ type: "phase_started", actor: "reviewer", phase, payload: {} });
+  telemetry.append({ type: "agent_context", actor: "reviewer", phase, payload: agentContext });
+  telemetry.append({ type: "agent_started", actor: "reviewer", phase, payload: {} });
+  telemetry.append({
+    type: "agent_finished",
+    actor: "reviewer",
+    phase,
+    payload: { status: "completed" },
+  });
+  telemetry.append({
+    type: "agent_usage",
+    actor: "reviewer",
+    phase,
+    payload: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+  });
+  telemetry.append({
+    type: "phase_finished",
+    actor: "reviewer",
+    phase,
+    payload: { status: "completed" },
+  });
+}
+
 test("status folds safe live activity and terminal evidence", () => {
   const root = temporary();
   try {
@@ -38,6 +102,7 @@ test("status folds safe live activity and terminal evidence", () => {
     const live = foldRunStatus({ root, runId, now: Date.now() });
     assert.equal(live.status, "running");
     assert.equal(live.phase, "implementing");
+    assert.equal(live.currentStepId, null);
     assert.equal(live.currentTool, "edit");
     assert.ok(live.runtimeMilliseconds !== null);
     assert.ok(live.phaseRuntimeMilliseconds !== null);
@@ -84,12 +149,103 @@ test("status folds safe live activity and terminal evidence", () => {
     });
     const done = foldRunStatus({ root, runId });
     assert.equal(done.status, "completed");
+    assert.equal(done.currentStepId, null);
     assert.equal(done.currentTool, null);
     assert.equal(done.cleanup, "complete");
     assert.ok(done.runtimeMilliseconds !== null);
     assert.equal(done.phaseRuntimeMilliseconds, null);
     assert.equal(done.artifacts[0]?.name, "change.patch");
     assert.equal(done.pullRequest?.url, "https://github.com/santychuy/bookbounce/pull/42");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("status retains plan through a decision wait and advances at the next workflow step", () => {
+  const root = temporary();
+  try {
+    const telemetry = createTelemetryWriter(root, runId);
+    telemetry.append({ type: "run_created", actor: "controller", payload: { status: "created" } });
+    completePlan(telemetry);
+    const waitingPhase = {
+      id: "awaiting_decision:1",
+      name: "awaiting_decision" as const,
+      attempt: 1,
+    };
+    telemetry.append({
+      type: "phase_started",
+      actor: "controller",
+      phase: waitingPhase,
+      payload: {},
+    });
+    const waiting = foldRunStatus({ root, runId, now: Date.now() });
+    assert.equal(waiting.phase, "awaiting_decision");
+    assert.equal(waiting.currentStepId, "plan");
+
+    telemetry.append({
+      type: "phase_finished",
+      actor: "controller",
+      phase: waitingPhase,
+      payload: { status: "completed" },
+    });
+    telemetry.append({
+      type: "phase_started",
+      actor: "worker",
+      phase: { id: "implement:1", name: "implementing", stepId: "implement", attempt: 1 },
+      payload: {},
+    });
+    const implementing = foldRunStatus({ root, runId, now: Date.now() });
+    assert.equal(implementing.phase, "implementing");
+    assert.equal(implementing.currentStepId, "implement");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("status retains review through cleanup, publication, and completion", () => {
+  const root = temporary();
+  try {
+    const telemetry = createTelemetryWriter(root, runId);
+    telemetry.append({ type: "run_created", actor: "controller", payload: { status: "created" } });
+    completeReview(telemetry);
+    telemetry.append({
+      type: "cleanup_updated",
+      actor: "controller",
+      payload: { cleanup: "complete" },
+    });
+    const publishingPhase = { id: "publishing:1", name: "publishing" as const, attempt: 1 };
+    telemetry.append({
+      type: "phase_started",
+      actor: "controller",
+      phase: publishingPhase,
+      payload: {},
+    });
+    assert.equal(foldRunStatus({ root, runId, now: Date.now() }).currentStepId, "review");
+    telemetry.append({
+      type: "phase_finished",
+      actor: "controller",
+      phase: publishingPhase,
+      payload: { status: "completed" },
+    });
+    telemetry.append({
+      type: "publication_completed",
+      actor: "controller",
+      payload: {
+        number: 42,
+        url: "https://github.com/santychuy/bookbounce/pull/42",
+        branch: "factory/riff-40-aaaaaaaaaaaa",
+        commitSha: "b".repeat(40),
+      },
+    });
+    telemetry.append({
+      type: "run_finished",
+      actor: "controller",
+      payload: { status: "completed", cleanup: "complete" },
+    });
+    const completed = foldRunStatus({ root, runId });
+    assert.equal(completed.status, "completed");
+    assert.equal(completed.phase, "publishing");
+    assert.equal(completed.currentStepId, "review");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
