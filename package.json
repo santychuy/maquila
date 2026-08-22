@@ -1,22 +1,22 @@
 {
-  "name": "software-factory",
+  "name": "maquila",
   "version": "0.1.0",
   "private": true,
   "bin": {
-    "factory": "./dist/factory"
+    "maquila": "./dist/maquila"
   },
   "type": "module",
   "scripts": {
     "build": "bun run build:observer && bun run build:js && bun run build:binary",
     "build:js": "tsc",
-    "build:binary": "bun build ./src/cli/index.ts --compile --outfile ./dist/factory",
+    "build:binary": "bun build ./src/cli/index.ts --compile --outfile ./dist/maquila",
     "lint": "oxlint --type-aware --deny-warnings .",
     "lint:fix": "oxlint --type-aware --fix .",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "test": "bun run build:observer && bun run build:js && node --test dist/test/*.test.js",
-    "check": "bun run lint && bun run format:check && bun run build:observer && tsc --noEmit && git diff --exit-code -- src/observer-bundle.generated.ts && bun run test && bun run build:binary && ./dist/factory --help >/dev/null",
-    "factory": "./dist/factory",
+    "check": "bun run lint && bun run format:check && bun run build:observer && tsc --noEmit && git diff --exit-code -- src/observer-bundle.generated.ts && bun run test && bun run build:binary && ./dist/maquila --help >/dev/null",
+    "maquila": "./dist/maquila",
     "prepare": "husky",
     "build:observer": "bun scripts/build-observer-ui.ts"
   },

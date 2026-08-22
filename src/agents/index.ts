@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { factoryRoot } from "../runtime.js";
+import { maquilaRoot } from "../runtime.js";
 
 export const ALLOWED_AGENT_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write"] as const;
 export type AgentToolName = (typeof ALLOWED_AGENT_TOOLS)[number];
@@ -38,7 +38,7 @@ interface AgentFrontmatter extends Record<string, unknown> {
 }
 
 export function defaultAgentsDir(): string {
-  return resolve(factoryRoot(resolve(import.meta.dirname, "..")), "src", "agents");
+  return resolve(maquilaRoot(resolve(import.meta.dirname, "..")), "src", "agents");
 }
 
 function nonEmptyString(value: unknown, field: string, filePath: string): string {

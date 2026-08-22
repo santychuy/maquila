@@ -15,7 +15,7 @@ function plan(paths: string[]): PlannerEnvelope {
     summary: "Plan",
     evidence: ["Issue"],
     changes: paths.map((path) => ({ path, action: "modify", rationale: "Needed" })),
-    verification: ["factory.verify.json"],
+    verification: ["maquila.verify.json"],
     risks: [],
     decisionsNeeded: [],
   };
@@ -58,10 +58,10 @@ test("docs-only plan skips implement", () => {
   assert.equal(docsOnly.steps.find((step) => step.id === "implement")?.status, "skipped");
 });
 
-test("authorized paths reject duplicates and factory.verify.json", () => {
+test("authorized paths reject duplicates and maquila.verify.json", () => {
   assert.throws(() => authorizedFeaturePrPaths(plan(["src/a.ts", "src/a.ts"])), /duplicate paths/);
   assert.throws(
-    () => authorizedFeaturePrPaths(plan(["factory.verify.json"])),
-    /factory.verify.json/,
+    () => authorizedFeaturePrPaths(plan(["maquila.verify.json"])),
+    /maquila.verify.json/,
   );
 });

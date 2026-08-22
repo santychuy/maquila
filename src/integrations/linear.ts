@@ -65,7 +65,7 @@ function hash(value: unknown): string {
 }
 
 function decisionMarker(runId: string, generation: number, questionSha256: string): string {
-  return `<!-- factory-decision:${runId}:${generation}:${questionSha256} -->`;
+  return `<!-- maquila-decision:${runId}:${generation}:${questionSha256} -->`;
 }
 
 function timestamp(value: string, label: string): string {
@@ -198,7 +198,7 @@ export async function createLinearDecisionComment(options: {
   const questionSha256 = hash(decisions);
   const marker = decisionMarker(options.runId, generation, questionSha256);
   const body = [
-    `${assigneeUrl} Factory paused this run pending your decision.`,
+    `${assigneeUrl} Maquila paused this run pending your decision.`,
     "",
     `Run: \`${options.runId}\` · Decision round: ${generation}`,
     "",
@@ -208,7 +208,7 @@ export async function createLinearDecisionComment(options: {
     "Decision:",
     ...decisions.map((_, index) => `${index + 1}. <answer>`),
     "",
-    "Factory resumes this same run after a valid reply.",
+    "Maquila resumes this same run after a valid reply.",
     marker,
   ].join("\n");
   const result = (comment: { commentId: string; commentUrl: string }): LinearDecisionRequest => ({
@@ -317,7 +317,7 @@ export async function fetchLinearDecisionReply(options: {
     if (!Number.isInteger(request.generation) || !Number.isInteger(request.questionCount))
       throw new Error("decision request is invalid");
     const marker = request.marker.match(
-      /^<!-- factory-decision:[0-9a-f-]{36}:(\d+):([0-9a-f]{64}) -->$/,
+      /^<!-- maquila-decision:[0-9a-f-]{36}:(\d+):([0-9a-f]{64}) -->$/,
     );
     if (!marker || Number(marker[1]) !== request.generation || marker[2] !== request.questionSha256)
       throw new Error("decision request marker is invalid");

@@ -22,7 +22,7 @@ const target = {
 };
 
 function root(): string {
-  return mkdtempSync(resolve(tmpdir(), "factory-launch-"));
+  return mkdtempSync(resolve(tmpdir(), "maquila-launch-"));
 }
 
 function environment(): NodeJS.ProcessEnv {
@@ -30,7 +30,7 @@ function environment(): NodeJS.ProcessEnv {
     LINEAR_API_TOKEN: "linear-secret",
     GITHUB_TOKEN: "github-secret",
     OPENROUTER_API_KEY: "openrouter-secret",
-    FACTORY_EXE_IDENTITY: "/tmp/private-identity",
+    MAQUILA_EXE_IDENTITY: "/tmp/private-identity",
     PATH: "/usr/bin:/bin",
     HOME: "/tmp/home",
     UNRELATED_SECRET: "must-not-cross",
@@ -38,18 +38,18 @@ function environment(): NodeJS.ProcessEnv {
 }
 
 test("detached launch returns only after matching accepted handshake", async () => {
-  const factoryRoot = root();
+  const maquilaRoot = root();
   let capturedArgs: string[] = [];
   let capturedEnv: NodeJS.ProcessEnv = {};
   let unref = false;
   try {
     const result = await startDetachedRun({
-      factoryRoot,
+      maquilaRoot,
       target: target.path,
       issue: "RIFF-52",
       timeoutSeconds: 60,
       env: environment(),
-      cliPath: "/factory/dist/src/cli.js",
+      cliPath: "/maquila/dist/src/cli.js",
       runId,
       instanceId,
       resolveTarget: () => target,
@@ -57,9 +57,9 @@ test("detached launch returns only after matching accepted handshake", async () 
         capturedArgs = args;
         capturedEnv = options.env ?? {};
         writeLaunchHandshake(
-          factoryRoot,
+          maquilaRoot,
           runId,
-          options.env?.FACTORY_LAUNCH_INSTANCE_ID ?? "",
+          options.env?.MAQUILA_LAUNCH_INSTANCE_ID ?? "",
           4321,
         );
         return {
@@ -90,36 +90,36 @@ test("detached launch returns only after matching accepted handshake", async () 
     assert.equal(capturedEnv.UNRELATED_SECRET, undefined);
     assert.equal(capturedEnv.LINEAR_API_TOKEN, "linear-secret");
     assert.equal(capturedEnv.OPENROUTER_API_KEY, "openrouter-secret");
-    assert.equal(capturedEnv.FACTORY_EXE_IDENTITY, "/tmp/private-identity");
-    assert.equal(capturedEnv.FACTORY_LAUNCH_INSTANCE_ID, instanceId);
-    assert.equal(statSync(telemetryPath(factoryRoot, runId)).mode & 0o777, 0o600);
-    const launches = resolve(factoryRoot, ".factory", "launches", runId);
+    assert.equal(capturedEnv.MAQUILA_EXE_IDENTITY, "/tmp/private-identity");
+    assert.equal(capturedEnv.MAQUILA_LAUNCH_INSTANCE_ID, instanceId);
+    assert.equal(statSync(telemetryPath(maquilaRoot, runId)).mode & 0o777, 0o600);
+    const launches = resolve(maquilaRoot, ".maquila", "launches", runId);
     assert.equal(statSync(resolve(launches, "controller.stdout.log")).mode & 0o777, 0o600);
     assert.equal(statSync(resolve(launches, "controller.stderr.log")).mode & 0o777, 0o600);
     const persisted = [
       readFileSync(resolve(launches, "accepted.json"), "utf8"),
       readFileSync(resolve(launches, "controller.stdout.log"), "utf8"),
       readFileSync(resolve(launches, "controller.stderr.log"), "utf8"),
-      readFileSync(telemetryPath(factoryRoot, runId), "utf8"),
+      readFileSync(telemetryPath(maquilaRoot, runId), "utf8"),
     ].join("\n");
     assert.doesNotMatch(persisted, /linear-secret|github-secret|private-identity/);
   } finally {
-    rmSync(factoryRoot, { recursive: true, force: true });
+    rmSync(maquilaRoot, { recursive: true, force: true });
   }
 });
 
 test("child rejection or death before handshake never returns a fake run", async () => {
   for (const exitCode of [1, 127]) {
-    const factoryRoot = root();
+    const maquilaRoot = root();
     try {
       await assert.rejects(
         startDetachedRun({
-          factoryRoot,
+          maquilaRoot,
           target: target.path,
           issue: "RIFF-52",
           timeoutSeconds: 60,
           env: environment(),
-          cliPath: "/factory/dist/src/cli.js",
+          cliPath: "/maquila/dist/src/cli.js",
           runId,
           instanceId,
           resolveTarget: () => target,
@@ -136,34 +136,34 @@ test("child rejection or death before handshake never returns a fake run", async
         /rejected startup/,
       );
       assert.equal(
-        statSync(resolve(factoryRoot, ".factory", "launches", runId)).mode & 0o777,
+        statSync(resolve(maquilaRoot, ".maquila", "launches", runId)).mode & 0o777,
         0o700,
       );
-      assert.throws(() => statSync(telemetryPath(factoryRoot, runId)));
+      assert.throws(() => statSync(telemetryPath(maquilaRoot, runId)));
     } finally {
-      rmSync(factoryRoot, { recursive: true, force: true });
+      rmSync(maquilaRoot, { recursive: true, force: true });
     }
   }
 });
 
 test("child death after accepted handshake remains an accepted recoverable run", async () => {
-  const factoryRoot = root();
+  const maquilaRoot = root();
   try {
     const result = await startDetachedRun({
-      factoryRoot,
+      maquilaRoot,
       target: target.path,
       issue: "RIFF-52",
       timeoutSeconds: 60,
       env: environment(),
-      cliPath: "/factory/dist/src/cli.js",
+      cliPath: "/maquila/dist/src/cli.js",
       runId,
       instanceId,
       resolveTarget: () => target,
       spawnChild: (_command: string, _args: string[], options: { env?: NodeJS.ProcessEnv }) => {
         writeLaunchHandshake(
-          factoryRoot,
+          maquilaRoot,
           runId,
-          options.env?.FACTORY_LAUNCH_INSTANCE_ID ?? "",
+          options.env?.MAQUILA_LAUNCH_INSTANCE_ID ?? "",
           4321,
         );
         return {
@@ -180,29 +180,29 @@ test("child death after accepted handshake remains an accepted recoverable run",
     assert.equal(result.accepted, true);
     assert.equal(result.runId, runId);
   } finally {
-    rmSync(factoryRoot, { recursive: true, force: true });
+    rmSync(maquilaRoot, { recursive: true, force: true });
   }
 });
 
-test("factory evidence root never resolves into target repository", async () => {
-  const factoryRoot = root();
+test("maquila evidence root never resolves into target repository", async () => {
+  const maquilaRoot = root();
   const targetRoot = root();
   try {
     await startDetachedRun({
-      factoryRoot,
+      maquilaRoot,
       target: targetRoot,
       issue: "RIFF-52",
       timeoutSeconds: 60,
       env: environment(),
-      cliPath: "/factory/dist/src/cli.js",
+      cliPath: "/maquila/dist/src/cli.js",
       runId,
       instanceId,
       resolveTarget: () => ({ ...target, path: targetRoot }),
       spawnChild: (_command: string, _args: string[], options: { env?: NodeJS.ProcessEnv }) => {
         writeLaunchHandshake(
-          factoryRoot,
+          maquilaRoot,
           runId,
-          options.env?.FACTORY_LAUNCH_INSTANCE_ID ?? "",
+          options.env?.MAQUILA_LAUNCH_INSTANCE_ID ?? "",
           4321,
         );
         return {
@@ -216,28 +216,28 @@ test("factory evidence root never resolves into target repository", async () => 
       },
       sleep: async () => {},
     });
-    assert.equal(statSync(telemetryPath(factoryRoot, runId)).isFile(), true);
+    assert.equal(statSync(telemetryPath(maquilaRoot, runId)).isFile(), true);
     assert.throws(() => statSync(telemetryPath(targetRoot, runId)));
   } finally {
-    rmSync(factoryRoot, { recursive: true, force: true });
+    rmSync(maquilaRoot, { recursive: true, force: true });
     rmSync(targetRoot, { recursive: true, force: true });
   }
 });
 
 test("termination race never accepts a handshake created by kill", async () => {
-  const factoryRoot = root();
+  const maquilaRoot = root();
   let unref = false;
   try {
     await assert.rejects(
       startDetachedRun({
-        factoryRoot,
+        maquilaRoot,
         target: target.path,
         issue: "RIFF-52",
         timeoutSeconds: 60,
         startupTimeoutMs: 0,
         terminationTimeoutMs: 1,
         env: environment(),
-        cliPath: "/factory/dist/src/cli.js",
+        cliPath: "/maquila/dist/src/cli.js",
         runId,
         instanceId,
         resolveTarget: () => target,
@@ -246,7 +246,7 @@ test("termination race never accepts a handshake created by kill", async () => {
           exitCode: null,
           signalCode: null,
           kill: () => {
-            writeLaunchHandshake(factoryRoot, runId, instanceId, 4321);
+            writeLaunchHandshake(maquilaRoot, runId, instanceId, 4321);
             return true;
           },
           unref: () => {
@@ -259,27 +259,27 @@ test("termination race never accepts a handshake created by kill", async () => {
       /termination unconfirmed/,
     );
     assert.equal(unref, true);
-    assert.equal(statSync(telemetryPath(factoryRoot, runId)).isFile(), true);
-    assert.equal(statSync(terminationUnconfirmedPath(factoryRoot, runId)).isFile(), true);
+    assert.equal(statSync(telemetryPath(maquilaRoot, runId)).isFile(), true);
+    assert.equal(statSync(terminationUnconfirmedPath(maquilaRoot, runId)).isFile(), true);
   } finally {
-    rmSync(factoryRoot, { recursive: true, force: true });
+    rmSync(maquilaRoot, { recursive: true, force: true });
   }
 });
 
 test("signal-exited child rejects, cleans reservation, and releases ownership", async () => {
-  const factoryRoot = root();
+  const maquilaRoot = root();
   let unref = false;
   try {
     await assert.rejects(
       startDetachedRun({
-        factoryRoot,
+        maquilaRoot,
         target: target.path,
         issue: "RIFF-52",
         timeoutSeconds: 60,
         startupTimeoutMs: 0,
         terminationTimeoutMs: 1,
         env: environment(),
-        cliPath: "/factory/dist/src/cli.js",
+        cliPath: "/maquila/dist/src/cli.js",
         runId,
         instanceId,
         resolveTarget: () => target,
@@ -298,26 +298,26 @@ test("signal-exited child rejects, cleans reservation, and releases ownership", 
       /rejected startup/,
     );
     assert.equal(unref, true);
-    assert.throws(() => statSync(telemetryPath(factoryRoot, runId)));
+    assert.throws(() => statSync(telemetryPath(maquilaRoot, runId)));
   } finally {
-    rmSync(factoryRoot, { recursive: true, force: true });
+    rmSync(maquilaRoot, { recursive: true, force: true });
   }
 });
 
 test("unkillable child preserves ownership and reports termination unconfirmed", async () => {
-  const factoryRoot = root();
+  const maquilaRoot = root();
   let unref = false;
   try {
     await assert.rejects(
       startDetachedRun({
-        factoryRoot,
+        maquilaRoot,
         target: target.path,
         issue: "RIFF-52",
         timeoutSeconds: 60,
         startupTimeoutMs: 0,
         terminationTimeoutMs: 1,
         env: environment(),
-        cliPath: "/factory/dist/src/cli.js",
+        cliPath: "/maquila/dist/src/cli.js",
         runId,
         instanceId,
         resolveTarget: () => target,
@@ -336,8 +336,8 @@ test("unkillable child preserves ownership and reports termination unconfirmed",
       new RegExp(`termination unconfirmed for run ${runId}`),
     );
     assert.equal(unref, true);
-    assert.equal(statSync(telemetryPath(factoryRoot, runId)).isFile(), true);
-    const record = JSON.parse(readFileSync(terminationUnconfirmedPath(factoryRoot, runId), "utf8"));
+    assert.equal(statSync(telemetryPath(maquilaRoot, runId)).isFile(), true);
+    const record = JSON.parse(readFileSync(terminationUnconfirmedPath(maquilaRoot, runId), "utf8"));
     assert.deepEqual(record, {
       version: 1,
       runId,
@@ -346,18 +346,18 @@ test("unkillable child preserves ownership and reports termination unconfirmed",
       status: "termination_unconfirmed",
       recordedAt: record.recordedAt,
     });
-    assert.equal(statSync(terminationUnconfirmedPath(factoryRoot, runId)).mode & 0o777, 0o600);
+    assert.equal(statSync(terminationUnconfirmedPath(maquilaRoot, runId)).mode & 0o777, 0o600);
   } finally {
-    rmSync(factoryRoot, { recursive: true, force: true });
+    rmSync(maquilaRoot, { recursive: true, force: true });
   }
 });
 
 test("optional identity omits key path and copies host agent socket", async () => {
-  const factoryRoot = root();
+  const maquilaRoot = root();
   let capturedEnv: NodeJS.ProcessEnv = {};
   try {
     await startDetachedRun({
-      factoryRoot,
+      maquilaRoot,
       target: target.path,
       issue: "RIFF-52",
       timeoutSeconds: 60,
@@ -371,7 +371,7 @@ test("optional identity omits key path and copies host agent socket", async () =
         GH_TOKEN: "should-not-copy",
         UNRELATED_SECRET: "must-not-cross",
       },
-      cliPath: "/factory/dist/src/cli.js",
+      cliPath: "/maquila/dist/src/cli.js",
       runId,
       instanceId,
       resolveTarget: () => target,
@@ -379,9 +379,9 @@ test("optional identity omits key path and copies host agent socket", async () =
         capturedEnv = options.env ?? {};
         assert.equal(args.includes(target.path), false);
         writeLaunchHandshake(
-          factoryRoot,
+          maquilaRoot,
           runId,
-          options.env?.FACTORY_LAUNCH_INSTANCE_ID ?? "",
+          options.env?.MAQUILA_LAUNCH_INSTANCE_ID ?? "",
           4321,
         );
         return {
@@ -395,33 +395,33 @@ test("optional identity omits key path and copies host agent socket", async () =
       },
       sleep: async () => {},
     });
-    assert.equal(capturedEnv.FACTORY_EXE_IDENTITY, undefined);
+    assert.equal(capturedEnv.MAQUILA_EXE_IDENTITY, undefined);
     assert.equal(capturedEnv.SSH_AUTH_SOCK, "/tmp/agent.sock");
     assert.equal(capturedEnv.GH_TOKEN, undefined);
     assert.equal(capturedEnv.UNRELATED_SECRET, undefined);
     assert.throws(() => statSync(telemetryPath(target.path, runId)));
   } finally {
-    rmSync(factoryRoot, { recursive: true, force: true });
+    rmSync(maquilaRoot, { recursive: true, force: true });
   }
 });
 
 test("held controller lock rejects detached launch without fake telemetry", async () => {
-  const factoryRoot = root();
-  const lock = acquireControllerLock(factoryRoot);
+  const maquilaRoot = root();
+  const lock = acquireControllerLock(maquilaRoot);
   try {
     await assert.rejects(
       startDetachedRun({
-        factoryRoot,
+        maquilaRoot,
         target: target.path,
         issue: "RIFF-52",
         timeoutSeconds: 60,
         env: environment(),
-        cliPath: "/factory/dist/src/cli.js",
+        cliPath: "/maquila/dist/src/cli.js",
         runId,
         instanceId,
         resolveTarget: () => target,
         spawnChild: () => {
-          assert.throws(() => acquireControllerLock(factoryRoot), /lock is held/);
+          assert.throws(() => acquireControllerLock(maquilaRoot), /lock is held/);
           return {
             pid: 4321,
             exitCode: 1,
@@ -435,9 +435,9 @@ test("held controller lock rejects detached launch without fake telemetry", asyn
       }),
       /rejected startup/,
     );
-    assert.throws(() => statSync(telemetryPath(factoryRoot, runId)));
+    assert.throws(() => statSync(telemetryPath(maquilaRoot, runId)));
   } finally {
     lock.release();
-    rmSync(factoryRoot, { recursive: true, force: true });
+    rmSync(maquilaRoot, { recursive: true, force: true });
   }
 });

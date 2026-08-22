@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "software-factory",
+      "name": "maquila",
       "dependencies": {
         "@earendil-works/pi-coding-agent": "0.84.2",
         "dayjs": "1.11.23",

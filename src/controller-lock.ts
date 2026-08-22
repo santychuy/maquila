@@ -107,11 +107,11 @@ export function acquireControllerLock(
 ): ControllerLock {
   if (!Number.isSafeInteger(runtime.pid) || runtime.pid < 1)
     throw new Error("invalid controller PID");
-  const factoryDir = resolve(root, ".factory");
-  const path = resolve(factoryDir, "controller.lock");
-  const guard = resolve(factoryDir, "controller.lock.acquire");
-  mkdirSync(factoryDir, { recursive: true, mode: 0o700 });
-  chmodSync(factoryDir, 0o700);
+  const maquilaDir = resolve(root, ".maquila");
+  const path = resolve(maquilaDir, "controller.lock");
+  const guard = resolve(maquilaDir, "controller.lock.acquire");
+  mkdirSync(maquilaDir, { recursive: true, mode: 0o700 });
+  chmodSync(maquilaDir, 0o700);
   let guardToken: string | undefined;
   try {
     mkdirSync(guard, { mode: 0o700 });

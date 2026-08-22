@@ -21,12 +21,12 @@ function git(repo: string, ...args: string[]): string {
 }
 
 function initRepo(commands: string[][] = [["true"]]): string {
-  const repo = mkdtempSync(join(tmpdir(), "factory-verify-"));
+  const repo = mkdtempSync(join(tmpdir(), "maquila-verify-"));
   git(repo, "init");
   git(repo, "config", "user.email", "test@example.com");
   git(repo, "config", "user.name", "Test");
   git(repo, "config", "commit.gpgsign", "false");
-  writeFileSync(join(repo, "factory.verify.json"), JSON.stringify({ commands }));
+  writeFileSync(join(repo, "maquila.verify.json"), JSON.stringify({ commands }));
   writeFileSync(join(repo, "keep.txt"), "keep\n");
   git(repo, "add", ".");
   git(repo, "commit", "-m", "base");
@@ -94,17 +94,17 @@ test("verifyRepository uses pinned config and rejects worktree manifest changes"
     const baseSha = git(repo, "rev-parse", "HEAD");
     writeFileSync(join(repo, "keep.txt"), "changed\n");
     writeFileSync(
-      join(repo, "factory.verify.json"),
+      join(repo, "maquila.verify.json"),
       JSON.stringify({ commands: [["node", "-e", "process.exit(7)"]] }),
     );
     const result = await verifyRepository({
       repo,
       baseSha,
-      allowedPaths: ["keep.txt", "factory.verify.json"],
+      allowedPaths: ["keep.txt", "maquila.verify.json"],
     });
     assert.equal(result.commands[0]?.exitCode, 0);
     assert.equal(result.passed, false);
-    assert.ok(result.git.unexpectedPaths.includes("factory.verify.json"));
+    assert.ok(result.git.unexpectedPaths.includes("maquila.verify.json"));
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }
@@ -114,14 +114,14 @@ test("post-check catches command-created unexpected file", async () => {
   const repo = initRepo();
   try {
     writeFileSync(join(repo, "keep.txt"), "changed\n");
-    git(repo, "checkout", "--", "factory.verify.json");
+    git(repo, "checkout", "--", "maquila.verify.json");
     writeFileSync(
-      join(repo, "factory.verify.json"),
+      join(repo, "maquila.verify.json"),
       JSON.stringify({
         commands: [["node", "-e", "require('node:fs').writeFileSync('surprise.txt','created')"]],
       }),
     );
-    git(repo, "add", "factory.verify.json");
+    git(repo, "add", "maquila.verify.json");
     git(repo, "commit", "-m", "configure check");
     const newBaseSha = git(repo, "rev-parse", "HEAD");
     writeFileSync(join(repo, "keep.txt"), "changed again\n");
@@ -142,10 +142,10 @@ test("timeout evidence is explicit", async () => {
   try {
     writeFileSync(join(repo, "keep.txt"), "changed\n");
     writeFileSync(
-      join(repo, "factory.verify.json"),
+      join(repo, "maquila.verify.json"),
       JSON.stringify({ commands: [["node", "-e", "setTimeout(() => {}, 1000)"]] }),
     );
-    git(repo, "add", "factory.verify.json");
+    git(repo, "add", "maquila.verify.json");
     git(repo, "commit", "-m", "configure timeout");
     const baseSha = git(repo, "rev-parse", "HEAD");
     writeFileSync(join(repo, "keep.txt"), "changed again\n");

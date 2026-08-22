@@ -35,13 +35,13 @@ test("token usage activity copies finalized session token totals", () => {
   assert.equal(tokenUsageActivity(tokens, undefined, Number.NaN).reportedCostNanoUsd, undefined);
 });
 
-test("agent output tokens are capped to a bounded factory budget", () => {
+test("agent output tokens are capped to a bounded maquila budget", () => {
   assert.equal(cappedAgentOutputTokens(128_000), 16_384);
   assert.equal(cappedAgentOutputTokens(8_192), 8_192);
 });
 
 test("controller session reopening accepts only pinned artifact sessions", () => {
-  const root = mkdtempSync(resolve(tmpdir(), "factory-session-"));
+  const root = mkdtempSync(resolve(tmpdir(), "maquila-session-"));
   const sessions = resolve(root, "sessions");
   try {
     mkdirSync(sessions);
@@ -143,7 +143,7 @@ const planner: AgentDefinition = {
 };
 
 test("runAgent finalizes a failed receipt without completion artifacts when the model is unknown", async () => {
-  const root = mkdtempSync(resolve(tmpdir(), "factory-run-agent-"));
+  const root = mkdtempSync(resolve(tmpdir(), "maquila-run-agent-"));
   try {
     const artifacts = createRunArtifacts("issue text", root);
     let completedCalls = 0;
@@ -211,7 +211,7 @@ test("runAgent finalizes a failed receipt without completion artifacts when the 
 });
 
 test("run artifacts use private directory and file modes", () => {
-  const root = mkdtempSync(resolve(tmpdir(), "factory-artifact-modes-"));
+  const root = mkdtempSync(resolve(tmpdir(), "maquila-artifact-modes-"));
   try {
     const artifacts = createRunArtifacts("issue", root);
     artifacts.write("note.txt", "private");
@@ -225,7 +225,7 @@ test("run artifacts use private directory and file modes", () => {
 });
 
 test("runArtifactNameErrors accepts existing basenames and rejects unsafe or missing names", () => {
-  const root = mkdtempSync(resolve(tmpdir(), "factory-artifact-names-"));
+  const root = mkdtempSync(resolve(tmpdir(), "maquila-artifact-names-"));
   try {
     writeFileSync(resolve(root, "plan.md"), "plan");
     assert.deepEqual(runArtifactNameErrors(["plan.md"], root), []);

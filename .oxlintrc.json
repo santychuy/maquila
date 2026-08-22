@@ -8,7 +8,7 @@
   "env": {
     "node": true
   },
-  "ignorePatterns": ["dist/**", "node_modules/**", ".factory/**"],
+  "ignorePatterns": ["dist/**", "node_modules/**", ".maquila/**"],
   "overrides": [
     {
       "files": ["test/**/*.ts"],

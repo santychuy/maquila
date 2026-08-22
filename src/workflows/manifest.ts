@@ -122,8 +122,8 @@ export function parseWorkflowManifest(value: unknown): WorkflowManifest {
   const allowed = value.allowedPaths.map(assertSafeRepoPath);
   if (new Set(allowed).size !== allowed.length)
     throw new Error("workflow manifest contains duplicate paths");
-  if (allowed.includes("factory.verify.json"))
-    throw new Error("planner cannot approve factory.verify.json");
+  if (allowed.includes("maquila.verify.json"))
+    throw new Error("planner cannot approve maquila.verify.json");
   if (JSON.stringify(allowed) !== JSON.stringify(value.allowedPaths))
     throw new Error("invalid workflow manifest paths");
   if (value.definitionSha256 !== featurePrDefinitionSha256())

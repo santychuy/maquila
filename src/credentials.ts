@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { isAbsolute } from "node:path";
 import { promisify } from "node:util";
-import type { FactoryConfig } from "./config.js";
+import type { MaquilaConfig } from "./config.js";
 import { parseTokenReference } from "./config.js";
 import { externalCommandEnvironment } from "./integrations/exe.js";
 
@@ -23,7 +23,7 @@ export type CredentialRunner = (
 export interface ResolveControllerCredentialsOptions {
   env?: NodeJS.ProcessEnv;
   identityFlag?: string;
-  config?: FactoryConfig;
+  config?: MaquilaConfig;
   runGh?: CredentialRunner;
   runOp?: CredentialRunner;
 }
@@ -66,7 +66,7 @@ export async function resolveGithubToken(
 
 export async function resolveLinearToken(
   env: NodeJS.ProcessEnv,
-  config: FactoryConfig | undefined,
+  config: MaquilaConfig | undefined,
   runOp: CredentialRunner = defaultRunner,
 ): Promise<string> {
   const fromEnv = nonBlank(env.LINEAR_API_TOKEN);
@@ -88,7 +88,7 @@ export async function resolveLinearToken(
 
 export async function resolveOpenRouterKey(
   env: NodeJS.ProcessEnv,
-  config: FactoryConfig | undefined,
+  config: MaquilaConfig | undefined,
   runOp: CredentialRunner = defaultRunner,
 ): Promise<string> {
   const fromEnv = nonBlank(env.OPENROUTER_API_KEY);
@@ -118,7 +118,7 @@ export async function resolveControllerCredentials(
     resolveLinearToken(env, options.config, options.runOp),
     resolveOpenRouterKey(env, options.config, options.runOp),
   ]);
-  const identity = identityFrom(options.identityFlag ?? env.FACTORY_EXE_IDENTITY);
+  const identity = identityFrom(options.identityFlag ?? env.MAQUILA_EXE_IDENTITY);
   return {
     linearToken: linear,
     githubToken: github,
@@ -137,7 +137,7 @@ export function controllerChildEnvironment(
     GITHUB_TOKEN: credentials.githubToken,
     OPENROUTER_API_KEY: credentials.openRouterKey,
   };
-  if (credentials.identity) child.FACTORY_EXE_IDENTITY = credentials.identity;
+  if (credentials.identity) child.MAQUILA_EXE_IDENTITY = credentials.identity;
   const sock = env.SSH_AUTH_SOCK;
   if (sock !== undefined) {
     if (sock.includes("\0") || !sock.trim()) throw new Error("SSH_AUTH_SOCK is invalid");

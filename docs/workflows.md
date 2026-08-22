@@ -1,6 +1,6 @@
 # Code-controlled workflows
 
-Factory turns one accepted plan into a fixed, reviewable work order. Workflow behavior lives in TypeScript. Agents carry out bounded steps; they do not choose the recipe or accept their own work.
+Maquila turns one accepted plan into a fixed, reviewable work order. Workflow behavior lives in TypeScript. Agents carry out bounded steps; they do not choose the recipe or accept their own work.
 
 ## Mental model
 
@@ -20,7 +20,7 @@ Only one recipe exists. `plan` runs first. Accepted plan produces manifest. Seri
 1. **plan** — read-only planner proposes allowed paths and checks. Unresolved decisions pause same run.
 2. **implement** — worker changes approved non-`docs/` paths. For a docs-only plan, code records trusted `docs-only` skip instead.
 3. **document** — documenter changes approved `docs/` paths. It cannot alter worker-owned content.
-4. **verify** — code runs `factory.verify.json` commands and exact Git diff gate over aggregate change.
+4. **verify** — code runs `maquila.verify.json` commands and exact Git diff gate over aggregate change.
 5. **review** — fresh read-only reviewer receives accepted plan, staged patch, and deterministic verification result.
 6. **publish** — controller verifies harvested evidence and patch binding, destroys VM, applies patch against pinned base in temporary clone, then creates bot commit, branch, and ready-for-review PR.
 
@@ -47,7 +47,7 @@ Change concern in owner above. Keep IDs aligned through `workflowStep()` instead
 
 ## Artifacts and bindings
 
-Controller run lives at `.factory/controllers/<run-id>/`. Agent run evidence remains under `.factory/runs/<role-run-id>/`; host telemetry lives at `.factory/telemetry/<run-id>.jsonl`.
+Controller run lives at `.maquila/controllers/<run-id>/`. Agent run evidence remains under `.maquila/runs/<role-run-id>/`; host telemetry lives at `.maquila/telemetry/<run-id>.jsonl`.
 
 | Artifact                  |          Version | Binding                                                                                                                        |
 | ------------------------- | ---------------: | ------------------------------------------------------------------------------------------------------------------------------ |
@@ -71,7 +71,7 @@ Telemetry copies safe activity into append-only host JSONL. `run status` folds l
 
 ## Local compatibility path
 
-`factory pi worker` accepts controller-supplied manifest. If omitted, `runWorkerLifecycle()` derives equivalent `feature-pr` manifest from local planner envelope and uses planner ID `local`. This is development and compatibility behavior. During `factory run`, controller-generated host `workflow-manifest.json` is canonical and is copied into VM.
+`maquila pi worker` accepts controller-supplied manifest. If omitted, `runWorkerLifecycle()` derives equivalent `feature-pr` manifest from local planner envelope and uses planner ID `local`. This is development and compatibility behavior. During `maquila run`, controller-generated host `workflow-manifest.json` is canonical and is copied into VM.
 
 ## Modify `feature-pr` safely
 

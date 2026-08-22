@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 
 const BUNFS = "/$bunfs/";
 
-export function factoryRoot(moduleDir: string): string {
+export function maquilaRoot(moduleDir: string): string {
   if (process.argv[1]?.startsWith(BUNFS)) return resolve(dirname(process.execPath), "..");
   const sourceRoot = resolve(moduleDir, "..");
   return existsSync(resolve(sourceRoot, "package.json")) ? sourceRoot : resolve(moduleDir, "../..");

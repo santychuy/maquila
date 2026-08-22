@@ -277,7 +277,7 @@ export const TelemetryRecordSchema = Type.Union([
           maxLength: 500,
         }),
         branch: Type.String({
-          pattern: "^factory/[a-z0-9][a-z0-9-]*-[0-9a-f]{12}$",
+          pattern: "^maquila/[a-z0-9][a-z0-9-]*-[0-9a-f]{12}$",
           maxLength: 255,
         }),
         commitSha: Type.String({ pattern: COMMIT_SHA }),
@@ -437,7 +437,7 @@ export function parseTelemetryRecord(value: unknown): TelemetryRecord {
 
 export function telemetryPath(root: string, runId: string): string {
   if (!new RegExp(RUN_ID).test(runId)) throw new Error("invalid telemetry runId");
-  return resolve(root, ".factory", "telemetry", `${runId}.jsonl`);
+  return resolve(root, ".maquila", "telemetry", `${runId}.jsonl`);
 }
 
 export function readTelemetry(path: string): TelemetryRecord[] {

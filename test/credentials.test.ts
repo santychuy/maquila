@@ -115,7 +115,7 @@ test("identity is optional and must be absolute when set", async () => {
       GITHUB_TOKEN: "g",
       LINEAR_API_TOKEN: "l",
       OPENROUTER_API_KEY: "o",
-      FACTORY_EXE_IDENTITY: "/tmp/key",
+      MAQUILA_EXE_IDENTITY: "/tmp/key",
     },
   });
   assert.equal(result.identity, "/tmp/key");
@@ -169,7 +169,7 @@ test("child environment keeps agent socket and drops unrelated secrets", () => {
   assert.equal(env.LINEAR_API_TOKEN, "l");
   assert.equal(env.GITHUB_TOKEN, "g");
   assert.equal(env.OPENROUTER_API_KEY, "o");
-  assert.equal(env.FACTORY_EXE_IDENTITY, undefined);
+  assert.equal(env.MAQUILA_EXE_IDENTITY, undefined);
   assert.equal(env.GH_TOKEN, undefined);
   assert.equal(env.UNRELATED_SECRET, undefined);
 });

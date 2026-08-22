@@ -4,10 +4,10 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import {
-  factoryConfigPath,
-  loadFactoryConfig,
+  maquilaConfigPath,
+  loadMaquilaConfig,
   parseTokenReference,
-  writeFactoryConfig,
+  writeMaquilaConfig,
 } from "./config.js";
 import { externalCommandEnvironment } from "./integrations/exe.js";
 import { execFile } from "node:child_process";
@@ -28,7 +28,7 @@ export interface SetupOptions {
   installSkill?: boolean;
   stdinIsTTY?: boolean;
   env?: NodeJS.ProcessEnv;
-  factoryRoot: string;
+  maquilaRoot: string;
   homedir?: typeof defaultHomedir;
   runGh?: SetupRunner;
   runOp?: SetupRunner;
@@ -64,16 +64,16 @@ function openSshConfigured(home: string): boolean {
 }
 
 function skillDestination(home: string): string {
-  return resolve(home, ".pi", "agent", "skills", "software-factory");
+  return resolve(home, ".pi", "agent", "skills", "maquila");
 }
 
-export function installFactorySkill(factoryRoot: string, destination: string): boolean {
-  const source = resolve(factoryRoot, ".pi", "skills", "software-factory");
+export function installMaquilaSkill(maquilaRoot: string, destination: string): boolean {
+  const source = resolve(maquilaRoot, ".pi", "skills", "maquila");
   mkdirSync(resolve(destination, ".."), { recursive: true, mode: 0o700 });
   if (existsSync(destination) || lstatExists(destination)) {
     const current = readlinkSync(destination);
     if (resolve(current) === source) return false;
-    throw new Error("factory skill destination already exists");
+    throw new Error("maquila skill destination already exists");
   }
   symlinkSync(source, destination);
   return true;
@@ -108,7 +108,7 @@ export async function runSetup(options: SetupOptions): Promise<SetupResult> {
   const op = await runOp("op", ["--version"], commandEnv);
   const sock = Boolean(env.SSH_AUTH_SOCK?.trim()) && !env.SSH_AUTH_SOCK?.includes("\0");
   const sshAvailable = sock || openSshConfigured(home);
-  let config = loadFactoryConfig({ env, homedir: options.homedir });
+  let config = loadMaquilaConfig({ env, homedir: options.homedir });
   let linearReference = options.linearTokenReference?.trim();
   let openRouterReference = options.openRouterTokenReference?.trim();
   if (!linearReference && !openRouterReference && (options.stdinIsTTY ?? input.isTTY ?? false)) {
@@ -127,21 +127,21 @@ export async function runSetup(options: SetupOptions): Promise<SetupResult> {
         ? { openrouter: { tokenReference: parseTokenReference(openRouterReference, "OpenRouter") } }
         : {}),
     };
-    writeFactoryConfig(config, { env, homedir: options.homedir ?? defaultHomedir });
-  } else if (!existsSync(factoryConfigPath(env, options.homedir ?? defaultHomedir))) {
-    writeFactoryConfig({ version: 1 }, { env, homedir: options.homedir ?? defaultHomedir });
+    writeMaquilaConfig(config, { env, homedir: options.homedir ?? defaultHomedir });
+  } else if (!existsSync(maquilaConfigPath(env, options.homedir ?? defaultHomedir))) {
+    writeMaquilaConfig({ version: 1 }, { env, homedir: options.homedir ?? defaultHomedir });
   }
-  const configPath = factoryConfigPath(env, options.homedir ?? defaultHomedir);
+  const configPath = maquilaConfigPath(env, options.homedir ?? defaultHomedir);
   const skillPath = skillDestination(home);
   let skillInstalled = false;
   if (options.installSkill) {
-    installFactorySkill(options.factoryRoot, skillPath);
+    installMaquilaSkill(options.maquilaRoot, skillPath);
     skillInstalled = true;
   } else if (lstatExists(skillPath)) {
     try {
       skillInstalled =
         resolve(readlinkSync(skillPath)) ===
-        resolve(options.factoryRoot, ".pi", "skills", "software-factory");
+        resolve(options.maquilaRoot, ".pi", "skills", "maquila");
     } catch {
       skillInstalled = false;
     }
@@ -156,27 +156,27 @@ export async function runSetup(options: SetupOptions): Promise<SetupResult> {
       : {
           configured: false,
           remediation:
-            "export LINEAR_API_TOKEN or factory setup --linear-token-reference op://Vault/Item/field",
+            "export LINEAR_API_TOKEN or maquila setup --linear-token-reference op://Vault/Item/field",
         },
     openrouter: config.openrouter
       ? { configured: true }
       : {
           configured: false,
           remediation:
-            "export OPENROUTER_API_KEY or factory setup --openrouter-token-reference op://Vault/Item/field",
+            "export OPENROUTER_API_KEY or maquila setup --openrouter-token-reference op://Vault/Item/field",
         },
     ssh: sshAvailable
       ? { available: true }
       : {
           available: false,
-          remediation: "configure ~/.ssh/config, start ssh-agent, or set FACTORY_EXE_IDENTITY",
+          remediation: "configure ~/.ssh/config, start ssh-agent, or set MAQUILA_EXE_IDENTITY",
         },
     skill: skillInstalled
       ? { installed: true, path: skillPath }
       : {
           installed: false,
           path: skillPath,
-          remediation: "factory setup --install-skill",
+          remediation: "maquila setup --install-skill",
         },
   };
   if (options.json) write(`${JSON.stringify(result)}\n`);

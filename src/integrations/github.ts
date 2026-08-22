@@ -254,18 +254,18 @@ export async function publishGitHubPullRequest(
     throw new Error("invalid GitHub publication input");
   }
 
-  const branch = `factory/${issueIdentifier.toLowerCase()}-${idempotencyKey.slice(0, 12)}`;
-  const directory = mkdtempSync(join(tmpdir(), "factory-publish-"));
+  const branch = `maquila/${issueIdentifier.toLowerCase()}-${idempotencyKey.slice(0, 12)}`;
+  const directory = mkdtempSync(join(tmpdir(), "maquila-publish-"));
   chmodSync(directory, 0o700);
   const askpass = join(directory, "askpass.sh");
   writeFileSync(
     askpass,
-    '#!/bin/sh\ncase "$1" in\n  *Username*) printf "%s\\n" x-access-token ;;\n  *) printf "%s\\n" "$FACTORY_GITHUB_TOKEN" ;;\nesac\n',
+    '#!/bin/sh\ncase "$1" in\n  *Username*) printf "%s\\n" x-access-token ;;\n  *) printf "%s\\n" "$MAQUILA_GITHUB_TOKEN" ;;\nesac\n',
     { mode: 0o700 },
   );
   const env = {
     ...externalCommandEnvironment(),
-    FACTORY_GITHUB_TOKEN: token,
+    MAQUILA_GITHUB_TOKEN: token,
     GIT_ASKPASS: askpass,
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
@@ -291,11 +291,11 @@ export async function publishGitHubPullRequest(
     const commitEnv = {
       ...env,
       GIT_AUTHOR_DATE: commitDate,
-      GIT_AUTHOR_EMAIL: "software-factory@users.noreply.github.com",
-      GIT_AUTHOR_NAME: "Software Factory",
+      GIT_AUTHOR_EMAIL: "maquila@users.noreply.github.com",
+      GIT_AUTHOR_NAME: "Maquila",
       GIT_COMMITTER_DATE: commitDate,
-      GIT_COMMITTER_EMAIL: "software-factory@users.noreply.github.com",
-      GIT_COMMITTER_NAME: "Software Factory",
+      GIT_COMMITTER_EMAIL: "maquila@users.noreply.github.com",
+      GIT_COMMITTER_NAME: "Maquila",
     };
     await runner(
       [
@@ -367,7 +367,7 @@ export async function publishGitHubPullRequest(
           body: [
             `Automated proposal for [${issueIdentifier}](${issueUrl}).`,
             "",
-            `Factory run: \`${runId}\``,
+            `Maquila run: \`${runId}\``,
             `Pinned base: \`${baseSha}\``,
             `Reviewed patch SHA-256: \`${patchSha256}\``,
             "",

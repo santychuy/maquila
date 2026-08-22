@@ -6,12 +6,12 @@ import { test } from "node:test";
 import { acquireControllerLock, type ControllerLockRuntime } from "../src/controller-lock.js";
 
 test("controller lock blocks live owner and replaces dead owner", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-lock-"));
+  const root = mkdtempSync(join(tmpdir(), "maquila-lock-"));
   try {
     const lock = acquireControllerLock(root);
     assert.throws(() => acquireControllerLock(root), /lock is held/);
     lock.release();
-    const path = join(root, ".factory", "controller.lock");
+    const path = join(root, ".maquila", "controller.lock");
     writeFileSync(
       path,
       JSON.stringify({ token: "old", pid: 999_999, startedAt: new Date().toISOString() }),
@@ -23,9 +23,9 @@ test("controller lock blocks live owner and replaces dead owner", () => {
 });
 
 test("stale reclamation guard prevents a contender deleting the replacement owner", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-lock-"));
-  const path = join(root, ".factory", "controller.lock");
-  mkdirSync(join(root, ".factory"), { recursive: true });
+  const root = mkdtempSync(join(tmpdir(), "maquila-lock-"));
+  const path = join(root, ".maquila", "controller.lock");
+  mkdirSync(join(root, ".maquila"), { recursive: true });
   writeFileSync(
     path,
     JSON.stringify({ token: "stale", pid: 99, startedAt: new Date().toISOString() }),
@@ -59,8 +59,8 @@ test("stale reclamation guard prevents a contender deleting the replacement owne
 });
 
 test("controller lock reclaims dead acquisition guard but rejects live guard", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-lock-"));
-  const guard = join(root, ".factory", "controller.lock.acquire");
+  const root = mkdtempSync(join(tmpdir(), "maquila-lock-"));
+  const guard = join(root, ".maquila", "controller.lock.acquire");
   try {
     mkdirSync(guard, { recursive: true });
     writeFileSync(
@@ -107,8 +107,8 @@ test("controller lock reclaims dead acquisition guard but rejects live guard", (
 });
 
 test("controller lock reclaims an old ownerless acquisition guard", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-lock-"));
-  const guard = join(root, ".factory", "controller.lock.acquire");
+  const root = mkdtempSync(join(tmpdir(), "maquila-lock-"));
+  const guard = join(root, ".maquila", "controller.lock.acquire");
   try {
     mkdirSync(guard, { recursive: true });
     const lock = acquireControllerLock(root, {
@@ -124,7 +124,7 @@ test("controller lock reclaims an old ownerless acquisition guard", () => {
 });
 
 test("reclaimed ownerless guard cannot resume into the critical section", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-lock-"));
+  const root = mkdtempSync(join(tmpdir(), "maquila-lock-"));
   let contender: { release(): void } | undefined;
   try {
     assert.throws(
@@ -161,9 +161,9 @@ test("reclaimed ownerless guard cannot resume into the critical section", () => 
 });
 
 test("controller lock rejects invalid owners and replaces a reused PID", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-lock-"));
-  const path = join(root, ".factory", "controller.lock");
-  mkdirSync(join(root, ".factory"), { recursive: true });
+  const root = mkdtempSync(join(tmpdir(), "maquila-lock-"));
+  const path = join(root, ".maquila", "controller.lock");
+  mkdirSync(join(root, ".maquila"), { recursive: true });
   const runtime: ControllerLockRuntime = {
     pid: 42,
     live: () => true,

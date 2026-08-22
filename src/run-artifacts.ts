@@ -13,7 +13,7 @@ export interface RunArtifacts {
 
 export function createRunArtifacts(issue: string, root = process.cwd()): RunArtifacts {
   const runId = randomUUID();
-  const runDir = resolve(root, ".factory", "runs", runId);
+  const runDir = resolve(root, ".maquila", "runs", runId);
   const sessionsDir = resolve(runDir, "sessions");
   mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
   writeFileSync(resolve(runDir, "issue.md"), issue, { mode: 0o600 });

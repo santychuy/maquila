@@ -244,7 +244,7 @@ const plannerAgent: AgentDefinition = {
 };
 
 test("envelope mode fails before the model without correction and receipt advertises submit_envelope", async () => {
-  const root = mkdtempSync(resolve(tmpdir(), "factory-envelope-"));
+  const root = mkdtempSync(resolve(tmpdir(), "maquila-envelope-"));
   try {
     const artifacts = createRunArtifacts("issue text", root);
     let completedCalls = 0;

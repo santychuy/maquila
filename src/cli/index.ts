@@ -9,13 +9,13 @@ import { runWorkerLifecycle } from "../workflows/worker.js";
 import { runControllerChain } from "../controller-chain.js";
 import { readPersistedDecisionRequest } from "../controller.js";
 import { createRemoteProtocolWriter } from "../remote-protocol.js";
-import { loadFactoryConfig } from "../config.js";
+import { loadMaquilaConfig } from "../config.js";
 import { resolveControllerCredentials } from "../credentials.js";
 import { runDoctor } from "../doctor.js";
 import { runSetup } from "../setup.js";
 import { LAUNCH_INSTANCE_ENV, startDetachedRun, writeLaunchHandshake } from "../run-launcher.js";
 import { foldRunStatus, type RunStatusSummary } from "../run-status.js";
-import { factoryRoot, isMain } from "../runtime.js";
+import { maquilaRoot, isMain } from "../runtime.js";
 import { validateResolvedTarget } from "../target.js";
 import { ensureObserver, observerStatus, serveObserver, stopObserver } from "../observer.js";
 import { parseCli } from "./parse.js";
@@ -41,7 +41,7 @@ async function writeHumanStart(root: string, runId: string): Promise<void> {
   process.stdout.write(`Run: ${runId}\nStatus: running\n`);
   const observer = await observerStatus(root);
   if (observer) process.stdout.write(`Observer: ${observer.url}/runs/${runId}\n`);
-  else process.stdout.write("Start dashboard with: factory dashboard\n");
+  else process.stdout.write("Start dashboard with: maquila dashboard\n");
 }
 
 function writeHumanStatus(status: RunStatusSummary): void {
@@ -73,13 +73,13 @@ function takeControllerEnvironment(): {
   const linearToken = process.env.LINEAR_API_TOKEN;
   const githubToken = process.env.GITHUB_TOKEN;
   const openRouterKey = process.env.OPENROUTER_API_KEY;
-  const identity = process.env.FACTORY_EXE_IDENTITY;
+  const identity = process.env.MAQUILA_EXE_IDENTITY;
   const instanceId = process.env[LAUNCH_INSTANCE_ENV];
   delete process.env.LINEAR_API_TOKEN;
   delete process.env.GITHUB_TOKEN;
   delete process.env.GH_TOKEN;
   delete process.env.OPENROUTER_API_KEY;
-  delete process.env.FACTORY_EXE_IDENTITY;
+  delete process.env.MAQUILA_EXE_IDENTITY;
   delete process.env[LAUNCH_INSTANCE_ENV];
   return { linearToken, githubToken, openRouterKey, identity, instanceId };
 }
@@ -104,7 +104,7 @@ function publicJsonError(message: string): string {
     /^GitHub CLI auth is unavailable$/,
     /^1Password reference could not be read$/,
     /^invalid Linear token reference$/,
-    /^invalid factory config$/,
+    /^invalid maquila config$/,
     /^SSH_AUTH_SOCK is invalid$/,
     /^exe\.dev identity must be an absolute path$/,
     /^controller child (?:could not start|rejected startup)$/,
@@ -112,7 +112,7 @@ function publicJsonError(message: string): string {
     /^observer /,
     /^--port must/,
   ];
-  return safe.some((pattern) => pattern.test(message)) ? message : "factory command failed";
+  return safe.some((pattern) => pattern.test(message)) ? message : "maquila command failed";
 }
 
 export async function main(args = process.argv.slice(2)): Promise<number> {
@@ -130,7 +130,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       return 0;
     }
 
-    const root = factoryRoot(import.meta.dirname);
+    const root = maquilaRoot(import.meta.dirname);
 
     if ("command" in options) {
       if (options.command === "setup") {
@@ -139,7 +139,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
           linearTokenReference: options.linearTokenReference,
           openRouterTokenReference: options.openRouterTokenReference,
           installSkill: options.installSkill,
-          factoryRoot: root,
+          maquilaRoot: root,
         });
         if (options.json) return result.ok ? 0 : 1;
         return 0;
@@ -148,13 +148,13 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         const result = await runDoctor({
           json: options.json,
           target: options.target,
-          factoryRoot: root,
+          maquilaRoot: root,
         });
         return result.ok ? 0 : 1;
       }
       if (options.command === "observer-serve") {
-        const instanceId = process.env.FACTORY_OBSERVER_INSTANCE_ID ?? randomUUID();
-        delete process.env.FACTORY_OBSERVER_INSTANCE_ID;
+        const instanceId = process.env.MAQUILA_OBSERVER_INSTANCE_ID ?? randomUUID();
+        delete process.env.MAQUILA_OBSERVER_INSTANCE_ID;
         await serveObserver({ root, port: options.port, instanceId });
         return 0;
       }
@@ -186,18 +186,18 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         const credentials = await resolveControllerCredentials({
           env: launchEnv,
           identityFlag: options.identity,
-          config: loadFactoryConfig({ env: launchEnv }),
+          config: loadMaquilaConfig({ env: launchEnv }),
         });
         const result = await startDetachedRun({
           ...options,
-          factoryRoot: root,
+          maquilaRoot: root,
           cliPath: process.argv[1],
           env: {
             ...launchEnv,
             LINEAR_API_TOKEN: credentials.linearToken,
             GITHUB_TOKEN: credentials.githubToken,
             OPENROUTER_API_KEY: credentials.openRouterKey,
-            ...(credentials.identity ? { FACTORY_EXE_IDENTITY: credentials.identity } : {}),
+            ...(credentials.identity ? { MAQUILA_EXE_IDENTITY: credentials.identity } : {}),
           },
           ...(credentials.identity ? { identity: credentials.identity } : { identity: undefined }),
         });
@@ -205,7 +205,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         delete process.env.GITHUB_TOKEN;
         delete process.env.GH_TOKEN;
         delete process.env.OPENROUTER_API_KEY;
-        delete process.env.FACTORY_EXE_IDENTITY;
+        delete process.env.MAQUILA_EXE_IDENTITY;
         if (options.json) json(result);
         else await writeHumanStart(root, result.runId);
         return 0;
@@ -214,15 +214,15 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         const credentials = await resolveControllerCredentials({
           env: process.env,
           identityFlag: options.identity,
-          config: loadFactoryConfig({ env: process.env }),
+          config: loadMaquilaConfig({ env: process.env }),
         });
-        const runDir = resolve(root, ".factory", "controllers", options.runId);
+        const runDir = resolve(root, ".maquila", "controllers", options.runId);
         const persisted = readPersistedDecisionRequest(runDir);
         const result = await runControllerChain({
           ...persisted.request,
           runId: options.runId,
           root,
-          factoryRoot: root,
+          maquilaRoot: root,
           linearToken: credentials.linearToken,
           githubToken: credentials.githubToken,
           openRouterKey: credentials.openRouterKey,
@@ -238,7 +238,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
           root,
           runId: options.runId,
           controllerExists: (runId) =>
-            existsSync(resolve(root, ".factory", "controllers", runId, "controller-state.json")),
+            existsSync(resolve(root, ".maquila", "controllers", runId, "controller-state.json")),
         });
         if (options.json) json(status);
         else writeHumanStatus(status);
@@ -266,7 +266,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         githubToken,
         openRouterKey,
         root,
-        factoryRoot: root,
+        maquilaRoot: root,
         runId: options.runId,
         onAccepted: () => writeLaunchHandshake(root, options.runId, instanceId),
         ...(identity ? { identity } : {}),
@@ -279,7 +279,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       const credentials = await resolveControllerCredentials({
         env: launchEnv,
         identityFlag: options.identity,
-        config: loadFactoryConfig({ env: launchEnv }),
+        config: loadMaquilaConfig({ env: launchEnv }),
       });
       const result = await runControllerChain({
         ...options,

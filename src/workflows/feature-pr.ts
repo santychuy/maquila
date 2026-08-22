@@ -24,8 +24,8 @@ export function isDocumentationPath(path: string): boolean {
 export function authorizedFeaturePrPaths(plan: PlannerEnvelope): string[] {
   const paths = plan.changes.map((change) => assertSafeRepoPath(change.path));
   if (new Set(paths).size !== paths.length) throw new Error("planner contains duplicate paths");
-  if (paths.includes("factory.verify.json")) {
-    throw new Error("planner cannot approve factory.verify.json");
+  if (paths.includes("maquila.verify.json")) {
+    throw new Error("planner cannot approve maquila.verify.json");
   }
   return paths;
 }

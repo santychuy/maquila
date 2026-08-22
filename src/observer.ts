@@ -19,7 +19,7 @@ import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { externalCommandEnvironment } from "./integrations/exe.js";
 import { linuxProcessIdentity } from "./controller-lock.js";
 import { foldRunStatus, type RunStatusSummary } from "./run-status.js";
-import { cliInvocation, factoryRoot } from "./runtime.js";
+import { cliInvocation, maquilaRoot } from "./runtime.js";
 import { readTelemetry, telemetryPath, type TelemetryRecord } from "./telemetry.js";
 import { OBSERVER_CSS, OBSERVER_HTML, OBSERVER_JS } from "./observer-ui.js";
 
@@ -86,10 +86,10 @@ function live(pid: number): boolean {
   }
 }
 export function observerDescriptorPath(root: string): string {
-  return resolve(root, ".factory", "observer.json");
+  return resolve(root, ".maquila", "observer.json");
 }
 function observerDir(root: string): string {
-  return resolve(root, ".factory", "observer");
+  return resolve(root, ".maquila", "observer");
 }
 function ensurePrivateDirectory(path: string): void {
   mkdirSync(path, { recursive: true, mode: 0o700 });
@@ -131,8 +131,8 @@ export function readObserverDescriptor(root: string): ObserverDescriptor | undef
   return undefined;
 }
 function writeObserverDescriptor(root: string, descriptor: ObserverDescriptor): void {
-  const factory = resolve(root, ".factory");
-  ensurePrivateDirectory(factory);
+  const maquila = resolve(root, ".maquila");
+  ensurePrivateDirectory(maquila);
   const target = observerDescriptorPath(root);
   const temporary = `${target}.${process.pid}.${descriptor.instanceId}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(descriptor)}\n`, { mode: 0o600, flag: "wx" });
@@ -188,7 +188,7 @@ function queryInteger(
   return value;
 }
 function listRunIds(root: string): string[] {
-  const dir = resolve(root, ".factory", "telemetry");
+  const dir = resolve(root, ".maquila", "telemetry");
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter((name) => name.endsWith(".jsonl") && UUID.test(name.slice(0, -6)))
@@ -199,7 +199,7 @@ function summary(root: string, runId: string): RunStatusSummary {
     root,
     runId,
     controllerExists: (id) =>
-      existsSync(resolve(root, ".factory", "controllers", id, "controller-state.json")),
+      existsSync(resolve(root, ".maquila", "controllers", id, "controller-state.json")),
   });
 }
 function events(root: string, runId: string, after: number, limit: number): TelemetryRecord[] {
@@ -209,19 +209,19 @@ function events(root: string, runId: string, after: number, limit: number): Tele
 }
 export function archivedSystemPrompt(root: string, runId: string, actor: string): string {
   if (!UUID.test(runId) || !MODEL_ACTORS.has(actor)) throw new Error("invalid prompt request");
-  const runtimePath = resolve(root, ".factory", "controllers", runId, "runtime.json");
+  const runtimePath = resolve(root, ".maquila", "controllers", runId, "runtime.json");
   const runtime: unknown = JSON.parse(readFileSync(runtimePath, "utf8"));
   if (
     !record(runtime) ||
-    Object.keys(runtime).some((key) => !["factorySha", "sha256"].includes(key)) ||
-    typeof runtime.factorySha !== "string" ||
-    !/^[0-9a-f]{40}$/.test(runtime.factorySha) ||
+    Object.keys(runtime).some((key) => !["maquilaSha", "sha256"].includes(key)) ||
+    typeof runtime.maquilaSha !== "string" ||
+    !/^[0-9a-f]{40}$/.test(runtime.maquilaSha) ||
     typeof runtime.sha256 !== "string" ||
     !/^[0-9a-f]{64}$/.test(runtime.sha256)
   )
     throw new Error("invalid runtime data");
-  const source = execFileSync("git", ["show", `${runtime.factorySha}:src/agents/${actor}.md`], {
-    cwd: factoryRoot(import.meta.dirname),
+  const source = execFileSync("git", ["show", `${runtime.maquilaSha}:src/agents/${actor}.md`], {
+    cwd: maquilaRoot(import.meta.dirname),
     encoding: "utf8",
     maxBuffer: MAX_PROMPT_BYTES,
   });
@@ -489,7 +489,7 @@ export async function ensureObserver(options: EnsureObserverOptions): Promise<Ob
     stdio: ["ignore", stdout, stderr],
     env: {
       ...externalCommandEnvironment(options.env ?? process.env),
-      FACTORY_OBSERVER_INSTANCE_ID: instanceId,
+      MAQUILA_OBSERVER_INSTANCE_ID: instanceId,
     },
   });
   closeSync(stdout);

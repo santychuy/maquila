@@ -9,7 +9,7 @@ export function rejectOptions(values: Record<string, unknown>, allowed: string[]
 }
 
 export function parseObserverPort(value: string | undefined): number {
-  const port = Number(value ?? process.env.FACTORY_OBSERVER_PORT ?? DEFAULT_OBSERVER_PORT);
+  const port = Number(value ?? process.env.MAQUILA_OBSERVER_PORT ?? DEFAULT_OBSERVER_PORT);
   if (!Number.isInteger(port) || port < 1 || port > 65_535)
     throw new Error("--port must be an integer from 1 to 65535");
   return port;

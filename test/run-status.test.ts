@@ -9,7 +9,7 @@ import { createTelemetryWriter, telemetryPath } from "../src/telemetry.js";
 const runId = "11111111-1111-4111-8111-111111111111";
 
 function temporary(): string {
-  return mkdtempSync(resolve(tmpdir(), "factory-status-"));
+  return mkdtempSync(resolve(tmpdir(), "maquila-status-"));
 }
 
 const agentContext = {
@@ -138,7 +138,7 @@ test("status folds safe live activity and terminal evidence", () => {
       payload: {
         number: 42,
         url: "https://github.com/santychuy/bookbounce/pull/42",
-        branch: "factory/riff-40-aaaaaaaaaaaa",
+        branch: "maquila/riff-40-aaaaaaaaaaaa",
         commitSha: "b".repeat(40),
       },
     });
@@ -233,7 +233,7 @@ test("status retains review through cleanup, publication, and completion", () =>
       payload: {
         number: 42,
         url: "https://github.com/santychuy/bookbounce/pull/42",
-        branch: "factory/riff-40-aaaaaaaaaaaa",
+        branch: "maquila/riff-40-aaaaaaaaaaaa",
         commitSha: "b".repeat(40),
       },
     });

@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { listAgents } from "./agents/index.js";
-import { loadFactoryConfig, type FactoryConfig } from "./config.js";
+import { loadMaquilaConfig, type MaquilaConfig } from "./config.js";
 import {
   resolveGithubToken,
   resolveLinearToken,
@@ -30,22 +30,22 @@ export interface DoctorOptions {
   json?: boolean;
   target?: string;
   env?: NodeJS.ProcessEnv;
-  factoryRoot: string;
+  maquilaRoot: string;
   homedir?: typeof defaultHomedir;
   resolveTarget?: typeof resolveTargetRepository;
   resolveGithub?: (env: NodeJS.ProcessEnv, runner?: CredentialRunner) => Promise<string>;
   resolveLinear?: (
     env: NodeJS.ProcessEnv,
-    config: FactoryConfig | undefined,
+    config: MaquilaConfig | undefined,
     runner?: CredentialRunner,
   ) => Promise<string>;
   resolveOpenRouter?: (
     env: NodeJS.ProcessEnv,
-    config: FactoryConfig | undefined,
+    config: MaquilaConfig | undefined,
     runner?: CredentialRunner,
   ) => Promise<string>;
   resolveModelIds?: () => Promise<Set<string>>;
-  loadConfig?: typeof loadFactoryConfig;
+  loadConfig?: typeof loadMaquilaConfig;
   write?: (text: string) => void;
 }
 
@@ -84,7 +84,7 @@ async function resolveOpenRouterModelIds(): Promise<Set<string>> {
 }
 
 function sshReady(env: NodeJS.ProcessEnv, home: string): boolean {
-  const identity = env.FACTORY_EXE_IDENTITY?.trim();
+  const identity = env.MAQUILA_EXE_IDENTITY?.trim();
   if (identity) return isAbsolute(identity) && !identity.includes("\0") && existsSync(identity);
   const sock = env.SSH_AUTH_SOCK;
   if (sock && sock.trim() && !sock.includes("\0")) return true;
@@ -98,19 +98,19 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
   const env = options.env ?? process.env;
   const targetPath = options.target ?? process.cwd();
   const write = options.write ?? ((text) => process.stdout.write(text));
-  const loadConfig = options.loadConfig ?? loadFactoryConfig;
+  const loadConfig = options.loadConfig ?? loadMaquilaConfig;
   const resolveTarget = options.resolveTarget ?? resolveTargetRepository;
   const resolveGithub = options.resolveGithub ?? resolveGithubToken;
   const resolveLinear = options.resolveLinear ?? resolveLinearToken;
   const resolveOpenRouter = options.resolveOpenRouter ?? resolveOpenRouterKey;
   const checks: DoctorCheck[] = [];
-  let config: FactoryConfig | undefined;
+  let config: MaquilaConfig | undefined;
   try {
     config = loadConfig({ env, homedir: options.homedir });
-    checks.push(check("config", true, "factory config valid", "invalid factory config"));
+    checks.push(check("config", true, "maquila config valid", "invalid maquila config"));
   } catch {
     checks.push(
-      check("config", false, "", "invalid factory config", "fix ~/.config/factory/config.json"),
+      check("config", false, "", "invalid maquila config", "fix ~/.config/maquila/config.json"),
     );
   }
   try {
@@ -155,7 +155,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
         linear.status === "fulfilled",
         "Linear credential resolvable",
         "Linear credential unavailable",
-        "export LINEAR_API_TOKEN or factory setup --linear-token-reference op://Vault/Item/field",
+        "export LINEAR_API_TOKEN or maquila setup --linear-token-reference op://Vault/Item/field",
       ),
     );
     checks.push(
@@ -164,15 +164,15 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
         openrouter.status === "fulfilled",
         "OpenRouter credential resolvable",
         "OpenRouter credential unavailable",
-        "export OPENROUTER_API_KEY or factory setup --openrouter-token-reference op://Vault/Item/field",
+        "export OPENROUTER_API_KEY or maquila setup --openrouter-token-reference op://Vault/Item/field",
       ),
     );
   } else {
     checks.push(
-      check("github", false, "", "GitHub credential not checked", "fix factory config first"),
+      check("github", false, "", "GitHub credential not checked", "fix maquila config first"),
     );
     checks.push(
-      check("linear", false, "", "Linear credential not checked", "fix factory config first"),
+      check("linear", false, "", "Linear credential not checked", "fix maquila config first"),
     );
     checks.push(
       check(
@@ -180,7 +180,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
         false,
         "",
         "OpenRouter credential not checked",
-        "fix factory config first",
+        "fix maquila config first",
       ),
     );
   }
@@ -217,27 +217,27 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
       sshReady(env, home),
       "exe.dev SSH identity, agent, or user config available",
       "no exe.dev identity, SSH agent, or OpenSSH user config",
-      "start ssh-agent or set FACTORY_EXE_IDENTITY",
+      "start ssh-agent or set MAQUILA_EXE_IDENTITY",
     ),
   );
-  const cli = resolve(options.factoryRoot, "dist/factory");
+  const cli = resolve(options.maquilaRoot, "dist/maquila");
   checks.push(
     check(
       "cli",
       existsSync(cli),
-      "factory CLI build present",
-      "dist/factory missing",
+      "maquila CLI build present",
+      "dist/maquila missing",
       "bun run build",
     ),
   );
-  const skill = resolve(home, ".pi", "agent", "skills", "software-factory");
+  const skill = resolve(home, ".pi", "agent", "skills", "maquila");
   checks.push(
     check(
       "skill",
       existsSync(skill),
-      "user-scope factory skill installed",
-      "user-scope factory skill not installed",
-      "factory setup --install-skill",
+      "user-scope maquila skill installed",
+      "user-scope maquila skill not installed",
+      "maquila setup --install-skill",
       true,
     ),
   );

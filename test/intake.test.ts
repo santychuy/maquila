@@ -201,7 +201,7 @@ test("Linear decision comments mention assignee and accept latest assigned Decis
       questionCount: 1,
       requestedAt: "2026-01-01T00:00:00.000Z",
       marker:
-        "<!-- factory-decision:11111111-1111-4111-8111-111111111111:1:c3cdd28ea02541b1c26e6af63ee415b252d2ccc32361e83d4df0bcc1e91b0f21 -->",
+        "<!-- maquila-decision:11111111-1111-4111-8111-111111111111:1:c3cdd28ea02541b1c26e6af63ee415b252d2ccc32361e83d4df0bcc1e91b0f21 -->",
     },
   );
   const rawCreateBody = created.calls[1]?.init?.body;
@@ -212,7 +212,7 @@ test("Linear decision comments mention assignee and accept latest assigned Decis
   assert.match(createBody.variables.input.body, /profiles\/santiago/);
   assert.match(createBody.variables.input.body, /Decision:\n1\. <answer>/);
   assert.match(createBody.variables.input.body, /paused this run/);
-  assert.match(createBody.variables.input.body, /factory-decision:/);
+  assert.match(createBody.variables.input.body, /maquila-decision:/);
 
   const replies = sequence([
     {
@@ -264,7 +264,7 @@ test("Linear decision reply pins request identity and paginates", async () => {
     questionCount: 1,
     requestedAt: "2026-01-01T00:00:00.000Z",
     marker:
-      "<!-- factory-decision:11111111-1111-4111-8111-111111111111:1:c3cdd28ea02541b1c26e6af63ee415b252d2ccc32361e83d4df0bcc1e91b0f21 -->",
+      "<!-- maquila-decision:11111111-1111-4111-8111-111111111111:1:c3cdd28ea02541b1c26e6af63ee415b252d2ccc32361e83d4df0bcc1e91b0f21 -->",
   };
   const page = (nodes: unknown[], hasNextPage: boolean, endCursor: string | null) => ({
     data: {
@@ -497,13 +497,13 @@ test("GitHub publication pushes one deterministic branch and opens a ready PR", 
   assert.deepEqual(result, {
     number: 42,
     url: "https://github.com/santychuy/bookbounce/pull/42",
-    branch: `factory/riff-40-${idempotencyKey.slice(0, 12)}`,
+    branch: `maquila/riff-40-${idempotencyKey.slice(0, 12)}`,
     commitSha,
   });
   assert.equal(commands.filter((call) => call.args.includes("push")).length, 1);
   assert.equal(commands.filter((call) => call.args.includes("commit")).length, 1);
   assert.doesNotMatch(JSON.stringify(commands.map((call) => call.args)), new RegExp(token));
-  assert.ok(commands.every((call) => call.env.FACTORY_GITHUB_TOKEN === token));
+  assert.ok(commands.every((call) => call.env.MAQUILA_GITHUB_TOKEN === token));
   const create = fake.calls.at(-1);
   assert.equal(create?.init?.method, "POST");
   const requestBody = create?.init?.body;
@@ -517,7 +517,7 @@ test("GitHub publication reuses matching branch and PR without pushing", async (
   const baseSha = "a".repeat(40);
   const commitSha = "c".repeat(40);
   const idempotencyKey = "d".repeat(64);
-  const branch = `factory/riff-40-${idempotencyKey.slice(0, 12)}`;
+  const branch = `maquila/riff-40-${idempotencyKey.slice(0, 12)}`;
   const fake = sequence([
     { body: { ref: `refs/heads/${branch}`, object: { sha: commitSha } } },
     {

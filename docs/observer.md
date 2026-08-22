@@ -15,8 +15,8 @@ Build and link global executable once, then configure host tools:
 ```bash
 bun run build
 bun link
-factory setup
-factory doctor
+maquila setup
+maquila doctor
 ```
 
 Run commands use current working directory as target. Use `--target` for another repository; `--json` selects machine output.
@@ -24,25 +24,25 @@ Run commands use current working directory as target. Use `--target` for another
 Human workflow:
 
 ```bash
-factory dashboard
-factory run start --issue RIFF-52
+maquila dashboard
+maquila run start --issue RIFF-52
 ```
 
-`factory dashboard` starts the detached local dashboard when absent or reuses its healthy process, then prints its URL. Scripts and the Pi skill use the machine-compatible form:
+`maquila dashboard` starts the detached local dashboard when absent or reuses its healthy process, then prints its URL. Scripts and the Pi skill use the machine-compatible form:
 
 ```bash
-factory observer ensure --json
-factory run start --issue RIFF-52 --json
-factory run start --target /absolute/path/to/target-repository --issue RIFF-52 --json
+maquila observer ensure --json
+maquila run start --issue RIFF-52 --json
+maquila run start --target /absolute/path/to/target-repository --issue RIFF-52 --json
 ```
 
-`run start` returns accepted run ID before workflow completion. Open `<observer-url>/runs/<run-id>`. Pi users may use `/skill:software-factory` from target repository with only issue ID.
+`run start` returns accepted run ID before workflow completion. Open `<observer-url>/runs/<run-id>`. Pi users may use `/skill:maquila` from target repository with only issue ID.
 
 When planner needs an engineer decision, run stays `awaiting_decision` and status exposes the live Linear thread. Answer numbered questions in marked Linear thread. After a valid reply, wait phase finishes and status drops `decision` so observer and `run status` stop asking. Detached process polls for reply. Inspect or restart polling with same run ID:
 
 ```bash
-factory run status --run-id <run-id>
-factory run resume --run-id <run-id>
+maquila run status --run-id <run-id>
+maquila run resume --run-id <run-id>
 ```
 
 `run resume` continues persisted wait after controller-process restart. It does not retry arbitrary failed runs or start a new linked run. Observer remains read-only.
@@ -50,22 +50,22 @@ factory run resume --run-id <run-id>
 Foreground server behaves like development server:
 
 ```bash
-factory observer serve --port 4600
+maquila observer serve --port 4600
 ```
 
-`dashboard` and `observer ensure --json` start or reuse the same detached instance. `observer status --json` checks descriptor-bound health. `observer stop --json` signals only process whose instance, PID, health response, and stable process identity match private descriptor. Default is fixed `127.0.0.1:4600`; override with `--port` or `FACTORY_OBSERVER_PORT`. No automatic alternate port or OS boot service exists.
+`dashboard` and `observer ensure --json` start or reuse the same detached instance. `observer status --json` checks descriptor-bound health. `observer stop --json` signals only process whose instance, PID, health response, and stable process identity match private descriptor. Default is fixed `127.0.0.1:4600`; override with `--port` or `MAQUILA_OBSERVER_PORT`. No automatic alternate port or OS boot service exists.
 
 ## Data contract
 
-Controller is sole writer of `.factory/telemetry/<run-id>.jsonl`. Each strict event has host-assigned gap-free sequence. Ledger contains phase boundaries, safe agent/tool names, deterministic gate summary, reviewer verdict/count, failure, cleanup, heartbeat, terminal result, and safe artifact metadata. Remote commands are capped at 20,000 frames and 8 MiB; each host ledger is capped at 32 MiB before append or replay. Exceeding a cap fails the run and still attempts cleanup.
+Controller is sole writer of `.maquila/telemetry/<run-id>.jsonl`. Each strict event has host-assigned gap-free sequence. Ledger contains phase boundaries, safe agent/tool names, deterministic gate summary, reviewer verdict/count, failure, cleanup, heartbeat, terminal result, and safe artifact metadata. Remote commands are capped at 20,000 frames and 8 MiB; each host ledger is capped at 32 MiB before append or replay. Exceeding a cap fails the run and still attempts cleanup.
 
-Ledger never contains prompt bodies, transcripts, assistant text/reasoning, tool arguments/results, stdout/stderr, credentials, SSH destination, identity path, repository files, or artifact content. Negative remote results carry only fixed phase/cause codes; controller converts them to bounded public failure text. Agent phases include archived role metadata, exact model identifier, declared tools, access/thinking settings, SHA-256 system-prompt fingerprint, final reported token totals, and optional provider-reported cost. Reported cost comes from finalized Pi session statistics and is stored as integer nano-USD. It is informational provenance, not independently checked billing, an estimate produced by Factory, acceptance evidence, or proof of actual charges. VM frame validation and harvested evidence checks prove structural consistency, not cryptographic authenticity against a process with VM OS access.
+Ledger never contains prompt bodies, transcripts, assistant text/reasoning, tool arguments/results, stdout/stderr, credentials, SSH destination, identity path, repository files, or artifact content. Negative remote results carry only fixed phase/cause codes; controller converts them to bounded public failure text. Agent phases include archived role metadata, exact model identifier, declared tools, access/thinking settings, SHA-256 system-prompt fingerprint, final reported token totals, and optional provider-reported cost. Reported cost comes from finalized Pi session statistics and is stored as integer nano-USD. It is informational provenance, not independently checked billing, an estimate produced by Maquila, acceptance evidence, or proof of actual charges. VM frame validation and harvested evidence checks prove structural consistency, not cryptographic authenticity against a process with VM OS access.
 
 Each agent phase records its authoritative pinned OpenRouter model identifier. Current role defaults are `openrouter/google/gemini-3.7-flash` for worker/documenter/reviewer and `openrouter/z-ai/glm-5.3` for planner. Model availability, pricing, and limits remain OpenRouter concerns. Old runs are not backfilled, so metadata, token totals, or reported cost can be absent.
 
 Run detail uses progressive disclosure. Phase buttons first show phase, status, and elapsed time. Selecting one shows core timing and usage plus an **Agent** label when archived agent context exists; controller and other deterministic phases instead show **Code**. Role, model, access, and available-tool count appear only for Agent phases. Exact timestamps, token breakdown, execution limits, and declared tools stay under **Phase metadata**. Repeated tool calls are grouped by tool name and count. Active work takes priority, a prior error remains visible, and a call left open when its phase or run closes appears interrupted. Arguments, results, and per-call detail remain excluded. Raw events remain a collapsed drill-down.
 
-Agent system prompts load only when **System prompt** is opened. Observer reads the role definition from the Factory commit recorded for that run, extracts the prompt body, and returns it only when its SHA-256 hash matches the fingerprint recorded in telemetry. A missing or malformed runtime record, missing commit or role context, or hash mismatch makes retrieval fail. Failure leaves the disclosure available for retry. Prompt bodies are served on demand but are not added to the telemetry ledger. This hash match checks consistency between two run records; it does not establish provenance against a process with Factory checkout or VM OS access.
+Agent system prompts load only when **System prompt** is opened. Observer reads the role definition from the Maquila commit recorded for that run, extracts the prompt body, and returns it only when its SHA-256 hash matches the fingerprint recorded in telemetry. A missing or malformed runtime record, missing commit or role context, or hash mismatch makes retrieval fail. Failure leaves the disclosure available for retry. Prompt bodies are served on demand but are not added to the telemetry ledger. This hash match checks consistency between two run records; it does not establish provenance against a process with Maquila checkout or VM OS access.
 
 Open segments grow each poll; completed segments freeze at host finish time. Polling preserves focused and selected segments and drains bounded cursor pages without overlapping ticks. Old runs remain usable when optional fields are absent.
 
@@ -89,7 +89,7 @@ Run summaries include `runtimeMilliseconds` and `phaseRuntimeMilliseconds`, calc
 
 ## Process ownership
 
-`.factory/observer.json` is atomic mode `0600`; containing directory and logs are private. Descriptor records version, random instance ID, PID, stable Linux process-birth identity when available, port, URL, and start time. `ensure` reuses only matching health response. Live unhealthy owner, invalid descriptor, occupied port, and PID ambiguity fail safely without killing process.
+`.maquila/observer.json` is atomic mode `0600`; containing directory and logs are private. Descriptor records version, random instance ID, PID, stable Linux process-birth identity when available, port, URL, and start time. `ensure` reuses only matching health response. Live unhealthy owner, invalid descriptor, occupied port, and PID ambiguity fail safely without killing process.
 
 ## Failure semantics
 
@@ -97,9 +97,9 @@ Observer or browser outage never changes controller result. If canonical telemet
 
 ## Host credentials
 
-`factory setup` stores strict XDG config at `$XDG_CONFIG_HOME/factory/config.json` or `~/.config/factory/config.json`. It stores only optional Linear and OpenRouter `op://Vault/Item/field` references; `--install-skill` optionally links the Factory Pi skill into the user scope. `factory doctor` checks config, target, GitHub, Linear, and OpenRouter credentials, SSH, built CLI, and skill, then prints remediation.
+`maquila setup` stores strict XDG config at `$XDG_CONFIG_HOME/maquila/config.json` or `~/.config/maquila/config.json`. It stores only optional Linear and OpenRouter `op://Vault/Item/field` references; `--install-skill` optionally links the Maquila Pi skill into the user scope. `maquila doctor` checks config, target, GitHub, Linear, and OpenRouter credentials, SSH, built CLI, and skill, then prints remediation.
 
-GitHub precedence is `GITHUB_TOKEN`, `GH_TOKEN`, then `gh auth token`. Linear precedence is `LINEAR_API_TOKEN`, then `op read` of configured reference. OpenRouter precedence is `OPENROUTER_API_KEY`, then `op read` of configured reference. exe.dev identity is optional through `--identity` or `FACTORY_EXE_IDENTITY`; OpenSSH config and agent work without it. `SSH_AUTH_SOCK` stays on host, and SSH uses `ForwardAgent=no`. Linear and GitHub credentials remain controller-side. OpenRouter uses a dedicated capped key as deliberate transient VM exception; controller writes it to VM-local Pi config for agent calls, best-effort removes it before VM destruction, and tells user to revoke key if cleanup fails. VM is not a security sandbox. Runtime state remains under Factory checkout. No Linear OAuth, native keychain, or profiles exist.
+GitHub precedence is `GITHUB_TOKEN`, `GH_TOKEN`, then `gh auth token`. Linear precedence is `LINEAR_API_TOKEN`, then `op read` of configured reference. OpenRouter precedence is `OPENROUTER_API_KEY`, then `op read` of configured reference. exe.dev identity is optional through `--identity` or `MAQUILA_EXE_IDENTITY`; OpenSSH config and agent work without it. `SSH_AUTH_SOCK` stays on host, and SSH uses `ForwardAgent=no`. Linear and GitHub credentials remain controller-side. OpenRouter uses a dedicated capped key as deliberate transient VM exception; controller writes it to VM-local Pi config for agent calls, best-effort removes it before VM destruction, and tells user to revoke key if cleanup fails. VM is not a security sandbox. Runtime state remains under Maquila checkout. No Linear OAuth, native keychain, or profiles exist.
 
 ## Limits
 

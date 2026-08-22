@@ -18,7 +18,7 @@ import { cliInvocation } from "./runtime.js";
 import { resolveTargetRepository, type TargetRepository } from "./target.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-export const LAUNCH_INSTANCE_ENV = "FACTORY_LAUNCH_INSTANCE_ID";
+export const LAUNCH_INSTANCE_ENV = "MAQUILA_LAUNCH_INSTANCE_ID";
 
 export interface LaunchHandshake {
   version: 1;
@@ -54,7 +54,7 @@ interface SpawnedChild {
 }
 
 export interface StartDetachedRunOptions {
-  factoryRoot: string;
+  maquilaRoot: string;
   target: string;
   issue: string;
   owner?: string;
@@ -79,7 +79,7 @@ export interface StartDetachedRunOptions {
 }
 
 function launchDir(root: string, runId: string): string {
-  return resolve(root, ".factory", "launches", runId);
+  return resolve(root, ".maquila", "launches", runId);
 }
 
 export function handshakePath(root: string, runId: string): string {
@@ -199,7 +199,7 @@ export async function startDetachedRun(options: StartDetachedRunOptions): Promis
     options.timeoutSeconds > 1800
   )
     throw new Error("--timeout-seconds must be an integer from 1 to 1800");
-  const root = resolve(options.factoryRoot);
+  const root = resolve(options.maquilaRoot);
   const target = (options.resolveTarget ?? resolveTargetRepository)({
     target: options.target,
     ...(options.owner ? { owner: options.owner } : {}),

@@ -104,7 +104,7 @@ test("telemetry accepts legacy phases and strictly validates new workflow steps"
 });
 
 test("full telemetry replay preserves legacy agent ledgers without context or usage", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-telemetry-legacy-"));
+  const root = mkdtempSync(join(tmpdir(), "maquila-telemetry-legacy-"));
   try {
     const path = createTelemetryWriter(root, runId).path;
     const phase = { id: "planning:1", name: "planning", attempt: 1 };
@@ -148,7 +148,7 @@ test("full telemetry replay preserves legacy agent ledgers without context or us
 });
 
 test("full telemetry replay requires completed metadata for step-tagged agent phases", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-telemetry-step-"));
+  const root = mkdtempSync(join(tmpdir(), "maquila-telemetry-step-"));
   try {
     const path = createTelemetryWriter(root, runId).path;
     const phase = { id: "plan:1", name: "planning", stepId: "plan", attempt: 1 };
@@ -196,7 +196,7 @@ test("full telemetry replay binds tools to legacy and step-tagged agent lifecycl
       ["after-finish", [started, finished, toolStarted]],
       ["finish-with-open-tool", [started, toolStarted, finished]],
     ] as const) {
-      const root = mkdtempSync(join(tmpdir(), `factory-telemetry-${name}-`));
+      const root = mkdtempSync(join(tmpdir(), `maquila-telemetry-${name}-`));
       try {
         const path = createTelemetryWriter(root, runId).path;
         const inputs = [
@@ -229,7 +229,7 @@ test("telemetry writer binds tools to active unfinished agents before usage", ()
     activity: (writer: ReturnType<typeof createTelemetryWriter>) => void,
     expected: RegExp,
   ) => {
-    const root = mkdtempSync(join(tmpdir(), `factory-telemetry-writer-${name}-`));
+    const root = mkdtempSync(join(tmpdir(), `maquila-telemetry-writer-${name}-`));
     try {
       const writer = createTelemetryWriter(root, runId);
       writer.append({ type: "phase_started", actor: "planner", phase, payload: {} });
@@ -277,7 +277,7 @@ test("telemetry writer binds tools to active unfinished agents before usage", ()
 });
 
 test("agent context and usage are strict, ordered, and prompt/cost free", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-telemetry-agent-"));
+  const root = mkdtempSync(join(tmpdir(), "maquila-telemetry-agent-"));
   try {
     const writer = createTelemetryWriter(root, runId);
     const phase = { id: "planning:1", name: "planning" as const, attempt: 1 };
@@ -389,7 +389,7 @@ test("agent context and usage are strict, ordered, and prompt/cost free", () => 
 });
 
 test("phase closure must match active actor and full phase identity", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-telemetry-phase-"));
+  const root = mkdtempSync(join(tmpdir(), "maquila-telemetry-phase-"));
   try {
     const writer = createTelemetryWriter(root, runId);
     const phase = { id: "planning:1", name: "planning" as const, attempt: 1 };
@@ -426,7 +426,7 @@ test("phase closure must match active actor and full phase identity", () => {
 });
 
 test("replay rejects reuse of a closed phase ID", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-telemetry-phase-reuse-"));
+  const root = mkdtempSync(join(tmpdir(), "maquila-telemetry-phase-reuse-"));
   try {
     const writer = createTelemetryWriter(root, runId);
     const phase = { id: "planning:1", name: "planning" as const, attempt: 1 };
@@ -453,7 +453,7 @@ test("replay rejects reuse of a closed phase ID", () => {
 });
 
 test("writer assigns gap-free sequence across reopen and replay ignores partial tail", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-telemetry-"));
+  const root = mkdtempSync(join(tmpdir(), "maquila-telemetry-"));
   try {
     const first = createTelemetryWriter(root, runId);
     assert.equal(
@@ -491,7 +491,7 @@ test("writer assigns gap-free sequence across reopen and replay ignores partial 
 });
 
 test("terminal telemetry permits only later cleanup reconciliation", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-telemetry-"));
+  const root = mkdtempSync(join(tmpdir(), "maquila-telemetry-"));
   try {
     const writer = createTelemetryWriter(root, runId);
     writer.append({ type: "run_created", actor: "controller", payload: { status: "created" } });
@@ -530,7 +530,7 @@ test("terminal telemetry permits only later cleanup reconciliation", () => {
 });
 
 test("decision expiry is an honest cancelled terminal", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-telemetry-"));
+  const root = mkdtempSync(join(tmpdir(), "maquila-telemetry-"));
   try {
     const writer = createTelemetryWriter(root, runId);
     writer.append({ type: "run_created", actor: "controller", payload: { status: "created" } });
@@ -546,7 +546,7 @@ test("decision expiry is an honest cancelled terminal", () => {
 });
 
 test("replay rejects a complete sequence gap", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-telemetry-"));
+  const root = mkdtempSync(join(tmpdir(), "maquila-telemetry-"));
   const path = telemetryPath(root, runId);
   try {
     const writer = createTelemetryWriter(root, runId);
@@ -579,7 +579,7 @@ test("successful telemetry requires cleanup and publication metadata is strict",
         payload: {
           number: 42,
           url: "https://github.com/santychuy/bookbounce/pull/42",
-          branch: "factory/riff-40-aaaaaaaaaaaa",
+          branch: "maquila/riff-40-aaaaaaaaaaaa",
           commitSha: "b".repeat(40),
         },
       }),
@@ -593,7 +593,7 @@ test("successful telemetry requires cleanup and publication metadata is strict",
           payload: {
             number: 42,
             url: "https://evil.example/pull/42",
-            branch: "factory/riff-40-aaaaaaaaaaaa",
+            branch: "maquila/riff-40-aaaaaaaaaaaa",
             commitSha: "b".repeat(40),
           },
         }),
@@ -609,7 +609,7 @@ test("successful telemetry requires cleanup and publication metadata is strict",
 });
 
 test("telemetry ledger rejects aggregate size overflow before replay and append", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-telemetry-"));
+  const root = mkdtempSync(join(tmpdir(), "maquila-telemetry-"));
   try {
     const writer = createTelemetryWriter(root, runId);
     writer.append({ type: "run_created", actor: "controller", payload: { status: "created" } });

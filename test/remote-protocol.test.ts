@@ -20,7 +20,7 @@ test("remote protocol parses arbitrary chunks and typed terminal result", () => 
   writer.event(event);
   writer.result({
     status: "completed",
-    runDir: "/home/exedev/factory/.factory/runs/11111111-1111-1111-1111-111111111111",
+    runDir: "/home/exedev/maquila/.maquila/runs/11111111-1111-1111-1111-111111111111",
   });
   const events: RemoteEvent[] = [];
   const parser = new RemoteProtocolParser((value) => events.push(value));

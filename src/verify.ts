@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-export const VERIFY_CONFIG_NAME = "factory.verify.json";
+export const VERIFY_CONFIG_NAME = "maquila.verify.json";
 export const DEFAULT_COMMAND_TIMEOUT_MS = 900_000;
 
 export interface VerifyConfig {
@@ -60,7 +60,7 @@ function exactSha(value: unknown): string {
 
 export function parseVerifyConfig(raw: unknown): VerifyConfig {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    fail("factory.verify.json must be an object");
+    fail("maquila.verify.json must be an object");
   }
   const unknown = Object.keys(raw).filter((key) => key !== "commands");
   if (unknown.length) fail(`unknown fields: ${unknown.join(", ")}`);

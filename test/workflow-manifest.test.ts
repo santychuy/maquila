@@ -24,7 +24,7 @@ function plan(paths: string[]): PlannerEnvelope {
     summary: "Plan",
     evidence: ["Issue"],
     changes: paths.map((path) => ({ path, action: "modify", rationale: "Needed" })),
-    verification: ["factory.verify.json"],
+    verification: ["maquila.verify.json"],
     risks: [],
     decisionsNeeded: [],
   };
@@ -120,8 +120,8 @@ test("manifest rejects unknown, tampered, and mismatched data", () => {
     /duplicate paths/,
   );
   assert.throws(
-    () => parseWorkflowManifest({ ...valid, allowedPaths: ["factory.verify.json"] }),
-    /factory.verify.json/,
+    () => parseWorkflowManifest({ ...valid, allowedPaths: ["maquila.verify.json"] }),
+    /maquila.verify.json/,
   );
   assert.throws(
     () =>
@@ -184,7 +184,7 @@ test("manifest rejects unknown, tampered, and mismatched data", () => {
 });
 
 test("planner run identity comes from envelope directory or local fallback", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-manifest-"));
+  const root = mkdtempSync(join(tmpdir(), "maquila-manifest-"));
   try {
     const runDir = join(root, PLANNER_RUN_ID);
     mkdirSync(runDir);

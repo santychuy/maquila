@@ -7,7 +7,7 @@ import { Value } from "typebox/value";
 export const OP_TOKEN_REFERENCE =
   /^op:\/\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
-const FactoryConfigSchema = Type.Object(
+const MaquilaConfigSchema = Type.Object(
   {
     version: Type.Literal(1),
     linear: Type.Optional(
@@ -30,15 +30,15 @@ const FactoryConfigSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export type FactoryConfig = Static<typeof FactoryConfigSchema>;
+export type MaquilaConfig = Static<typeof MaquilaConfigSchema>;
 
-export function factoryConfigPath(
+export function maquilaConfigPath(
   env: NodeJS.ProcessEnv = process.env,
   homedir = defaultHomedir,
 ): string {
   const xdg = env.XDG_CONFIG_HOME?.trim();
   const root = xdg && !xdg.includes("\0") && isAbsolute(xdg) ? xdg : resolve(homedir(), ".config");
-  return resolve(root, "factory", "config.json");
+  return resolve(root, "maquila", "config.json");
 }
 
 export function parseTokenReference(value: string, label = "Linear"): string {
@@ -47,49 +47,49 @@ export function parseTokenReference(value: string, label = "Linear"): string {
   return trimmed;
 }
 
-export function parseFactoryConfig(text: string): FactoryConfig {
+export function parseMaquilaConfig(text: string): MaquilaConfig {
   let value: unknown;
   try {
     value = JSON.parse(text);
   } catch {
-    throw new Error("invalid factory config");
+    throw new Error("invalid maquila config");
   }
-  if (!Value.Check(FactoryConfigSchema, value)) throw new Error("invalid factory config");
+  if (!Value.Check(MaquilaConfigSchema, value)) throw new Error("invalid maquila config");
   if (value.linear) parseTokenReference(value.linear.tokenReference);
   if (value.openrouter) parseTokenReference(value.openrouter.tokenReference, "OpenRouter");
   return value;
 }
 
-export interface LoadFactoryConfigOptions {
+export interface LoadMaquilaConfigOptions {
   env?: NodeJS.ProcessEnv;
   homedir?: typeof defaultHomedir;
   readFile?: (path: string) => string;
 }
 
-export function loadFactoryConfig(options: LoadFactoryConfigOptions = {}): FactoryConfig {
-  const path = factoryConfigPath(options.env, options.homedir);
+export function loadMaquilaConfig(options: LoadMaquilaConfigOptions = {}): MaquilaConfig {
+  const path = maquilaConfigPath(options.env, options.homedir);
   try {
     const text = (options.readFile ?? ((file) => readFileSync(file, "utf8")))(path);
-    return parseFactoryConfig(text);
+    return parseMaquilaConfig(text);
   } catch (error) {
     if (record(error) && error.code === "ENOENT") return { version: 1 };
     if (
       error instanceof Error &&
-      (error.message === "invalid factory config" ||
+      (error.message === "invalid maquila config" ||
         error.message === "invalid Linear token reference" ||
         error.message === "invalid OpenRouter token reference")
     )
       throw error;
-    throw new Error("invalid factory config", { cause: error });
+    throw new Error("invalid maquila config", { cause: error });
   }
 }
 
-export function writeFactoryConfig(
-  config: FactoryConfig,
+export function writeMaquilaConfig(
+  config: MaquilaConfig,
   options: { env?: NodeJS.ProcessEnv; homedir?: typeof defaultHomedir } = {},
 ): string {
-  if (!Value.Check(FactoryConfigSchema, config)) throw new Error("invalid factory config");
-  const path = factoryConfigPath(options.env, options.homedir);
+  if (!Value.Check(MaquilaConfigSchema, config)) throw new Error("invalid maquila config");
+  const path = maquilaConfigPath(options.env, options.homedir);
   mkdirSync(resolve(path, ".."), { recursive: true, mode: 0o700 });
   chmodSync(resolve(path, ".."), 0o700);
   const temporary = `${path}.${process.pid}.tmp`;

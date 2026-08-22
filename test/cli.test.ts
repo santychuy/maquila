@@ -82,7 +82,7 @@ test("controller command accepts bounded immutable inputs", () => {
       timeoutSeconds: 60,
     },
   );
-  assert.match(HELP, /factory run/);
+  assert.match(HELP, /maquila run/);
   const defaultTimeout = parseCli([
     "run",
     "--issue",
@@ -236,7 +236,7 @@ test("dashboard is human alias for idempotent observer startup", () => {
     port: 4700,
   });
   assert.throws(() => parseCli(["dashboard", "--json"]), /unsupported option/);
-  assert.match(HELP, /factory dashboard/);
+  assert.match(HELP, /maquila dashboard/);
 });
 
 test("observer commands expose explicit server and JSON management contracts", () => {
@@ -325,7 +325,7 @@ test("worker lifecycle command parses immutable inputs", () => {
       timeoutSeconds: 60,
     },
   );
-  assert.match(HELP, /factory pi worker/);
+  assert.match(HELP, /maquila pi worker/);
   assert.throws(() => parseCli(["pi", "worker"]), /--planner/);
   assert.throws(() => parseCli(["unknown"]), /pi worker/);
   assert.deepEqual(
@@ -406,7 +406,7 @@ test("specialized agents load with explicit capability boundaries", () => {
 });
 
 test("agent definitions fail closed on schema and access violations", () => {
-  const directory = mkdtempSync(resolve(tmpdir(), "factory-agent-"));
+  const directory = mkdtempSync(resolve(tmpdir(), "maquila-agent-"));
   const unknownField = resolve(directory, "unknown-field.md");
   const unsafeReader = resolve(directory, "unsafe-reader.md");
   const unpinnedModel = resolve(directory, "unpinned-model.md");

@@ -76,7 +76,7 @@ import {
   type TelemetryWriter,
 } from "./telemetry.js";
 
-const REMOTE_FACTORY = "/home/exedev/factory";
+const REMOTE_MAQUILA = "/home/exedev/maquila";
 const REMOTE_WORK = "/home/exedev/work";
 const REMOTE_NODE = "/home/exedev/.local/node/bin/node";
 const REMOTE_NPM = "/home/exedev/.local/node/bin/npm";
@@ -92,7 +92,7 @@ const NODE_CHECKSUMS: Record<string, string> = {
 const MAX_PATCH = 1_000_000;
 const MAX_EVIDENCE_ARCHIVE = 50 * 1024 * 1024;
 const MAX_SESSION_CHECKPOINT = 8 * 1024 * 1024;
-const REMOTE_RUN = `${REMOTE_FACTORY}/.factory/runs/`;
+const REMOTE_RUN = `${REMOTE_MAQUILA}/.maquila/runs/`;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 type RemotePhase = RemoteEvent["phase"];
 function telemetryPhase(
@@ -124,7 +124,7 @@ export interface ControllerOptions {
   githubToken: string;
   openRouterKey: string;
   root?: string;
-  factoryRoot?: string;
+  maquilaRoot?: string;
   exe?: ControllerExe;
   intake?: typeof createIntake;
   sleep?: (milliseconds: number) => Promise<void>;
@@ -139,7 +139,7 @@ export interface ControllerOptions {
     request: ControllerDecisionRequest,
     expiresAt: string,
   ) => Promise<LinearDecisionReply>;
-  /** Internal entry used by `factory run resume`; never accepted from remote input. */
+  /** Internal entry used by `maquila run resume`; never accepted from remote input. */
   resumeExisting?: boolean;
 }
 export interface ControllerDecisionContext extends LinearDecisionReply {
@@ -193,7 +193,7 @@ function requireAbsolute(path: string): string {
   return path;
 }
 function vmName(runId: string): string {
-  return `factory-${runId.replaceAll("-", "").slice(0, 24)}`;
+  return `maquila-${runId.replaceAll("-", "").slice(0, 24)}`;
 }
 function outputPath(path: string | undefined, label: string): string {
   if (!path?.startsWith(REMOTE_RUN) || !UUID.test(path.slice(REMOTE_RUN.length))) {
@@ -258,7 +258,7 @@ export function harvest(archive: string, runDir: string, expected: HarvestExpect
   if (
     !names.length ||
     names.some(
-      (name) => !name.startsWith(".factory/runs/") || name.includes("..") || name.startsWith("/"),
+      (name) => !name.startsWith(".maquila/runs/") || name.includes("..") || name.startsWith("/"),
     )
   )
     throw new Error("unsafe evidence archive path");
@@ -295,7 +295,7 @@ export function harvest(archive: string, runDir: string, expected: HarvestExpect
     [reviewerRun, "lifecycle.json"],
   ];
   for (const [run, file] of required)
-    if (!existsSync(resolve(target, ".factory", "runs", run!, file!)))
+    if (!existsSync(resolve(target, ".maquila", "runs", run!, file!)))
       throw new Error("required remote evidence missing");
   const archivedRuns = new Set(
     names.map((name) => name.split("/")[2]).filter((name): name is string => Boolean(name)),
@@ -307,7 +307,7 @@ export function harvest(archive: string, runDir: string, expected: HarvestExpect
     role: "planner" | "worker" | "documenter" | "reviewer",
     requiredArtifacts: string[],
   ): Record<string, unknown> | undefined => {
-    const value = json(resolve(target, ".factory", "runs", run, "receipt.json"));
+    const value = json(resolve(target, ".maquila", "runs", run, "receipt.json"));
     if (
       !isRecord(value) ||
       value.runId !== run ||
@@ -322,7 +322,7 @@ export function harvest(archive: string, runDir: string, expected: HarvestExpect
     if (
       !requiredArtifacts.every(
         (name) =>
-          artifacts.includes(name) && existsSync(resolve(target, ".factory", "runs", run, name)),
+          artifacts.includes(name) && existsSync(resolve(target, ".maquila", "runs", run, name)),
       )
     )
       return undefined;
@@ -347,26 +347,26 @@ export function harvest(archive: string, runDir: string, expected: HarvestExpect
   const reviewerReceipt = receipt(reviewerRun, "reviewer", ["envelope.json", "lifecycle.json"]);
   const planner = parseEnvelope(
     "planner",
-    json(resolve(target, ".factory", "runs", plannerRun, "envelope.json")),
+    json(resolve(target, ".maquila", "runs", plannerRun, "envelope.json")),
   );
   const workerEnvelope = workerRun
-    ? parseEnvelope("worker", json(resolve(target, ".factory", "runs", workerRun, "envelope.json")))
+    ? parseEnvelope("worker", json(resolve(target, ".maquila", "runs", workerRun, "envelope.json")))
     : undefined;
-  const worker = json(resolve(target, ".factory", "runs", primaryRun, "lifecycle.json"));
-  const verification = json(resolve(target, ".factory", "runs", primaryRun, "verification.json"));
+  const worker = json(resolve(target, ".maquila", "runs", primaryRun, "lifecycle.json"));
+  const verification = json(resolve(target, ".maquila", "runs", primaryRun, "verification.json"));
   const documenter = parseEnvelope(
     "documenter",
-    json(resolve(target, ".factory", "runs", documenterRun, "envelope.json")),
+    json(resolve(target, ".maquila", "runs", documenterRun, "envelope.json")),
   );
   const reviewerLifecycle = json(
-    resolve(target, ".factory", "runs", reviewerRun, "lifecycle.json"),
+    resolve(target, ".maquila", "runs", reviewerRun, "lifecycle.json"),
   );
   const reviewer = parseEnvelope(
     "reviewer",
-    json(resolve(target, ".factory", "runs", reviewerRun, "envelope.json")),
+    json(resolve(target, ".maquila", "runs", reviewerRun, "envelope.json")),
   );
   const archivedExecution = parseWorkflowExecution(
-    json(resolve(target, ".factory", "runs", primaryRun, "workflow-execution.json")),
+    json(resolve(target, ".maquila", "runs", primaryRun, "workflow-execution.json")),
   );
   if (JSON.stringify(archivedExecution) !== JSON.stringify(expected.execution))
     throw new Error("archived workflow execution does not match");
@@ -400,7 +400,7 @@ export function harvest(archive: string, runDir: string, expected: HarvestExpect
         command.timedOut === false,
     );
   const reviewedDigest = readFileSync(
-    resolve(target, ".factory", "runs", primaryRun, "review-diff.sha256"),
+    resolve(target, ".maquila", "runs", primaryRun, "review-diff.sha256"),
     "utf8",
   ).trim();
   const plannerPaths = planner.ok
@@ -499,20 +499,20 @@ export function harvest(archive: string, runDir: string, expected: HarvestExpect
   }
   writeJson(resolve(runDir, "evidence-manifest.json"), manifest);
 }
-export function archiveFactory(factoryRoot: string): {
+export function archiveMaquila(maquilaRoot: string): {
   path: string;
   sha: string;
   cleanup(): void;
 } {
-  const directory = mkdtempSync(resolve(tmpdir(), "factory-runtime-"));
+  const directory = mkdtempSync(resolve(tmpdir(), "maquila-runtime-"));
   const path = resolve(directory, "runtime.tar");
   try {
     const sha = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: factoryRoot,
+      cwd: maquilaRoot,
       encoding: "utf8",
     }).trim();
     execFileSync("git", ["archive", "--format=tar", `--output=${path}`, "HEAD"], {
-      cwd: factoryRoot,
+      cwd: maquilaRoot,
     });
     chmodSync(path, 0o600);
     return { path, sha, cleanup: () => rmSync(directory, { recursive: true, force: true }) };
@@ -739,7 +739,7 @@ function readAttemptRecovery(path: string): AttemptRecoveryRecord | undefined {
 }
 /** Reconciles accepted children that died before strict intake state existed. */
 export function recoverAbandonedAttempts(root: string): void {
-  const attempts = resolve(root, ".factory", "attempts");
+  const attempts = resolve(root, ".maquila", "attempts");
   if (!existsSync(attempts)) return;
   for (const entry of readdirSync(attempts, { withFileTypes: true })) {
     if (!entry.isDirectory() || !UUID.test(entry.name)) continue;
@@ -776,7 +776,7 @@ export function recoverAbandonedAttempts(root: string): void {
 
 async function recover(root: string, exe: ControllerExe): Promise<void> {
   recoverAbandonedAttempts(root);
-  const controllers = resolve(root, ".factory", "controllers");
+  const controllers = resolve(root, ".maquila", "controllers");
   if (!existsSync(controllers)) return;
   recoverStaleControllerClaims(controllers);
   for (const state of scanRecoverableControllerStates(controllers)) {
@@ -874,11 +874,11 @@ export async function runController(options: ControllerOptions): Promise<Control
   validateDecision(options.decision);
   safeRepo(options.owner, options.repo);
   const root = resolve(options.root ?? process.cwd());
-  const factoryRoot = resolve(options.factoryRoot ?? process.cwd());
+  const maquilaRoot = resolve(options.maquilaRoot ?? process.cwd());
   const exe = options.exe ?? new ExeClient(undefined, 30_000, options.identity);
   let lock = acquireControllerLock(root);
   const runId = options.runId ?? randomUUID();
-  const provisional = resolve(root, ".factory", "attempts", runId);
+  const provisional = resolve(root, ".maquila", "attempts", runId);
   const startedAt = new Date().toISOString();
   let telemetry: TelemetryWriter;
   let telemetryBroken = false;
@@ -920,7 +920,7 @@ export async function runController(options: ControllerOptions): Promise<Control
   }
   let evidenceDir = provisional;
   let state: ControllerState | undefined;
-  let archive: ReturnType<typeof archiveFactory> | undefined;
+  let archive: ReturnType<typeof archiveMaquila> | undefined;
   let intakeSnapshot: Awaited<ReturnType<typeof createIntake>> | undefined;
   let decisionRequest: ControllerDecisionRequest | undefined;
   let reviewedPatchSha256: string | undefined;
@@ -1035,7 +1035,7 @@ export async function runController(options: ControllerOptions): Promise<Control
   try {
     await recover(root, exe);
     stage = "intake";
-    const runDir = resolve(root, ".factory", "controllers", runId);
+    const runDir = resolve(root, ".maquila", "controllers", runId);
     let vm: { vmName: string; sshDest: string; status: string };
     let initialPlannerAttempt = 1;
     let initialResumeSession: { sessionId: string; sha256: string } | undefined;
@@ -1210,7 +1210,7 @@ export async function runController(options: ControllerOptions): Promise<Control
       )
         throw new Error("retained decision workspace changed");
       if (!replacementVm)
-        await remote(exe, vm.sshDest, ["test", "-x", `${REMOTE_FACTORY}/dist/factory`], 30_000);
+        await remote(exe, vm.sshDest, ["test", "-x", `${REMOTE_MAQUILA}/dist/maquila`], 30_000);
       writeJson(resolve(runDir, "decision-accepted.json"), {
         version: 1,
         generation: wait.generation,
@@ -1327,23 +1327,23 @@ export async function runController(options: ControllerOptions): Promise<Control
         throw new Error("remote checkout SHA mismatch");
     }
     publicFailureMessage = "runtime archive creation failed";
-    archive = archiveFactory(factoryRoot);
+    archive = archiveMaquila(maquilaRoot);
     const runtimePath = resolve(runDir, "runtime.json");
     if (resuming) {
       const runtime: unknown = JSON.parse(readFileSync(runtimePath, "utf8"));
       if (
         !isRecord(runtime) ||
-        runtime.factorySha !== archive.sha ||
+        runtime.maquilaSha !== archive.sha ||
         runtime.sha256 !== hash(archive.path)
       )
         throw new Error("controller runtime changed during decision wait");
     } else {
-      writeJson(runtimePath, { factorySha: archive.sha, sha256: hash(archive.path) });
+      writeJson(runtimePath, { maquilaSha: archive.sha, sha256: hash(archive.path) });
     }
     const archivedRole = (role: "planner" | "worker" | "documenter" | "reviewer") => {
       const filePath = `src/agents/${role}.md`;
       const source = execFileSync("git", ["show", `${archive!.sha}:${filePath}`], {
-        cwd: factoryRoot,
+        cwd: maquilaRoot,
         encoding: "utf8",
       });
       return parseAgentDefinition(source, filePath);
@@ -1354,7 +1354,7 @@ export async function runController(options: ControllerOptions): Promise<Control
       documenter: archivedRole("documenter"),
       reviewer: archivedRole("reviewer"),
     };
-    const configDir = mkdtempSync(resolve(tmpdir(), "factory-pi-"));
+    const configDir = mkdtempSync(resolve(tmpdir(), "maquila-pi-"));
     try {
       const models = resolve(configDir, "models.json");
       writeJson(models, { providers: { openrouter: { apiKey: options.openRouterKey } } });
@@ -1388,7 +1388,7 @@ export async function runController(options: ControllerOptions): Promise<Control
           [
             "mkdir",
             "-p",
-            REMOTE_FACTORY,
+            REMOTE_MAQUILA,
             "/home/exedev/.pi/agent",
             "/home/exedev/.local/node",
             "/home/exedev/.local/bun",
@@ -1459,18 +1459,18 @@ export async function runController(options: ControllerOptions): Promise<Control
         await remote(
           exe,
           vm.sshDest,
-          ["tar", "-xf", "/home/exedev/runtime.tar", "-C", REMOTE_FACTORY],
+          ["tar", "-xf", "/home/exedev/runtime.tar", "-C", REMOTE_MAQUILA],
           60_000,
         );
         await remote(exe, vm.sshDest, [REMOTE_NODE, "--version"], 30_000);
-        publicFailureMessage = "Factory dependency installation failed";
+        publicFailureMessage = "Maquila dependency installation failed";
         await remote(
           exe,
           vm.sshDest,
           [
             "env",
             "-C",
-            REMOTE_FACTORY,
+            REMOTE_MAQUILA,
             `PATH=${REMOTE_PATH}`,
             REMOTE_BUN,
             "install",
@@ -1479,11 +1479,11 @@ export async function runController(options: ControllerOptions): Promise<Control
           ],
           300_000,
         );
-        publicFailureMessage = "Factory build failed";
+        publicFailureMessage = "Maquila build failed";
         await remote(
           exe,
           vm.sshDest,
-          ["env", "-C", REMOTE_FACTORY, `PATH=${REMOTE_PATH}`, REMOTE_BUN, "run", "build"],
+          ["env", "-C", REMOTE_MAQUILA, `PATH=${REMOTE_PATH}`, REMOTE_BUN, "run", "build"],
           120_000,
         );
         publicFailureMessage = "target dependency installation failed";
@@ -1807,9 +1807,9 @@ export async function runController(options: ControllerOptions): Promise<Control
         const plannerArgv = [
           "env",
           "-C",
-          REMOTE_FACTORY,
+          REMOTE_MAQUILA,
           `PATH=${REMOTE_PATH}`,
-          `${REMOTE_FACTORY}/dist/factory`,
+          `${REMOTE_MAQUILA}/dist/maquila`,
           "pi",
           "plan",
           "--repo",
@@ -2032,7 +2032,7 @@ export async function runController(options: ControllerOptions): Promise<Control
           ).trim()
         )
           throw new Error("retained decision workspace changed");
-        await remote(exe, vm.sshDest, ["test", "-x", `${REMOTE_FACTORY}/dist/factory`], 30_000);
+        await remote(exe, vm.sshDest, ["test", "-x", `${REMOTE_MAQUILA}/dist/maquila`], 30_000);
         await exe.copyTo(vm.sshDest, models, "/home/exedev/.pi/agent/models.json");
         await remote(
           exe,
@@ -2087,9 +2087,9 @@ export async function runController(options: ControllerOptions): Promise<Control
           [
             "env",
             "-C",
-            REMOTE_FACTORY,
+            REMOTE_MAQUILA,
             `PATH=${REMOTE_PATH}`,
-            `${REMOTE_FACTORY}/dist/factory`,
+            `${REMOTE_MAQUILA}/dist/maquila`,
             "pi",
             "worker",
             "--repo",
@@ -2173,8 +2173,8 @@ export async function runController(options: ControllerOptions): Promise<Control
           "-cf",
           "/home/exedev/evidence.tar",
           "-C",
-          REMOTE_FACTORY,
-          ...runIds.map((id) => `.factory/runs/${id}`),
+          REMOTE_MAQUILA,
+          ...runIds.map((id) => `.maquila/runs/${id}`),
         ],
         60_000,
       );
@@ -2241,18 +2241,18 @@ export async function runController(options: ControllerOptions): Promise<Control
   }
   if (failure && state?.state === "awaiting_decision" && state.decisionWait) {
     state = transitionControllerState(
-      resolve(root, ".factory", "controllers", state.runId),
+      resolve(root, ".maquila", "controllers", state.runId),
       "failed",
     );
   }
   if (failure && state?.vm) {
-    const runDir = resolve(root, ".factory", "controllers", state.runId);
+    const runDir = resolve(root, ".maquila", "controllers", state.runId);
     const target = resolve(runDir, "failure-evidence.tar");
     try {
       await remote(
         exe,
         state.vm.sshDest,
-        ["tar", "-cf", "/home/exedev/evidence.tar", "-C", REMOTE_FACTORY, ".factory/runs"],
+        ["tar", "-cf", "/home/exedev/evidence.tar", "-C", REMOTE_MAQUILA, ".maquila/runs"],
         60_000,
       );
       await exe.copyFrom(state.vm.sshDest, "/home/exedev/evidence.tar", target);
@@ -2295,7 +2295,7 @@ export async function runController(options: ControllerOptions): Promise<Control
       if (!cleaned.destroyed && !cleaned.notFound) throw new Error("VM cleanup failed");
       cleanupOutcome = "complete";
       state = recordControllerCleanup(
-        resolve(root, ".factory", "controllers", state.runId),
+        resolve(root, ".maquila", "controllers", state.runId),
         "complete",
       );
       try {
@@ -2315,7 +2315,7 @@ export async function runController(options: ControllerOptions): Promise<Control
     if (state?.vm) {
       try {
         state = recordControllerCleanup(
-          resolve(root, ".factory", "controllers", state.runId),
+          resolve(root, ".maquila", "controllers", state.runId),
           "failed",
         );
         bestEffortEmit({
@@ -2336,7 +2336,7 @@ export async function runController(options: ControllerOptions): Promise<Control
 
   let result: ControllerResult;
   try {
-    const runDir = state ? resolve(root, ".factory", "controllers", state.runId) : evidenceDir;
+    const runDir = state ? resolve(root, ".maquila", "controllers", state.runId) : evidenceDir;
     const failedResult = (message: string): ControllerResult => {
       stopHeartbeat();
       try {

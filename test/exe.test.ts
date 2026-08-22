@@ -48,20 +48,20 @@ const stream: ExeStreamRunner = async (_file, _args, _options, onStdout) => {
 };
 
 const vm = {
-  vm_name: "factory-run-1",
+  vm_name: "maquila-run-1",
   status: "running",
-  ssh_dest: "factory-run-1.exe.xyz",
-  ssh_host: "factory-run-1.exe.xyz",
+  ssh_dest: "maquila-run-1.exe.xyz",
+  ssh_host: "maquila-run-1.exe.xyz",
 };
 
 test("create VM uses fixed image, safe tag, and validates response", async () => {
   const fake = runner([{ stdout: JSON.stringify({ ...vm, status: undefined }), stderr: "" }]);
   const client = new ExeClient(fake.run, 12_345);
   const created = await client.createVm({
-    name: "factory-run-1",
+    name: "maquila-run-1",
     tag: "santychuy-bookbounce",
   });
-  assert.equal(created.sshDest, "factory-run-1.exe.xyz");
+  assert.equal(created.sshDest, "maquila-run-1.exe.xyz");
   assert.equal(created.status, "creating");
   assert.equal(fake.calls[0]?.file, "ssh");
   assert.ok(fake.calls[0]?.args.includes("--image=exeuntu"));
@@ -80,11 +80,11 @@ test("identity-less client uses OpenSSH defaults without agent forwarding", asyn
 
 test("dedicated SSH identity supports unattended commands", async () => {
   const fake = runner([{ stdout: JSON.stringify({ vms: [] }), stderr: "" }]);
-  await new ExeClient(fake.run, 30_000, "/tmp/factory-key").listVms();
+  await new ExeClient(fake.run, 30_000, "/tmp/maquila-key").listVms();
   assert.ok(fake.calls[0]?.args.includes("IdentitiesOnly=yes"));
   assert.deepEqual(fake.calls[0]?.args.slice(-5), [
     "-i",
-    "/tmp/factory-key",
+    "/tmp/maquila-key",
     "exe.dev",
     "ls",
     "--json",
@@ -94,7 +94,7 @@ test("dedicated SSH identity supports unattended commands", async () => {
 
 test("external commands receive only operational environment", async () => {
   const fake = runner([{ stdout: JSON.stringify({ vms: [] }), stderr: "" }]);
-  await new ExeClient(fake.run, 30_000, "/tmp/factory-key", stream, {
+  await new ExeClient(fake.run, 30_000, "/tmp/maquila-key", stream, {
     PATH: "/usr/bin:/bin",
     HOME: "/tmp/home",
     LANG: "C.UTF-8",
@@ -162,10 +162,10 @@ test("create and list reject malformed JSON and VM identity", async () => {
 test("remote argv is shell-quoted as data", async () => {
   const fake = runner([{ stdout: "ok", stderr: "" }]);
   const client = new ExeClient(fake.run);
-  await client.exec("vm+factory@vm.exe.xyz", ["printf", "%s", "a;$(touch /tmp/nope)'b"]);
+  await client.exec("vm+maquila@vm.exe.xyz", ["printf", "%s", "a;$(touch /tmp/nope)'b"]);
   const command = fake.calls[0]?.args.at(-1) ?? "";
   assert.equal(command, `'printf' '%s' 'a;$(touch /tmp/nope)'\\''b'`);
-  assert.equal(fake.calls[0]?.args.at(-2), "vm+factory@vm.exe.xyz");
+  assert.equal(fake.calls[0]?.args.at(-2), "vm+maquila@vm.exe.xyz");
   assert.equal(quoteRemoteArg(""), "''");
   assert.throws(() => quoteRemoteArg("bad\0arg"), /NUL/);
 });

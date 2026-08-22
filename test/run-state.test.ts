@@ -45,11 +45,11 @@ function input(runId: string, idempotencyKey = "a".repeat(64)): ControllerStateI
 }
 
 function runDir(root: string, runId: string): string {
-  return join(root, ".factory", "runs", runId);
+  return join(root, ".maquila", "runs", runId);
 }
 
 test("controller state writes atomically with strict schema", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-state-"));
+  const root = mkdtempSync(join(tmpdir(), "maquila-state-"));
   const dir = runDir(root, "run-1");
   try {
     const created = createControllerState(dir, input("run-1"));
@@ -58,7 +58,7 @@ test("controller state writes atomically with strict schema", () => {
     assert.equal(statSync(join(dir, "controller-state.json")).mode & 0o777, 0o600);
     assert.ok(
       statSync(
-        join(root, ".factory", "runs", ".idempotency", created.idempotencyKey, "run-id"),
+        join(root, ".maquila", "runs", ".idempotency", created.idempotencyKey, "run-id"),
       ).isFile(),
     );
     const serialized = readFileSync(join(dir, "controller-state.json"), "utf8");
@@ -81,7 +81,7 @@ test("controller state writes atomically with strict schema", () => {
 });
 
 test("derived-name cleanup may complete without recording a VM", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-state-"));
+  const root = mkdtempSync(join(tmpdir(), "maquila-state-"));
   const dir = runDir(root, "run-1");
   try {
     createControllerState(dir, input("run-1"));
@@ -95,7 +95,7 @@ test("derived-name cleanup may complete without recording a VM", () => {
 });
 
 test("controller rejects invalid transitions and records VM before bootstrap", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-state-"));
+  const root = mkdtempSync(join(tmpdir(), "maquila-state-"));
   const dir = runDir(root, "run-1");
   try {
     createControllerState(dir, input("run-1"));
@@ -114,7 +114,7 @@ test("controller rejects invalid transitions and records VM before bootstrap", (
     const bootstrapping = transitionControllerState(dir, "bootstrapping");
     assert.equal(bootstrapping.issueSnapshotSha256, input("run-1").issueSnapshotSha256);
     assert.equal(bootstrapping.baseSha, input("run-1").baseSha);
-    assert.deepEqual(findOrphanVms(join(root, ".factory", "runs")), [
+    assert.deepEqual(findOrphanVms(join(root, ".maquila", "runs")), [
       {
         runId: "run-1",
         vm: { name: "vm-1", sshDest: "vm.exe.xyz", status: "running" },
@@ -122,14 +122,14 @@ test("controller rejects invalid transitions and records VM before bootstrap", (
       },
     ]);
     recordControllerCleanup(dir, "complete");
-    assert.deepEqual(findOrphanVms(join(root, ".factory", "runs")), []);
+    assert.deepEqual(findOrphanVms(join(root, ".maquila", "runs")), []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
 test("duplicate active and completed inputs are rejected; failed and legacy ready inputs may retry", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-state-"));
+  const root = mkdtempSync(join(tmpdir(), "maquila-state-"));
   try {
     const first = runDir(root, "run-1");
     createControllerState(first, input("run-1"));
@@ -140,7 +140,7 @@ test("duplicate active and completed inputs are rejected; failed and legacy read
     transitionControllerState(first, "failed");
     createControllerState(runDir(root, "run-2"), input("run-2"));
 
-    const decisionRoot = mkdtempSync(join(tmpdir(), "factory-state-decision-"));
+    const decisionRoot = mkdtempSync(join(tmpdir(), "maquila-state-decision-"));
     try {
       const decisionDir = runDir(decisionRoot, "run-1");
       const created = createControllerState(decisionDir, input("run-1"));
@@ -154,7 +154,7 @@ test("duplicate active and completed inputs are rejected; failed and legacy read
       rmSync(decisionRoot, { recursive: true, force: true });
     }
 
-    const readyRoot = mkdtempSync(join(tmpdir(), "factory-state-ready-"));
+    const readyRoot = mkdtempSync(join(tmpdir(), "maquila-state-ready-"));
     try {
       const readyDir = runDir(readyRoot, "run-1");
       createControllerState(readyDir, input("run-1"));
@@ -170,7 +170,7 @@ test("duplicate active and completed inputs are rejected; failed and legacy read
       rmSync(readyRoot, { recursive: true, force: true });
     }
 
-    const completeRoot = mkdtempSync(join(tmpdir(), "factory-state-complete-"));
+    const completeRoot = mkdtempSync(join(tmpdir(), "maquila-state-complete-"));
     try {
       const completeDir = runDir(completeRoot, "run-1");
       createControllerState(completeDir, input("run-1"));
@@ -196,7 +196,7 @@ test("duplicate active and completed inputs are rejected; failed and legacy read
 });
 
 test("retained decision wait keeps claim and can resume planning", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-state-decision-"));
+  const root = mkdtempSync(join(tmpdir(), "maquila-state-decision-"));
   const dir = runDir(root, "run-1");
   try {
     createControllerState(dir, input("run-1"));
@@ -215,7 +215,7 @@ test("retained decision wait keeps claim and can resume planning", () => {
     });
     assert.equal(waiting.state, "awaiting_decision");
     assert.equal(waiting.cleanup, "pending");
-    assert.equal(scanRecoverableControllerStates(join(root, ".factory", "runs")).length, 1);
+    assert.equal(scanRecoverableControllerStates(join(root, ".maquila", "runs")).length, 1);
     assert.throws(
       () => createControllerState(runDir(root, "run-2"), input("run-2")),
       /duplicate active or completed/,
@@ -227,8 +227,8 @@ test("retained decision wait keeps claim and can resume planning", () => {
 });
 
 test("controller recovery removes claims left before state creation", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-state-"));
-  const runs = join(root, ".factory", "controllers");
+  const root = mkdtempSync(join(tmpdir(), "maquila-state-"));
+  const runs = join(root, ".maquila", "controllers");
   const claims = join(runs, ".idempotency");
   try {
     const empty = join(claims, "a".repeat(64));
@@ -245,7 +245,7 @@ test("controller recovery removes claims left before state creation", () => {
 });
 
 test("ready state requires cleanup and is excluded from recovery", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-state-"));
+  const root = mkdtempSync(join(tmpdir(), "maquila-state-"));
   const dir = runDir(root, "run-1");
   try {
     createControllerState(dir, input("run-1"));
@@ -256,14 +256,14 @@ test("ready state requires cleanup and is excluded from recovery", () => {
     for (const step of ["implement", "document", "verify", "review"] as const)
       recordControllerWorkflowStep(dir, step, 1);
     completeControllerWorkflow(dir, "f".repeat(64));
-    assert.deepEqual(scanRecoverableControllerStates(join(root, ".factory", "runs")), []);
+    assert.deepEqual(scanRecoverableControllerStates(join(root, ".maquila", "runs")), []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
 test("v2 workflow cursor and manifest pinning fail closed", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-state-workflow-"));
+  const root = mkdtempSync(join(tmpdir(), "maquila-state-workflow-"));
   const dir = runDir(root, "run-1");
   try {
     const created = createControllerState(dir, input("run-1"));
@@ -299,7 +299,7 @@ test("v2 workflow cursor and manifest pinning fail closed", () => {
 });
 
 test("v2 full cursor progression follows code-owned feature-pr blocks", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-state-blocks-"));
+  const root = mkdtempSync(join(tmpdir(), "maquila-state-blocks-"));
   const dir = runDir(root, "run-1");
   try {
     createControllerState(dir, input("run-1"));
@@ -315,7 +315,7 @@ test("v2 full cursor progression follows code-owned feature-pr blocks", () => {
 });
 
 test("legacy retained decision wait reads and resumes without version rewrite", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-state-legacy-"));
+  const root = mkdtempSync(join(tmpdir(), "maquila-state-legacy-"));
   const dir = runDir(root, "run-1");
   try {
     const created = createControllerState(dir, input("run-1"));
@@ -339,8 +339,8 @@ test("legacy retained decision wait reads and resumes without version rewrite", 
       })}\n`,
     );
     assert.equal(readControllerState(dir).version, 1);
-    assert.equal(scanRecoverableControllerStates(join(root, ".factory", "runs")).length, 1);
-    assert.deepEqual(findOrphanVms(join(root, ".factory", "runs")), [
+    assert.equal(scanRecoverableControllerStates(join(root, ".maquila", "runs")).length, 1);
+    assert.deepEqual(findOrphanVms(join(root, ".maquila", "runs")), [
       {
         runId: "run-1",
         vm: { name: "vm-1", sshDest: "vm.exe.xyz", status: "running" },
@@ -357,11 +357,11 @@ test("legacy retained decision wait reads and resumes without version rewrite", 
 });
 
 test("orphan scan fails closed on malformed state", () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-state-"));
+  const root = mkdtempSync(join(tmpdir(), "maquila-state-"));
   try {
     createControllerState(runDir(root, "run-1"), input("run-1"));
     writeFileSync(join(runDir(root, "run-1"), "controller-state.json"), "{}\n");
-    assert.throws(() => findOrphanVms(join(root, ".factory", "runs")), /invalid controller state/);
+    assert.throws(() => findOrphanVms(join(root, ".maquila", "runs")), /invalid controller state/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -45,7 +45,7 @@ function descriptor(root: string, overrides: Partial<ObserverDescriptor> = {}): 
   };
 }
 function writeDescriptor(root: string, value: ObserverDescriptor): void {
-  mkdirSync(resolve(root, ".factory"), { recursive: true, mode: 0o700 });
+  mkdirSync(resolve(root, ".maquila"), { recursive: true, mode: 0o700 });
   writeFileSync(observerDescriptorPath(root), `${JSON.stringify(value)}\n`, { mode: 0o600 });
 }
 async function malformedTarget(port: number): Promise<string> {
@@ -91,7 +91,7 @@ async function raw(
 }
 
 test("observer serves loopback-only read-only API and accessible static UI", async () => {
-  const root = mkdtempSync(resolve(tmpdir(), "factory-observer-"));
+  const root = mkdtempSync(resolve(tmpdir(), "maquila-observer-"));
   const writer = createTelemetryWriter(root, runId);
   writer.append({ type: "run_created", actor: "controller", payload: { status: "created" } });
   writer.append({
@@ -156,18 +156,18 @@ test("observer serves loopback-only read-only API and accessible static UI", asy
   }
 });
 
-test("archived prompt retrieval binds run, actor, Factory SHA, and telemetry fingerprint", () => {
-  const root = mkdtempSync(resolve(tmpdir(), "factory-observer-prompt-"));
+test("archived prompt retrieval binds run, actor, Maquila SHA, and telemetry fingerprint", () => {
+  const root = mkdtempSync(resolve(tmpdir(), "maquila-observer-prompt-"));
   try {
     const sha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
     const planner = parseAgentDefinition(
       execFileSync("git", ["show", `${sha}:src/agents/planner.md`], { encoding: "utf8" }),
       "src/agents/planner.md",
     );
-    mkdirSync(resolve(root, ".factory", "controllers", runId), { recursive: true });
+    mkdirSync(resolve(root, ".maquila", "controllers", runId), { recursive: true });
     writeFileSync(
-      resolve(root, ".factory", "controllers", runId, "runtime.json"),
-      JSON.stringify({ factorySha: sha, sha256: "0".repeat(64) }),
+      resolve(root, ".maquila", "controllers", runId, "runtime.json"),
+      JSON.stringify({ maquilaSha: sha, sha256: "0".repeat(64) }),
     );
     const writer = createTelemetryWriter(root, runId);
     writer.append({ type: "run_created", actor: "controller", payload: { status: "created" } });
@@ -192,12 +192,12 @@ test("archived prompt retrieval binds run, actor, Factory SHA, and telemetry fin
     });
     assert.equal(archivedSystemPrompt(root, runId, "planner"), planner.systemPrompt);
     assert.throws(() => archivedSystemPrompt(root, runId, "controller"), /invalid prompt request/);
-    const runtimePath = resolve(root, ".factory", "controllers", runId, "runtime.json");
+    const runtimePath = resolve(root, ".maquila", "controllers", runId, "runtime.json");
     for (const runtime of [
-      { factorySha: sha, extra: true },
-      { factorySha: sha },
-      { factorySha: sha, sha256: "not-a-hash" },
-      { factorySha: sha, sha256: "A".repeat(64) },
+      { maquilaSha: sha, extra: true },
+      { maquilaSha: sha },
+      { maquilaSha: sha, sha256: "not-a-hash" },
+      { maquilaSha: sha, sha256: "A".repeat(64) },
     ]) {
       writeFileSync(runtimePath, JSON.stringify(runtime));
       assert.throws(() => archivedSystemPrompt(root, runId, "planner"), /invalid runtime data/);
@@ -208,7 +208,7 @@ test("archived prompt retrieval binds run, actor, Factory SHA, and telemetry fin
 });
 
 test("observer replay tolerates partial tail and reports malformed telemetry safely", async () => {
-  const root = mkdtempSync(resolve(tmpdir(), "factory-observer-"));
+  const root = mkdtempSync(resolve(tmpdir(), "maquila-observer-"));
   try {
     const writer = createTelemetryWriter(root, runId);
     writer.append({ type: "run_created", actor: "controller", payload: { status: "created" } });
@@ -240,7 +240,7 @@ test("observer replay tolerates partial tail and reports malformed telemetry saf
 });
 
 test("observer ensure reuses healthy owner and starts after stale descriptor", async () => {
-  const root = mkdtempSync(resolve(tmpdir(), "factory-observer-"));
+  const root = mkdtempSync(resolve(tmpdir(), "maquila-observer-"));
   try {
     const current = descriptor(root);
     writeDescriptor(root, current);
@@ -425,7 +425,7 @@ test("observer UI preserves focus and truthful partial telemetry state", () => {
 });
 
 test("observer readiness failure terminates owned child before rejection", async () => {
-  const root = mkdtempSync(resolve(tmpdir(), "factory-observer-"));
+  const root = mkdtempSync(resolve(tmpdir(), "maquila-observer-"));
   try {
     let signalCode: NodeJS.Signals | null = null;
     let unrefed = false;
@@ -463,7 +463,7 @@ test("observer readiness failure terminates owned child before rejection", async
 });
 
 test("observer stop requires matching health and process identity", async () => {
-  const root = mkdtempSync(resolve(tmpdir(), "factory-observer-"));
+  const root = mkdtempSync(resolve(tmpdir(), "maquila-observer-"));
   try {
     const value = descriptor(root);
     writeDescriptor(root, value);
@@ -497,7 +497,7 @@ test("observer stop requires matching health and process identity", async () => 
 });
 
 test("observer refuses a non-loopback bind and occupied port", async () => {
-  const root = mkdtempSync(resolve(tmpdir(), "factory-observer-"));
+  const root = mkdtempSync(resolve(tmpdir(), "maquila-observer-"));
   const first = await createObserverServer({ root, port: 0, instanceId });
   try {
     await assert.rejects(

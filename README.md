@@ -1,6 +1,6 @@
-# Software Factory
+# Maquila
 
-Software Factory takes a Linear issue, works on it inside a fresh exe.dev VM, verifies the change, runs an independent review, and opens a ready-for-review GitHub pull request. It never merges. A human owns that decision.
+Maquila takes a Linear issue, works on it inside a fresh exe.dev VM, verifies the change, runs an independent review, and opens a ready-for-review GitHub pull request. It never merges. A human owns that decision.
 
 ## What you need
 
@@ -14,8 +14,8 @@ Software Factory takes a Linear issue, works on it inside a fresh exe.dev VM, ve
 ## Install once
 
 ```bash
-git clone git@github.com:santychuy/software-factory.git
-cd software-factory
+git clone git@github.com:santychuy/maquila.git
+cd maquila
 
 # Install, build the current platform binary, and expose it globally.
 bun install --frozen-lockfile
@@ -23,14 +23,14 @@ bun run build
 bun link
 ```
 
-Confirm binary exists and inspect CLI without starting a Factory workflow:
+Confirm binary exists and inspect CLI without starting a Maquila workflow:
 
 ```bash
-test -x ./dist/factory
-factory --help
+test -x ./dist/maquila
+maquila --help
 ```
 
-`bun run build:binary` rebuilds only the standalone executable for the current OS and CPU. `bun link` keeps the global command linked to this checkout because Factory still needs its agent definitions, Pi skill, and source archive at runtime.
+`bun run build:binary` rebuilds only the standalone executable for the current OS and CPU. `bun link` keeps the global command linked to this checkout because Maquila still needs its agent definitions, Pi skill, and source archive at runtime.
 
 ## Connect GitHub
 
@@ -38,11 +38,11 @@ factory --help
 gh auth login
 ```
 
-Factory reuses this login. For CI, `GITHUB_TOKEN` or `GH_TOKEN` also works.
+Maquila reuses this login. For CI, `GITHUB_TOKEN` or `GH_TOKEN` also works.
 
 ## Connect OpenRouter
 
-Remote planner, worker, documenter, and reviewer sessions use the model pinned in each agent definition. Planner uses `openrouter/z-ai/glm-5.3`; worker, documenter, and reviewer use `openrouter/google/gemini-3.7-flash`. Agent definitions are authoritative, not a run-time `--model` override. The runtime does not bundle an OpenRouter model catalog; `factory doctor` and remote bootstrap validate pinned identifiers against OpenRouter's live catalog. Agent requests cap maximum output at 16,384 tokens so provider credit checks remain bounded.
+Remote planner, worker, documenter, and reviewer sessions use the model pinned in each agent definition. Planner uses `openrouter/z-ai/glm-5.3`; worker, documenter, and reviewer use `openrouter/google/gemini-3.7-flash`. Agent definitions are authoritative, not a run-time `--model` override. The runtime does not bundle an OpenRouter model catalog; `maquila doctor` and remote bootstrap validate pinned identifiers against OpenRouter's live catalog. Agent requests cap maximum output at 16,384 tokens so provider credit checks remain bounded.
 
 Export a key for local commands:
 
@@ -50,13 +50,13 @@ Export a key for local commands:
 export OPENROUTER_API_KEY=...
 ```
 
-Or store only a 1Password reference in Factory config:
+Or store only a 1Password reference in Maquila config:
 
 ```bash
-factory setup --openrouter-token-reference op://Vault/OpenRouter/api-key
+maquila setup --openrouter-token-reference op://Vault/OpenRouter/api-key
 ```
 
-Use a dedicated key with a spend/request cap. During `factory run`, controller writes this key to a mode-`0600` Pi provider file in the VM, best-effort removes that file before VM destruction, then destroys VM. If cleanup fails, revoke dedicated key. This is deliberate transient exception to host-only credential handling; VM is not a security sandbox.
+Use a dedicated key with a spend/request cap. During `maquila run`, controller writes this key to a mode-`0600` Pi provider file in the VM, best-effort removes that file before VM destruction, then destroys VM. If cleanup fails, revoke dedicated key. This is deliberate transient exception to host-only credential handling; VM is not a security sandbox.
 
 ## Connect Linear
 
@@ -71,14 +71,14 @@ export LINEAR_API_TOKEN=...
 ### 1Password
 
 ```bash
-factory setup --linear-token-reference op://Vault/Linear/token
+maquila setup --linear-token-reference op://Vault/Linear/token
 ```
 
-Factory stores only the `op://` reference, never the Linear key. Config lives at `$XDG_CONFIG_HOME/factory/config.json` or `~/.config/factory/config.json` with mode `0600`.
+Maquila stores only the `op://` reference, never the Linear key. Config lives at `$XDG_CONFIG_HOME/maquila/config.json` or `~/.config/maquila/config.json` with mode `0600`.
 
 ## Connect exe.dev
 
-Factory uses SSH. If this works, you are ready:
+Maquila uses SSH. If this works, you are ready:
 
 ```bash
 ssh exe.dev whoami
@@ -89,7 +89,7 @@ Otherwise, create a dedicated key:
 ```bash
 ssh-keygen \
   -t ed25519 \
-  -C "software-factory" \
+  -C "maquila" \
   -f ~/.ssh/id_ed25519_exe
 ```
 
@@ -130,10 +130,10 @@ ssh-add ~/.ssh/id_ed25519_exe
 Alternative: skip SSH config and provide an absolute key path:
 
 ```bash
-export FACTORY_EXE_IDENTITY="$HOME/.ssh/id_ed25519_exe"
+export MAQUILA_EXE_IDENTITY="$HOME/.ssh/id_ed25519_exe"
 ```
 
-Factory keeps the SSH key and agent on your host. It never copies them into the VM and explicitly disables agent forwarding.
+Maquila keeps the SSH key and agent on your host. It never copies them into the VM and explicitly disables agent forwarding.
 
 See exe.dev's official [SSH key setup](https://exe.dev/docs/faq/ssh-key) and [SSH key management](https://exe.dev/docs/cli-ssh-key) documentation.
 
@@ -142,17 +142,17 @@ See exe.dev's official [SSH key setup](https://exe.dev/docs/faq/ssh-key) and [SS
 Install the optional Pi skill:
 
 ```bash
-factory setup --install-skill
+maquila setup --install-skill
 ```
 
-Now enter the repository you want Factory to change:
+Now enter the repository you want Maquila to change:
 
 ```bash
 cd /path/to/your-project
-factory doctor
+maquila doctor
 ```
 
-`factory doctor` checks the current repository, GitHub, Linear, exe.dev SSH, the built CLI, and the Pi skill. If something is missing, it prints the command needed to fix it.
+`maquila doctor` checks the current repository, GitHub, Linear, exe.dev SSH, the built CLI, and the Pi skill. If something is missing, it prints the command needed to fix it.
 
 ## Start your first run
 
@@ -160,10 +160,10 @@ From the target repository:
 
 ```bash
 # Start or reuse the local read-only web dashboard.
-factory dashboard
+maquila dashboard
 
 # Start work for this Linear issue.
-factory run start --issue RIFF-52
+maquila run start --issue RIFF-52
 ```
 
 Expected output:
@@ -176,7 +176,7 @@ Observer: http://127.0.0.1:4600/runs/<run-id>
 
 Open that URL to watch progress.
 
-Factory requires the Linear issue to be `Todo` and assigned. It will:
+Maquila requires the Linear issue to be `Todo` and assigned. It will:
 
 1. Read the Linear issue and assignee.
 2. Create a fresh exe.dev VM.
@@ -186,7 +186,7 @@ Factory requires the Linear issue to be `Todo` and assigned. It will:
 6. Destroy the VM.
 7. Open a ready-for-review GitHub pull request.
 
-If planning needs a human decision, Factory pauses the same run, retains its VM, checkpoints the completed planner session on the controller, removes the VM-local OpenRouter configuration, and comments on the issue mentioning the request-time assignee. Reply in that thread with the numbered `Decision:` template. The detached controller polls every 30 seconds without holding the controller lock, accepts only a pinned-assignee reply for that request, rechecks the Linear and GitHub snapshots, restores the transient model configuration, and resumes the same planner session and VM. Each wait expires after 24 hours, and one run may request at most three decision rounds. Keep the detached controller process running while waiting; hosted webhooks and reboot-time polling recovery are not implemented.
+If planning needs a human decision, Maquila pauses the same run, retains its VM, checkpoints the completed planner session on the controller, removes the VM-local OpenRouter configuration, and comments on the issue mentioning the request-time assignee. Reply in that thread with the numbered `Decision:` template. The detached controller polls every 30 seconds without holding the controller lock, accepts only a pinned-assignee reply for that request, rechecks the Linear and GitHub snapshots, restores the transient model configuration, and resumes the same planner session and VM. Each wait expires after 24 hours, and one run may request at most three decision rounds. Keep the detached controller process running while waiting; hosted webhooks and reboot-time polling recovery are not implemented.
 
 The dashboard is read-only. It shows progress, verification, review, cleanup, failures, and pull-request status. It cannot start, cancel, approve, or merge work.
 
@@ -194,14 +194,14 @@ The dashboard is read-only. It shows progress, verification, review, cleanup, fa
 
 ```bash
 cd /path/to/your-project
-factory dashboard
-factory run start --issue RIFF-52
+maquila dashboard
+maquila run start --issue RIFF-52
 ```
 
 Run against another repository without changing directory:
 
 ```bash
-factory run start \
+maquila run start \
   --target /path/to/another-project \
   --issue RIFF-52
 ```
@@ -209,37 +209,37 @@ factory run start \
 Check a run without the dashboard:
 
 ```bash
-factory run status --run-id <run-id>
+maquila run status --run-id <run-id>
 ```
 
 ## Use through Pi
 
-After `factory setup --install-skill`, open Pi from the target repository and run:
+After `maquila setup --install-skill`, open Pi from the target repository and run:
 
 ```text
-/skill:software-factory Run RIFF-52 in this repository
+/skill:maquila Run RIFF-52 in this repository
 ```
 
-The skill calls the same deterministic Factory CLI. It does not have a separate workflow or credential store.
+The skill calls the same deterministic Maquila CLI. It does not have a separate workflow or credential store.
 
 ## Automation
 
 Human commands use short readable output. Scripts and the Pi skill use JSON:
 
 ```bash
-factory observer ensure --json
-factory run start --issue RIFF-52 --json
-factory run status --run-id <run-id> --json
+maquila observer ensure --json
+maquila run start --issue RIFF-52 --json
+maquila run status --run-id <run-id> --json
 ```
 
-`factory observer ensure --json` is the machine-compatible form of `factory dashboard`: start the local dashboard if absent, otherwise reuse the healthy process.
+`maquila observer ensure --json` is the machine-compatible form of `maquila dashboard`: start the local dashboard if absent, otherwise reuse the healthy process.
 
 ## Troubleshooting
 
 Start here:
 
 ```bash
-factory doctor
+maquila doctor
 ```
 
 Useful checks:
@@ -247,25 +247,25 @@ Useful checks:
 ```bash
 gh auth status
 ssh exe.dev whoami
-factory observer status --json
+maquila observer status --json
 ```
 
 Stop the dashboard process:
 
 ```bash
-factory observer stop --json
+maquila observer stop --json
 ```
 
 ## Security and evidence
 
-Linear and GitHub credentials stay in the host controller. OpenRouter uses a dedicated capped key as deliberate transient exception: controller passes it into VM-local Pi configuration for agent calls, best-effort removes it before VM destruction, then destroys VM. If cleanup fails, revoke dedicated key. VM is not a security sandbox. Runtime evidence remains under the Factory checkout:
+Linear and GitHub credentials stay in the host controller. OpenRouter uses a dedicated capped key as deliberate transient exception: controller passes it into VM-local Pi configuration for agent calls, best-effort removes it before VM destruction, then destroys VM. If cleanup fails, revoke dedicated key. VM is not a security sandbox. Runtime evidence remains under the Maquila checkout:
 
-- `.factory/telemetry/<run-id>.jsonl` — safe live event ledger
-- `.factory/controllers/<run-id>/` — controller state, patch, and harvested evidence
-- `.factory/runs/<run-id>/` — role receipts and transcripts
-- `.factory/observer.json` — private dashboard ownership descriptor
+- `.maquila/telemetry/<run-id>.jsonl` — safe live event ledger
+- `.maquila/controllers/<run-id>/` — controller state, patch, and harvested evidence
+- `.maquila/runs/<run-id>/` — role receipts and transcripts
+- `.maquila/observer.json` — private dashboard ownership descriptor
 
-Generated `.factory/` content is ignored by Git. The dashboard binds only to `127.0.0.1` and accepts read requests only. It exposes a prompt body only when requested through the loopback observer, after the pinned Factory commit and telemetry SHA-256 fingerprint match. Transcripts, tool arguments/results, credentials, and repository content remain excluded.
+Generated `.maquila/` content is ignored by Git. The dashboard binds only to `127.0.0.1` and accepts read requests only. It exposes a prompt body only when requested through the loopback observer, after the pinned Maquila commit and telemetry SHA-256 fingerprint match. Transcripts, tool arguments/results, credentials, and repository content remain excluded.
 
 ## Current limits
 

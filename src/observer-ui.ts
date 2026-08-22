@@ -4,7 +4,7 @@ export const OBSERVER_HTML = `<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>Software Factory Observer</title>
+  <title>Maquila Observer</title>
   <link rel="stylesheet" href="/styles.css">
   <script type="module" src="/app.js"></script>
 </head>
@@ -12,7 +12,7 @@ export const OBSERVER_HTML = `<!doctype html>
   <a class="skip" href="#content">Skip to runs</a>
   <header class="topbar">
     <div>
-      <p class="product">Software Factory</p>
+      <p class="product">Maquila</p>
       <h1>Run observer</h1>
     </div>
     <div id="connection" class="connection" role="status" aria-live="polite">Connecting</div>

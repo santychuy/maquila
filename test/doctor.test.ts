@@ -8,10 +8,10 @@ import { runDoctor } from "../src/doctor.js";
 const MODELS = new Set(["google/gemini-3.7-flash", "z-ai/glm-5.3"]);
 
 test("doctor reports redacted readiness checks", async () => {
-  const root = mkdtempSync(resolve(tmpdir(), "factory-doctor-"));
+  const root = mkdtempSync(resolve(tmpdir(), "maquila-doctor-"));
   try {
     const result = await runDoctor({
-      factoryRoot: root,
+      maquilaRoot: root,
       target: root,
       env: { LINEAR_API_TOKEN: "secret-token", GITHUB_TOKEN: "github-secret" },
       homedir: () => root,
@@ -38,10 +38,10 @@ test("doctor reports redacted readiness checks", async () => {
 });
 
 test("doctor fails when a pinned OpenRouter model is unavailable", async () => {
-  const root = mkdtempSync(resolve(tmpdir(), "factory-doctor-models-"));
+  const root = mkdtempSync(resolve(tmpdir(), "maquila-doctor-models-"));
   try {
     const result = await runDoctor({
-      factoryRoot: root,
+      maquilaRoot: root,
       target: root,
       env: {},
       homedir: () => root,
@@ -67,14 +67,14 @@ test("doctor fails when a pinned OpenRouter model is unavailable", async () => {
 });
 
 test("doctor checks credentials independently and recognizes OpenSSH config", async () => {
-  const root = mkdtempSync(resolve(tmpdir(), "factory-doctor-independent-"));
+  const root = mkdtempSync(resolve(tmpdir(), "maquila-doctor-independent-"));
   try {
     mkdirSync(resolve(root, ".ssh"), { recursive: true });
     writeFileSync(resolve(root, ".ssh", "config"), "Host exe.dev\n");
     mkdirSync(resolve(root, "dist"), { recursive: true });
-    writeFileSync(resolve(root, "dist/factory"), "");
+    writeFileSync(resolve(root, "dist/maquila"), "");
     const result = await runDoctor({
-      factoryRoot: root,
+      maquilaRoot: root,
       target: root,
       env: {},
       homedir: () => root,

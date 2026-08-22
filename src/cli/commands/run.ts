@@ -83,7 +83,7 @@ export function parseRunCommand(
     if (typeof values["run-id"] !== "string" || !UUID.test(values["run-id"]))
       throw new Error("invalid run resume --run-id");
     const identity =
-      typeof values.identity === "string" ? values.identity : process.env.FACTORY_EXE_IDENTITY;
+      typeof values.identity === "string" ? values.identity : process.env.MAQUILA_EXE_IDENTITY;
     if (identity && (!isAbsolute(identity) || identity.includes("\0")))
       throw new Error("exe.dev identity must be an absolute path");
     return {
@@ -124,7 +124,7 @@ export function parseRunCommand(
     )
       throw new Error("--issue, --owner, --repo, --base-ref, and --tag are required");
     const identity =
-      typeof values.identity === "string" ? values.identity : process.env.FACTORY_EXE_IDENTITY;
+      typeof values.identity === "string" ? values.identity : process.env.MAQUILA_EXE_IDENTITY;
     if (identity && (!isAbsolute(identity) || identity.includes("\0")))
       throw new Error("exe.dev identity must be an absolute path");
     return {

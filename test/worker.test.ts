@@ -17,7 +17,7 @@ const planner = {
   summary: "Implement one file",
   evidence: ["Issue requests the change"],
   changes: [{ path: "src/x.ts", action: "add", rationale: "Implement behavior" }],
-  verification: ["factory.verify.json"],
+  verification: ["maquila.verify.json"],
   risks: [],
   decisionsNeeded: [],
 };
@@ -58,7 +58,7 @@ function git(repo: string, ...args: string[]): string {
 }
 
 async function fixture(): Promise<Fixture> {
-  const root = await mkdtemp(join(tmpdir(), "factory-worker-"));
+  const root = await mkdtemp(join(tmpdir(), "maquila-worker-"));
   const repo = join(root, "repo");
   await mkdir(repo);
   git(repo, "init", "-q");
@@ -67,7 +67,7 @@ async function fixture(): Promise<Fixture> {
   git(repo, "config", "commit.gpgsign", "false");
   const issue = join(root, "issue.md");
   const envelope = join(root, "planner.json");
-  await writeFile(join(repo, "factory.verify.json"), '{"commands":[["true"]]}\n');
+  await writeFile(join(repo, "maquila.verify.json"), '{"commands":[["true"]]}\n');
   await writeFile(issue, "Do change\n");
   await writeFile(envelope, JSON.stringify(planner));
   git(repo, "add", ".");

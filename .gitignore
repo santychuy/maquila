@@ -1,5 +1,5 @@
 node_modules/
 dist/
 .*.bun-build
-.factory/
+.maquila/
 artifacts/

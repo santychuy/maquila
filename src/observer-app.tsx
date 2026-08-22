@@ -160,7 +160,7 @@ function RunList({ runs }: { runs: RunStatusSummary[] }) {
       ))}
     </>
   ) : (
-    <p class="empty">No runs yet. Start one with the factory skill or run start command.</p>
+    <p class="empty">No runs yet. Start one with the maquila skill or run start command.</p>
   );
 }
 function eventDetail(event: TelemetryRecord): string {

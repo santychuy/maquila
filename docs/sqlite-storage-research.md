@@ -8,7 +8,7 @@ See [observer](observer.md), [foundation checkpoint](foundation-checkpoint.md), 
 
 Load this section first.
 
-- Factory does not save everything in JSONL. Runtime storage is a mix of JSONL ledgers and transcripts, atomic JSON state snapshots, Markdown, patches, TAR evidence, logs, lock files, and directory claims.
+- Maquila does not save everything in JSONL. Runtime storage is a mix of JSONL ledgers and transcripts, atomic JSON state snapshots, Markdown, patches, TAR evidence, logs, lock files, and directory claims.
 - A full move to SQLite is not justified by current scale and would make evidence harder to inspect and harvest.
 - Best first candidate is a **rebuildable SQLite observer index** derived from validated canonical telemetry. JSONL remains authoritative, and deleting the database is a complete rollback.
 - Later candidate is authoritative controller metadata: run state, telemetry, idempotency, publication, and artifact metadata. This requires an explicit architecture decision because it changes recovery and acceptance boundaries.
@@ -30,7 +30,7 @@ Recommended direction:
 
 ### Canonical host telemetry
 
-Path: `.factory/telemetry/<run-id>.jsonl`
+Path: `.maquila/telemetry/<run-id>.jsonl`
 
 Purpose: controller-owned safe live event ledger used by run status and observer APIs.
 
@@ -46,7 +46,7 @@ This is append-only evidence with query-heavy readers. It is the clearest SQLite
 
 ### Agent-run evidence
 
-Paths under `.factory/runs/<run-id>/`:
+Paths under `.maquila/runs/<run-id>/`:
 
 - `events.jsonl`
 - `sessions/*.jsonl`
@@ -64,7 +64,7 @@ These files are normally read or harvested by run, not queried across all runs. 
 
 ### Controller state and evidence
 
-Paths under `.factory/controllers/<run-id>/` include:
+Paths under `.maquila/controllers/<run-id>/` include:
 
 - `controller-state.json`
 - `receipt.json`
@@ -86,13 +86,13 @@ Structured controller metadata is a later SQLite candidate. Patches, archives, M
 
 Other durable paths include:
 
-- `.factory/controllers/.idempotency/<hash>/run-id`
-- `.factory/attempts/<run-id>/recovery.json`
-- `.factory/controller.lock`
-- `.factory/controller.lock.acquire/owner.json`
-- `.factory/launches/<run-id>/accepted.json`
-- `.factory/launches/<run-id>/termination-unconfirmed.json`
-- `.factory/observer.json`
+- `.maquila/controllers/.idempotency/<hash>/run-id`
+- `.maquila/attempts/<run-id>/recovery.json`
+- `.maquila/controller.lock`
+- `.maquila/controller.lock.acquire/owner.json`
+- `.maquila/launches/<run-id>/accepted.json`
+- `.maquila/launches/<run-id>/termination-unconfirmed.json`
+- `.maquila/observer.json`
 - controller and observer stdout/stderr logs
 
 These records coordinate process ownership and crash recovery. Do not replace controller lock, observer ownership, or detached-launch handshake in the first SQLite slice. Moving idempotency claims later may be useful, but only together with controller state and equivalent restart tests.
@@ -101,7 +101,7 @@ These records coordinate process ownership and crash recovery. Do not replace co
 
 Snapshot from this checkout on 2026-08-20:
 
-- `.factory`: about 11 MB total.
+- `.maquila`: about 11 MB total.
 - Canonical host telemetry: 10 ledgers, 1,070 events, about 361 KB.
 - JSON snapshots: 121 files, about 966 KB.
 - All JSONL, including harvested agent events and transcripts: 40 files, about 3.8 MB.
@@ -157,7 +157,7 @@ SQLite supports a limited set of direct `ALTER TABLE` operations. Larger changes
 
 Write-ahead logging allows readers and one writer to coexist, matching the serial-controller design. WAL relies on shared memory and does not work on network filesystems. Active state can include the database plus `-wal` and `-shm` files. Copying only the main database while it is active can lose committed data.
 
-Use SQLite backup APIs or `VACUUM INTO` for live copies. Confirm `.factory` is on reliable local storage before enabling WAL; otherwise reject unsupported placement or use a deliberately tested journal mode.
+Use SQLite backup APIs or `VACUUM INTO` for live copies. Confirm `.maquila` is on reliable local storage before enabling WAL; otherwise reject unsupported placement or use a deliberately tested journal mode.
 
 ### Runtime variation
 
@@ -200,7 +200,7 @@ Do not introduce controller-to-database dual writes in this slice. Let one proje
 
 Risk: medium.
 
-Replace `.factory/telemetry/<run-id>.jsonl` as live query authority with an events table, while optionally exporting terminal per-run JSONL for evidence and compatibility.
+Replace `.maquila/telemetry/<run-id>.jsonl` as live query authority with an events table, while optionally exporting terminal per-run JSONL for evidence and compatibility.
 
 Required parity:
 
@@ -281,7 +281,7 @@ Stop if current JSONL behavior meets expected retention scale.
 
 ### Slice 1: disposable observer index
 
-- Create private local database under `.factory/`.
+- Create private local database under `.maquila/`.
 - Version schema from first commit.
 - Import only fully validated canonical ledgers.
 - Preserve observer HTTP contract and invalid/legacy behavior.
@@ -337,7 +337,7 @@ Any migration must keep these repository contracts:
 Resolve these before an implementation plan:
 
 1. Expected retained run count and observer latency budget.
-2. Whether `.factory` may live on NFS, synchronized folders, or shared VM mounts.
+2. Whether `.maquila` may live on NFS, synchronized folders, or shared VM mounts.
 3. Supported host operating systems for Bun standalone binaries.
 4. Minimum SQLite version and exact SQL feature floor.
 5. Whether SQLite begins as disposable projection or immediate authority.

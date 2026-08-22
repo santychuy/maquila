@@ -1,8 +1,8 @@
-# Software Factory Agent Guide
+# Maquila Agent Guide
 
 ## Purpose
 
-This repository is building a small, local software factory one proven slice at a time. Its intended contract is:
+This repository is building a small, local maquila one proven slice at a time. Its intended contract is:
 
 1. Accept a validated Linear feature issue.
 2. Run bounded Pi agent sessions in a fresh exe.dev VM pinned to a repository SHA.
@@ -22,18 +22,18 @@ Implemented now:
 - Generic `runAgent()` Pi session execution with isolated resources, receipts, events, session transcripts, and cooperative timeouts.
 - Typed planner, worker, documenter, and reviewer envelopes with structural and semantic validation.
 - A `submit_envelope` tool and one same-session correction attempt.
-- Executable read-only planner command: `factory pi plan`.
+- Executable read-only planner command: `maquila pi plan`.
 - Code-controlled `feature-pr` recipe: accepted plan becomes strict `workflow-manifest.json`; serial blocks run implement (or trusted docs-only skip), document, deterministic verify, and fresh review; completed work writes `workflow-execution.json` bound to manifest and reviewed patch.
-- Executable local worker/documenter/reviewer lifecycle: `factory pi worker`; worker owns approved non-doc paths, documenter owns approved docs paths, then deterministic verification and fresh review cover aggregate diff. Omitted local manifest uses compatibility/dev fallback; `factory run` supplies canonical controller manifest.
-- Deterministic verification: `factory.verify.json` argv commands plus exact Git diff gate (`src/verify.ts`).
+- Executable local worker/documenter/reviewer lifecycle: `maquila pi worker`; worker owns approved non-doc paths, documenter owns approved docs paths, then deterministic verification and fresh review cover aggregate diff. Omitted local manifest uses compatibility/dev fallback; `maquila run` supplies canonical controller manifest.
+- Deterministic verification: `maquila.verify.json` argv commands plus exact Git diff gate (`src/verify.ts`).
 - Controller-side assigned Linear `Todo` issue and GitHub base-SHA snapshot primitives with credential-free hashes.
 - Planner decision handoff: blocked plans pause the same run as `awaiting_decision`; the controller retains the VM, checkpoints the completed planner session, removes transient model credentials, and polls a numbered Linear thread for a pinned-assignee `Decision:` reply before resuming the same session. Waits expire after 24 hours and allow at most three rounds.
-- Executable `factory run`: single-host lock, restart cleanup, pinned Node/Bun bootstrap, remote planner/worker/documenter/verification/reviewer, evidence and patch harvest, VM destruction, then controller-side bot branch and ready-for-review pull-request publication.
+- Executable `maquila run`: single-host lock, restart cleanup, pinned Node/Bun bootstrap, remote planner/worker/documenter/verification/reviewer, evidence and patch harvest, VM destruction, then controller-side bot branch and ready-for-review pull-request publication.
 - Remote protocol v2 and host telemetry carry strict workflow step identity. New controller state v2 records recipe, manifest hash, step, and attempt; state v1 remains readable and resumable for retained decision waits. `run status` and observer expose current workflow checkpoint.
 - Accepted detached `run start` and read-only `run status`.
-- Managed loopback observer server/UI with replay/cursor polling, human `factory dashboard` startup alias, and factory-owned `.pi/skills/software-factory` command routing.
-- Global `factory` executable through a Bun-compiled binary and `bun link`, with cwd target inference, `--target` override, human output, and explicit `--json` mode.
-- `factory setup` and `factory doctor` for strict XDG config, optional Linear and OpenRouter `op://` references, optional user-scope Pi skill, credential checks, and remediation.
+- Managed loopback observer server/UI with replay/cursor polling, human `maquila dashboard` startup alias, and maquila-owned `.pi/skills/maquila` command routing.
+- Global `maquila` executable through a Bun-compiled binary and `bun link`, with cwd target inference, `--target` override, human output, and explicit `--json` mode.
+- `maquila setup` and `maquila doctor` for strict XDG config, optional Linear and OpenRouter `op://` references, optional user-scope Pi skill, credential checks, and remediation.
 - OpenRouter execution for all four roles. Each `src/agents/*.md` definition must declare an authoritative pinned `openrouter/<provider>/<model>` identifier; current defaults are `openrouter/google/gemini-3.7-flash` for worker/documenter/reviewer and `openrouter/z-ai/glm-5.3` for planner. No complete model catalog is bundled; doctor and remote bootstrap validate against OpenRouter's live catalog. Agent requests cap maximum output at 16,384 tokens.
 - Controller-side credential precedence for GitHub (`GITHUB_TOKEN`, `GH_TOKEN`, `gh auth token`) and Linear (`LINEAR_API_TOKEN`, then `op read`); optional exe.dev identity with OpenSSH config/agent support and no agent forwarding.
 
@@ -42,7 +42,7 @@ Not implemented yet:
 - Fix pass and interrupted model-request resume.
 - General planning outcomes delivered only to controller-owned external surfaces; the implemented Linear handoff covers unresolved engineer decisions only, and successful publication still requires a non-empty repository diff.
 - Guaranteed hard termination when exe.dev cleanup itself is unavailable.
-- Runtime state is still stored under the Factory checkout. Linear OAuth, native keychain storage, and credential profiles are not implemented.
+- Runtime state is still stored under the Maquila checkout. Linear OAuth, native keychain storage, and credential profiles are not implemented.
 
 See `ARCHITECTURE.md` for design boundaries, `docs/foundation-checkpoint.md` for verified current state, and `docs/workflows.md` before changing workflow behavior.
 
@@ -69,15 +69,15 @@ Current execution is not a security sandbox. Read-only tools stop mutation but d
 - `src/workflow-step.ts` — canonical workflow step, phase, and actor identity.
 - `src/workflows/plan.ts` — validates planner inputs, snapshots issue context, runs planner, and writes `plan.md`.
 - `src/workflows/feature-pr.ts`, `manifest.ts`, `execution.ts`, and `worker.ts` — code-owned recipe resolution, strict work-order/completion contracts, and serial block execution.
-- `src/run-artifacts.ts` — creates `.factory/runs/<run-id>/` and writes evidence.
-- `src/verify.ts` — fail-closed `factory.verify.json` parsing, command execution, exact Git gate.
+- `src/run-artifacts.ts` — creates `.maquila/runs/<run-id>/` and writes evidence.
+- `src/verify.ts` — fail-closed `maquila.verify.json` parsing, command execution, exact Git gate.
 - `src/integrations/linear.ts`, `src/integrations/github.ts`, and `src/intake.ts` — immutable external input snapshots, assigned-engineer decision comments/replies, idempotency hash, and controller-side GitHub publication.
 - `src/run-state.ts` and `src/integrations/exe.ts` — atomic PoC state plus tested exe.dev SSH/SCP command boundaries.
 - `src/controller-lock.ts`, `src/controller.ts`, and `src/controller-chain.ts` — serial controller ownership, restart reconciliation, remote execution, retained same-run decision polling/resume, harvest, and cleanup.
 - `src/telemetry.ts`, `src/remote-protocol.ts`, `src/run-launcher.ts`, and `src/run-status.ts` — bounded live event contract, detached accepted start, and safe status replay.
 - `src/observer.ts`, `src/observer-ui.ts`, and `src/observer-app.tsx` — loopback-only read API, managed server ownership, and Preact polling dashboard bundled by Bun.
 - `src/cli/index.ts` — `agents list`, setup/doctor, local Pi commands, remote run commands, human dashboard alias, observer machine commands, and exit-code handling.
-- `factory.verify.json` — this repository's argv verification commands.
+- `maquila.verify.json` — this repository's argv verification commands.
 - `src/agents/*.md` — role metadata in YAML frontmatter and role system prompt in Markdown body.
 - `test/*.test.ts` — Node test-runner coverage for CLI, role boundaries, envelopes, failures, and artifact safety.
 - `docs/envelopes.md` — envelope contract and limitations.
@@ -85,7 +85,7 @@ Current execution is not a security sandbox. Read-only tools stop mutation but d
 - `docs/foundation-checkpoint.md` — evidence-backed implementation checkpoint.
 - `examples/issue.md` — sample feature issue.
 
-Generated `dist/`, `node_modules/`, and `.factory/` content is ignored. Do not edit or commit it.
+Generated `dist/`, `node_modules/`, and `.maquila/` content is ignored. Do not edit or commit it.
 
 ## Development Commands
 
@@ -100,26 +100,26 @@ bun run format:check
 bun run check
 ```
 
-The repository pins Bun through `packageManager` and commits `bun.lock`. `bun run build` emits compiled JavaScript plus the current-platform standalone `dist/factory` executable.
+The repository pins Bun through `packageManager` and commits `bun.lock`. `bun run build` emits compiled JavaScript plus the current-platform standalone `dist/maquila` executable.
 
 `bun run check` is the required full local gate. It runs type-aware Oxlint, verifies Oxfmt output, type-checks, runs compiled Node tests, builds the standalone binary, and smoke-checks its help path.
 
 Useful CLI checks after building:
 
 ```bash
-bun run factory -- agents list
-bun run factory -- pi plan \
+bun run maquila -- agents list
+bun run maquila -- pi plan \
   --repo /absolute/path/to/repository \
   --issue ./examples/issue.md \
   --timeout-seconds 300
-factory setup
-factory doctor
+maquila setup
+maquila doctor
 cd /absolute/path/to/repository
-factory dashboard
-factory run start --issue RIFF-52
+maquila dashboard
+maquila run start --issue RIFF-52
 ```
 
-Planner execution requires Pi authentication for the selected model. It writes evidence under `.factory/` relative to the directory where the command runs. Exit codes are `0` for completion, `1` for failure, and `124` for timeout.
+Planner execution requires Pi authentication for the selected model. It writes evidence under `.maquila/` relative to the directory where the command runs. Exit codes are `0` for completion, `1` for failure, and `124` for timeout.
 
 ## Code Conventions
 
@@ -166,7 +166,7 @@ In envelope mode, `submit_envelope` must be the agent's final action. Invalid or
 
 ## Evidence Contract
 
-Each role run lives at `.factory/runs/<run-id>/` and may contain:
+Each role run lives at `.maquila/runs/<run-id>/` and may contain:
 
 - `issue.md` — snapshotted input.
 - `events.jsonl` — concise lifecycle and envelope events.
@@ -177,7 +177,7 @@ Each role run lives at `.factory/runs/<run-id>/` and may contain:
 
 Failed or timed-out runs must not expose a successful envelope. Keep receipts honest: skipped, failed, or unavailable checks must never be reported as passing.
 
-Controller evidence lives at `.factory/controllers/<run-id>/`. Current workflow artifacts include `workflow-manifest.json` version 1, harvested `workflow-execution.json` version 1, `controller-state.json` version 2, `change.patch`, `evidence-manifest.json`, and `publication.json` after publication. Host telemetry lives at `.factory/telemetry/<run-id>.jsonl`. Hash links prove consistency, not authenticity against a compromised VM.
+Controller evidence lives at `.maquila/controllers/<run-id>/`. Current workflow artifacts include `workflow-manifest.json` version 1, harvested `workflow-execution.json` version 1, `controller-state.json` version 2, `change.patch`, `evidence-manifest.json`, and `publication.json` after publication. Host telemetry lives at `.maquila/telemetry/<run-id>.jsonl`. Hash links prove consistency, not authenticity against a compromised VM.
 
 ## Git Hooks
 
