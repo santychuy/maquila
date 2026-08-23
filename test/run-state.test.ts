@@ -33,7 +33,7 @@ function input(runId: string, idempotencyKey = "a".repeat(64)): ControllerStateI
   return {
     runId,
     idempotencyKey,
-    workflow: { id: "feature-pr", version: 1, definitionSha256: featurePrDefinitionSha256() },
+    workflow: { id: "feature-pr", version: 2, definitionSha256: featurePrDefinitionSha256() },
     issueUuid: "7c3cd7a0-2503-40fe-9f33-56588786452a",
     issueSnapshotSha256: "b".repeat(64),
     repositoryId: 123,

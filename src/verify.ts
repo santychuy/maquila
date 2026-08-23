@@ -4,12 +4,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-export const VERIFY_CONFIG_NAME = "maquila.verify.json";
 export const DEFAULT_COMMAND_TIMEOUT_MS = 900_000;
-
-export interface VerifyConfig {
-  commands: string[][];
-}
 
 export interface CommandEvidence {
   argv: string[];
@@ -31,7 +26,6 @@ export interface GitGateResult {
 
 export interface VerificationResult {
   passed: boolean;
-  config: VerifyConfig;
   commands: CommandEvidence[];
   git: GitGateResult;
 }
@@ -40,6 +34,7 @@ export interface VerifyOptions {
   repo: string;
   baseSha: string;
   allowedPaths: string[];
+  commands: string[][];
   commandTimeoutMs?: number;
 }
 
@@ -58,36 +53,14 @@ function exactSha(value: unknown): string {
   return sha;
 }
 
-export function parseVerifyConfig(raw: unknown): VerifyConfig {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    fail("maquila.verify.json must be an object");
-  }
-  const unknown = Object.keys(raw).filter((key) => key !== "commands");
-  if (unknown.length) fail(`unknown fields: ${unknown.join(", ")}`);
-  if (!("commands" in raw) || !Array.isArray(raw.commands) || raw.commands.length === 0) {
-    fail("commands must be a non-empty array");
-  }
-
-  const commands = raw.commands.map((argv, index) => {
+function assertCommands(commands: string[][]): string[][] {
+  if (!Array.isArray(commands) || commands.length === 0) fail("commands must be a non-empty array");
+  return commands.map((argv, index) => {
     if (!Array.isArray(argv) || argv.length === 0) {
       fail(`commands[${index}] must be a non-empty argv array`);
     }
     return argv.map((part, partIndex) => nonBlank(part, `commands[${index}][${partIndex}]`));
   });
-
-  return { commands };
-}
-
-export function loadVerifyConfig(repo: string, baseSha: string): VerifyConfig {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(git(repo, "show", `${exactSha(baseSha)}:${VERIFY_CONFIG_NAME}`));
-  } catch (error) {
-    fail(
-      `cannot read ${VERIFY_CONFIG_NAME} at base SHA: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-  return parseVerifyConfig(parsed);
 }
 
 function git(repo: string, ...args: string[]): string {
@@ -170,9 +143,7 @@ export function evaluateGitGate(
     };
   }
 
-  const unexpectedPaths = paths.filter(
-    (path) => path === VERIFY_CONFIG_NAME || !isAllowed(path, allowed),
-  );
+  const unexpectedPaths = paths.filter((path) => !isAllowed(path, allowed));
   if (unexpectedPaths.length) {
     return {
       passed: false,
@@ -249,11 +220,11 @@ export async function verifyRepository(options: VerifyOptions): Promise<Verifica
     fail("commandTimeoutMs must be a positive integer");
   }
 
-  const config = loadVerifyConfig(repo, options.baseSha);
+  const configuredCommands = assertCommands(options.commands);
   const commands: CommandEvidence[] = [];
   let commandsPassed = true;
 
-  for (const argv of config.commands) {
+  for (const argv of configuredCommands) {
     const evidence = await runCommand(repo, argv, timeoutMs);
     commands.push(evidence);
     if (evidence.timedOut || evidence.exitCode !== 0) {
@@ -265,7 +236,6 @@ export async function verifyRepository(options: VerifyOptions): Promise<Verifica
   const gitGate = evaluateGitGate(repo, options.baseSha, options.allowedPaths);
   return {
     passed: commandsPassed && gitGate.passed,
-    config,
     commands,
     git: gitGate,
   };

@@ -17,7 +17,7 @@ const planner = {
   summary: "Implement one file",
   evidence: ["Issue requests the change"],
   changes: [{ path: "src/x.ts", action: "add", rationale: "Implement behavior" }],
-  verification: ["maquila.verify.json"],
+  verification: ["bun run check"],
   risks: [],
   decisionsNeeded: [],
 };
@@ -67,7 +67,7 @@ async function fixture(): Promise<Fixture> {
   git(repo, "config", "commit.gpgsign", "false");
   const issue = join(root, "issue.md");
   const envelope = join(root, "planner.json");
-  await writeFile(join(repo, "maquila.verify.json"), '{"commands":[["true"]]}\n');
+  await writeFile(join(repo, "keep.txt"), "base\n");
   await writeFile(issue, "Do change\n");
   await writeFile(envelope, JSON.stringify(planner));
   git(repo, "add", ".");
@@ -137,7 +137,6 @@ function verification(
   const timedOut = overrides.timedOut ?? false;
   return {
     passed,
-    config: { commands: [["true"]] },
     commands: [
       {
         argv: ["true"],

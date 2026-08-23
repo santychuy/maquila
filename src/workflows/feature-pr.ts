@@ -3,7 +3,11 @@ import { assertSafeRepoPath } from "../verify.js";
 import { workflowStep, type WorkflowStepDescriptor } from "../workflow-step.js";
 
 export const FEATURE_PR_WORKFLOW_ID = "feature-pr";
-export const FEATURE_PR_WORKFLOW_VERSION = 1;
+export const FEATURE_PR_WORKFLOW_VERSION = 2;
+export const FEATURE_PR_VERIFY_CODE = {
+  kind: "command",
+  commands: [["bun", "run", "check"]],
+} as const;
 
 // Strict manifest/execution tuple schemas mirror this order; invariant tests enforce the mirror.
 export const FEATURE_PR_BLOCKS = ["implement", "document", "verify", "review"] as const;
@@ -24,9 +28,6 @@ export function isDocumentationPath(path: string): boolean {
 export function authorizedFeaturePrPaths(plan: PlannerEnvelope): string[] {
   const paths = plan.changes.map((change) => assertSafeRepoPath(change.path));
   if (new Set(paths).size !== paths.length) throw new Error("planner contains duplicate paths");
-  if (paths.includes("maquila.verify.json")) {
-    throw new Error("planner cannot approve maquila.verify.json");
-  }
   return paths;
 }
 

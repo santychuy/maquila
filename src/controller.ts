@@ -377,25 +377,18 @@ export function harvest(archive: string, runDir: string, expected: HarvestExpect
       const safe = assertSafeRepoPath(path);
       return [...allowed].some((prefix) => safe === prefix || safe.startsWith(`${prefix}/`));
     })();
-  const verificationConfig =
-    isRecord(verification) && isRecord(verification.config) ? verification.config : undefined;
-  const configuredCommands =
-    verificationConfig && Array.isArray(verificationConfig.commands)
-      ? verificationConfig.commands
-      : undefined;
+  const pinnedCommands = expected.manifest.steps[2].code.commands;
   const commandsPass =
     isRecord(verification) &&
-    configuredCommands !== undefined &&
     Array.isArray(verification.commands) &&
-    verification.commands.length > 0 &&
-    configuredCommands.length === verification.commands.length &&
+    verification.commands.length === pinnedCommands.length &&
     verification.commands.every(
       (command, index) =>
         isRecord(command) &&
         Array.isArray(command.argv) &&
         command.argv.length > 0 &&
         command.argv.every((part) => typeof part === "string" && part.length > 0) &&
-        JSON.stringify(configuredCommands[index]) === JSON.stringify(command.argv) &&
+        JSON.stringify(pinnedCommands[index]) === JSON.stringify(command.argv) &&
         command.exitCode === 0 &&
         command.timedOut === false,
     );

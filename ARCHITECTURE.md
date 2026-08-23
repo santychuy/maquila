@@ -47,7 +47,7 @@ Workflow cursor inside `executing` records current step and attempt. State v1 re
 
 1. **Agent definitions:** validated Markdown plus YAML frontmatter contracts for planner, worker, documenter, and reviewer.
 2. **Pi planner:** one SDK session, explicit model, definition-derived tools/prompt, deadline, durable receipt.
-3. **Deterministic verification:** repository-defined commands and exact Git diff gate.
+3. **Deterministic verification:** a first-class verifier code actor runs recipe-defined, manifest-pinned commands and the exact Git diff gate.
 4. **Pi worker, documenter, and reviewer:** sequential disjoint-writer policy, fresh review context, typed outputs.
 5. **Controller state:** atomic run state, idempotency, restart recovery, and canonical append-only telemetry.
 6. **exe.dev lifecycle:** create, inspect, execute, harvest, destroy, orphan cleanup.

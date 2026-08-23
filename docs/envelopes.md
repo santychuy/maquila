@@ -71,4 +71,4 @@ All four schemas execute locally and through remote controller. Worker and docum
 
 ## Still needed
 
-Envelopes control output shape, not product truth. Controller independently requires repository-defined commands, exact Git diff/ownership checks, artifact safety, distinct role evidence, reviewed-patch binding, and reviewer `PASS`. Controller-side GitHub publication is implemented. Guaranteed cleanup while exe.dev deletion is unavailable remains future work. See [foundation checkpoint](foundation-checkpoint.md), [observer](observer.md), and [architecture](../ARCHITECTURE.md).
+Envelopes control output shape, not product truth. Controller independently requires the verifier code actor's manifest-pinned commands, exact Git diff/ownership checks, artifact safety, distinct role evidence, reviewed-patch binding, and reviewer `PASS`. Controller-side GitHub publication is implemented. Guaranteed cleanup while exe.dev deletion is unavailable remains future work. See [foundation checkpoint](foundation-checkpoint.md), [observer](observer.md), and [architecture](../ARCHITECTURE.md).

@@ -8,8 +8,8 @@ Implemented foundation through M1–M5:
 
 - Generic `runAgent()` owns one bounded Pi session, isolated resources, events, receipts, artifacts, and cooperative timeout handling.
 - Typed planner, worker, documenter, and reviewer envelopes fail closed on invalid claims.
-- `feature-pr` is one code-owned recipe. Accepted plan resolves approved paths and generates strict version-1 `workflow-manifest.json` bound to recipe definition, planner run, and base SHA.
-- Serial block executor runs implement (or trusted docs-only skip), document, deterministic verify, and fresh review. Successful result writes version-1 `workflow-execution.json` bound to manifest and reviewed patch.
+- `feature-pr` is one code-owned recipe. Accepted plan resolves approved paths and generates strict version-2 `workflow-manifest.json` bound to recipe definition, planner run, base SHA, explicit agent/code actor kinds, and the verifier's command-backed code definition.
+- Serial block executor runs implement (or trusted docs-only skip), document, deterministic verify, and fresh review. The verifier is a code actor that runs manifest-pinned `bun run check` plus the exact Git gate. Successful result writes version-1 `workflow-execution.json` bound to manifest and reviewed patch.
 - Remote protocol v2 carries canonical step identity. New controller state v2 records recipe, pinned manifest hash, current step, and attempt; state v1 remains readable and resumable for retained decision waits.
 - Host telemetry, `run status`, and observer preserve current workflow checkpoint. Observer remains read-only.
 
@@ -26,7 +26,7 @@ GitHub write credentials never enter VM. OpenRouter uses dedicated capped key as
 - `src/workflow-step.ts` defines canonical step, actor, and phase identity.
 - `src/workflows/feature-pr.ts`, `manifest.ts`, and `execution.ts` define current recipe, strict manifest, definition/manifest hashes, completed run links, and reviewed-patch binding.
 - `src/run-artifacts.ts` creates `.maquila/runs/<run-id>/`, snapshots input, appends JSONL events, and writes JSON artifacts.
-- `src/verify.ts` loads `maquila.verify.json`, executes repository checks, and evaluates the exact Git diff gate.
+- `src/verify.ts` executes manifest-pinned repository checks and evaluates the exact Git diff gate.
 - `src/workflows/worker.ts` runs sequential disjoint worker/documenter writers, deterministic verification, and a separate reviewer with aggregate lifecycle evidence.
 - `src/integrations/linear.ts`, `src/integrations/github.ts`, and `src/intake.ts` validate and hash immutable external inputs. Linear intake requires an assignee. A decision request pins that assignee, issue, round, question hash, and request time; only a later numbered `Decision:` reply from that pinned assignee is eligible. `src/integrations/github.ts` publishes an idempotent controller-side branch and ready-for-review pull request without storing credentials.
 - `src/run-state.ts` atomically stores fail-closed controller state. New runs use v2 `executing` state plus workflow cursor; readers and decision resume retain v1 compatibility.

@@ -233,7 +233,6 @@ function receipt(
 function validArchive(root: string, unsafeLink = false, reviewDigest = PATCH_SHA256): string {
   const verification = {
     passed: true,
-    config: { commands: [["bun", "run", "check"]] },
     commands: [
       {
         argv: ["bun", "run", "check"],
@@ -357,7 +356,6 @@ function validDocsOnlyArchive(root: string): string {
   rmSync(join(root, ".maquila", "runs", ids[1]!), { recursive: true, force: true });
   const verification = {
     passed: true,
-    config: { commands: [["bun", "run", "check"]] },
     commands: [
       {
         argv: ["bun", "run", "check"],
@@ -573,6 +571,16 @@ test("harvest rejects duplicate run identities and mismatched receipts", () => {
 
 test("harvest binds verification, role links, base SHA, and reviewed patch", () => {
   const cases: Array<{ name: string; mutate(root: string): void }> = [
+    {
+      name: "command differs from manifest",
+      mutate(root) {
+        const verification = JSON.parse(
+          readFileSync(join(root, ".maquila", "runs", ids[1]!, "verification.json"), "utf8"),
+        ) as { commands: Array<{ argv: string[] }> };
+        verification.commands[0]!.argv = ["true"];
+        file(root, ids[1]!, "verification.json", JSON.stringify(verification));
+      },
+    },
     {
       name: "failed command",
       mutate(root) {
@@ -1978,6 +1986,7 @@ test("controller completes docs-only remote lifecycle without a worker run", asy
     ) as { steps: Array<{ id: string; status: string; skipReason?: string }> };
     assert.deepEqual(workflowManifest.steps[0], {
       id: "implement",
+      actorKind: "agent",
       status: "skipped",
       skipReason: "docs-only",
     });
@@ -2378,7 +2387,7 @@ test("recovery reports complete cleanup for a derived creating_vm name", async (
       idempotencyKey: "d".repeat(64),
       workflow: {
         id: "feature-pr",
-        version: 1,
+        version: 2,
         definitionSha256: featurePrDefinitionSha256(),
       },
       issueUuid: "issue",

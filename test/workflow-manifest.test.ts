@@ -24,29 +24,31 @@ function plan(paths: string[]): PlannerEnvelope {
     summary: "Plan",
     evidence: ["Issue"],
     changes: paths.map((path) => ({ path, action: "modify", rationale: "Needed" })),
-    verification: ["maquila.verify.json"],
+    verification: ["bun run check"],
     risks: [],
     decisionsNeeded: [],
   };
 }
 
-test("mixed and docs-only manifests are strict and hashed", () => {
+test("manifests pin actor kinds and bun run check", () => {
   const mixed = createFeaturePrManifest({
     plannerRunId: PLANNER_RUN_ID,
     baseSha: BASE_SHA,
     plan: plan(["src/x.ts", "docs/guide.md"]),
   });
+  assert.equal(mixed.version, 2);
   assert.equal(mixed.workflowId, "feature-pr");
   assert.equal(mixed.definitionSha256, featurePrDefinitionSha256());
   assert.deepEqual(featurePrDefinition(), {
     id: "feature-pr",
-    version: 1,
+    version: 2,
     postPlanSteps: [
-      { id: "implement", phase: "implementing", actor: "worker" },
-      { id: "document", phase: "documenting", actor: "documenter" },
-      { id: "verify", phase: "verifying", actor: "verifier" },
-      { id: "review", phase: "reviewing", actor: "reviewer" },
+      { id: "implement", phase: "implementing", actor: "worker", actorKind: "agent" },
+      { id: "document", phase: "documenting", actor: "documenter", actorKind: "agent" },
+      { id: "verify", phase: "verifying", actor: "verifier", actorKind: "code" },
+      { id: "review", phase: "reviewing", actor: "reviewer", actorKind: "agent" },
     ],
+    verifier: { kind: "command", commands: [["bun", "run", "check"]] },
     policies: {
       documentationPathOwnership: "docs-prefix-documenter-only",
       docsOnlyImplementSkip: "skip-when-no-non-documentation-paths",
@@ -54,13 +56,18 @@ test("mixed and docs-only manifests are strict and hashed", () => {
   });
   assert.equal(
     featurePrDefinitionSha256(),
-    "30cb47c2408814282363592f044a67364c802fe7aa69cddbac991096626ed2e3",
+    "d81fd62b250c928c14803bac5769c3794140acdceada395d6897e0bfb0bc4ff3",
   );
   assert.deepEqual(mixed.steps, [
-    { id: "implement", status: "pending" },
-    { id: "document", status: "pending" },
-    { id: "verify", status: "pending" },
-    { id: "review", status: "pending" },
+    { id: "implement", actorKind: "agent", status: "pending" },
+    { id: "document", actorKind: "agent", status: "pending" },
+    {
+      id: "verify",
+      actorKind: "code",
+      status: "pending",
+      code: { kind: "command", commands: [["bun", "run", "check"]] },
+    },
+    { id: "review", actorKind: "agent", status: "pending" },
   ]);
   assert.deepEqual(
     mixed.steps.map((step) => step.id),
@@ -72,19 +79,23 @@ test("mixed and docs-only manifests are strict and hashed", () => {
     plan: plan(["docs/guide.md"]),
   });
   assert.deepEqual(docsOnly.steps, [
-    { id: "implement", status: "skipped", skipReason: "docs-only" },
-    { id: "document", status: "pending" },
-    { id: "verify", status: "pending" },
-    { id: "review", status: "pending" },
+    { id: "implement", actorKind: "agent", status: "skipped", skipReason: "docs-only" },
+    { id: "document", actorKind: "agent", status: "pending" },
+    {
+      id: "verify",
+      actorKind: "code",
+      status: "pending",
+      code: { kind: "command", commands: [["bun", "run", "check"]] },
+    },
+    { id: "review", actorKind: "agent", status: "pending" },
   ]);
   assert.deepEqual(
     docsOnly.steps.map((step) => step.id),
     FEATURE_PR_BLOCKS,
   );
-  assert.equal(docsOnly.steps[0] && "skipReason" in docsOnly.steps[0], true);
 });
 
-test("manifest rejects unknown, tampered, and mismatched data", () => {
+test("manifest rejects tampered, unsupported, and mismatched code definitions", () => {
   const valid = createFeaturePrManifest({
     plannerRunId: PLANNER_RUN_ID,
     baseSha: BASE_SHA,
@@ -106,12 +117,7 @@ test("manifest rejects unknown, tampered, and mismatched data", () => {
     () =>
       parseWorkflowManifest({
         ...valid,
-        steps: [
-          { id: "review", status: "pending" },
-          { id: "implement", status: "pending" },
-          { id: "document", status: "pending" },
-          { id: "verify", status: "pending" },
-        ],
+        steps: [valid.steps[3], valid.steps[0], valid.steps[1], valid.steps[2]],
       }),
     /invalid workflow manifest/,
   );
@@ -119,39 +125,45 @@ test("manifest rejects unknown, tampered, and mismatched data", () => {
     () => parseWorkflowManifest({ ...valid, allowedPaths: ["src/x.ts", "src/x.ts"] }),
     /duplicate paths/,
   );
+  const incorrectlySkipped = structuredClone(valid.steps);
+  incorrectlySkipped[0] = {
+    id: "implement",
+    actorKind: "agent",
+    status: "skipped",
+    skipReason: "docs-only",
+  } as never;
   assert.throws(
-    () => parseWorkflowManifest({ ...valid, allowedPaths: ["maquila.verify.json"] }),
-    /maquila.verify.json/,
-  );
-  assert.throws(
-    () =>
-      parseWorkflowManifest({
-        ...valid,
-        steps: [
-          { id: "implement", status: "skipped", skipReason: "docs-only" },
-          { id: "document", status: "pending" },
-          { id: "verify", status: "pending" },
-          { id: "review", status: "pending" },
-        ],
-      }),
+    () => parseWorkflowManifest({ ...valid, steps: incorrectlySkipped }),
     /steps do not match approved paths/,
+  );
+  const steps = structuredClone(valid.steps);
+  steps[2] = {
+    ...steps[2],
+    code: { kind: "command", commands: [["node", "-e", "process.exit(0)"]] },
+  } as never;
+  assert.throws(() => parseWorkflowManifest({ ...valid, steps }), /invalid workflow manifest/);
+  const unsupported = structuredClone(valid.steps);
+  unsupported[2] = {
+    ...unsupported[2],
+    code: { kind: "handler", commands: [["bun", "run", "check"]] },
+  } as never;
+  assert.throws(
+    () => parseWorkflowManifest({ ...valid, steps: unsupported }),
+    /invalid workflow manifest/,
   );
   const docsOnly = createFeaturePrManifest({
     plannerRunId: PLANNER_RUN_ID,
     baseSha: BASE_SHA,
     plan: plan(["docs/guide.md"]),
   });
+  const incorrectlyPending = structuredClone(docsOnly.steps);
+  incorrectlyPending[0] = {
+    id: "implement",
+    actorKind: "agent",
+    status: "pending",
+  } as never;
   assert.throws(
-    () =>
-      parseWorkflowManifest({
-        ...docsOnly,
-        steps: [
-          { id: "implement", status: "pending" },
-          { id: "document", status: "pending" },
-          { id: "verify", status: "pending" },
-          { id: "review", status: "pending" },
-        ],
-      }),
+    () => parseWorkflowManifest({ ...docsOnly, steps: incorrectlyPending }),
     /steps do not match approved paths/,
   );
   assert.throws(
@@ -195,13 +207,7 @@ test("planner run identity comes from envelope directory or local fallback", () 
     const path = join(root, "workflow-manifest.json");
     writeFileSync(
       path,
-      `${JSON.stringify(
-        createFeaturePrManifest({
-          plannerRunId: LOCAL_PLANNER_RUN_ID,
-          baseSha: BASE_SHA,
-          plan: plan(["src/x.ts"]),
-        }),
-      )}\n`,
+      `${JSON.stringify(createFeaturePrManifest({ plannerRunId: LOCAL_PLANNER_RUN_ID, baseSha: BASE_SHA, plan: plan(["src/x.ts"]) }))}\n`,
     );
     assert.equal(readWorkflowManifest(path).plannerRunId, LOCAL_PLANNER_RUN_ID);
   } finally {

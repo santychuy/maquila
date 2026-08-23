@@ -7,6 +7,7 @@ import type { PlannerEnvelope } from "../envelope.js";
 import { assertSafeRepoPath } from "../verify.js";
 import {
   FEATURE_PR_BLOCKS,
+  FEATURE_PR_VERIFY_CODE,
   FEATURE_PR_WORKFLOW_ID,
   FEATURE_PR_WORKFLOW_VERSION,
   isDocumentationPath,
@@ -14,14 +15,24 @@ import {
 } from "./feature-pr.js";
 import { workflowStep } from "../workflow-step.js";
 
-export const WORKFLOW_MANIFEST_VERSION = 1;
+export const WORKFLOW_MANIFEST_VERSION = 2;
 export const LOCAL_PLANNER_RUN_ID = "local";
 const PLANNER_RUN_ID = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|local)$/;
 const BASE_SHA = /^[0-9a-f]{40}$/;
 
+const CommandCodeSchema = Type.Object(
+  {
+    kind: Type.Literal("command"),
+    commands: Type.Tuple([
+      Type.Tuple([Type.Literal("bun"), Type.Literal("run"), Type.Literal("check")]),
+    ]),
+  },
+  { additionalProperties: false },
+);
 const SkippedImplementSchema = Type.Object(
   {
     id: Type.Literal("implement"),
+    actorKind: Type.Literal("agent"),
     status: Type.Literal("skipped"),
     skipReason: Type.Literal("docs-only"),
   },
@@ -39,21 +50,38 @@ export const WorkflowManifestSchema = Type.Object(
     steps: Type.Tuple([
       Type.Union([
         Type.Object(
-          { id: Type.Literal("implement"), status: Type.Literal("pending") },
+          {
+            id: Type.Literal("implement"),
+            actorKind: Type.Literal("agent"),
+            status: Type.Literal("pending"),
+          },
           { additionalProperties: false },
         ),
         SkippedImplementSchema,
       ]),
       Type.Object(
-        { id: Type.Literal("document"), status: Type.Literal("pending") },
+        {
+          id: Type.Literal("document"),
+          actorKind: Type.Literal("agent"),
+          status: Type.Literal("pending"),
+        },
         { additionalProperties: false },
       ),
       Type.Object(
-        { id: Type.Literal("verify"), status: Type.Literal("pending") },
+        {
+          id: Type.Literal("verify"),
+          actorKind: Type.Literal("code"),
+          status: Type.Literal("pending"),
+          code: CommandCodeSchema,
+        },
         { additionalProperties: false },
       ),
       Type.Object(
-        { id: Type.Literal("review"), status: Type.Literal("pending") },
+        {
+          id: Type.Literal("review"),
+          actorKind: Type.Literal("agent"),
+          status: Type.Literal("pending"),
+        },
         { additionalProperties: false },
       ),
     ]),
@@ -67,6 +95,7 @@ export function featurePrDefinition() {
     id: FEATURE_PR_WORKFLOW_ID,
     version: FEATURE_PR_WORKFLOW_VERSION,
     postPlanSteps: FEATURE_PR_BLOCKS.map(workflowStep),
+    verifier: FEATURE_PR_VERIFY_CODE,
     policies: {
       documentationPathOwnership: "docs-prefix-documenter-only",
       docsOnlyImplementSkip: "skip-when-no-non-documentation-paths",
@@ -88,11 +117,16 @@ export function plannerRunIdFromEnvelopePath(plannerEnvelope: string): string {
 function expectedSteps(implementPaths: string[]): WorkflowManifest["steps"] {
   return [
     implementPaths.length
-      ? { id: "implement", status: "pending" }
-      : { id: "implement", status: "skipped", skipReason: "docs-only" },
-    { id: "document", status: "pending" },
-    { id: "verify", status: "pending" },
-    { id: "review", status: "pending" },
+      ? { id: "implement", actorKind: "agent", status: "pending" }
+      : { id: "implement", actorKind: "agent", status: "skipped", skipReason: "docs-only" },
+    { id: "document", actorKind: "agent", status: "pending" },
+    {
+      id: "verify",
+      actorKind: "code",
+      status: "pending",
+      code: { kind: "command", commands: [["bun", "run", "check"]] },
+    },
+    { id: "review", actorKind: "agent", status: "pending" },
   ];
 }
 
@@ -122,8 +156,6 @@ export function parseWorkflowManifest(value: unknown): WorkflowManifest {
   const allowed = value.allowedPaths.map(assertSafeRepoPath);
   if (new Set(allowed).size !== allowed.length)
     throw new Error("workflow manifest contains duplicate paths");
-  if (allowed.includes("maquila.verify.json"))
-    throw new Error("planner cannot approve maquila.verify.json");
   if (JSON.stringify(allowed) !== JSON.stringify(value.allowedPaths))
     throw new Error("invalid workflow manifest paths");
   if (value.definitionSha256 !== featurePrDefinitionSha256())

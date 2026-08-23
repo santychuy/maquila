@@ -328,6 +328,7 @@ async function runVerifyBlock(context: BlockContext, state: BlockState): Promise
       repo: context.repo,
       baseSha: context.baseSha,
       allowedPaths: context.allowedPaths,
+      commands: context.manifest.steps[2].code.commands.map((argv) => [...argv]),
       commandTimeoutMs: context.timeoutSeconds * 1000,
     });
   } catch (error) {

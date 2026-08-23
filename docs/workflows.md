@@ -20,7 +20,7 @@ Only one recipe exists. `plan` runs first. Accepted plan produces manifest. Seri
 1. **plan** — read-only planner proposes allowed paths and checks. Unresolved decisions pause same run.
 2. **implement** — worker changes approved non-`docs/` paths. For a docs-only plan, code records trusted `docs-only` skip instead.
 3. **document** — documenter changes approved `docs/` paths. It cannot alter worker-owned content.
-4. **verify** — code runs `maquila.verify.json` commands and exact Git diff gate over aggregate change.
+4. **verify** — code runs manifest-pinned `bun run check` and exact Git diff gate over aggregate change.
 5. **review** — fresh read-only reviewer receives accepted plan, staged patch, and deterministic verification result.
 6. **publish** — controller verifies harvested evidence and patch binding, destroys VM, applies patch against pinned base in temporary clone, then creates bot commit, branch, and ready-for-review PR.
 
@@ -49,13 +49,13 @@ Change concern in owner above. Keep IDs aligned through `workflowStep()` instead
 
 Controller run lives at `.maquila/controllers/<run-id>/`. Agent run evidence remains under `.maquila/runs/<role-run-id>/`; host telemetry lives at `.maquila/telemetry/<run-id>.jsonl`.
 
-| Artifact                  |          Version | Binding                                                                                                                        |
-| ------------------------- | ---------------: | ------------------------------------------------------------------------------------------------------------------------------ |
-| `workflow-manifest.json`  |                1 | Recipe ID/version and definition SHA-256; planner run ID; pinned base SHA; exact allowed paths; ordered pending/skipped blocks |
-| `workflow-execution.json` |                1 | SHA-256 of exact manifest JSON; completed role run IDs; trusted skip; SHA-256 of reviewed staged patch                         |
-| `controller-state.json`   |        2 current | Recipe identity/hash, manifest hash after planning, latest step ID and attempt                                                 |
-| Remote frames             |       protocol 2 | Gap-free sequence plus required step ID, actor, and phase identity                                                             |
-| Host telemetry JSONL      | record version 1 | Gap-free host sequence; step-tagged phases validate matching step, actor, and phase                                            |
+| Artifact                  |          Version | Binding                                                                                                                                                                 |
+| ------------------------- | ---------------: | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workflow-manifest.json`  |                2 | Recipe ID/version and definition SHA-256; planner run ID; pinned base SHA; exact allowed paths; ordered blocks with agent/code actor kinds and verifier code definition |
+| `workflow-execution.json` |                1 | SHA-256 of exact manifest JSON; completed role run IDs; trusted skip; SHA-256 of reviewed staged patch                                                                  |
+| `controller-state.json`   |        2 current | Recipe identity/hash, manifest hash after planning, latest step ID and attempt                                                                                          |
+| Remote frames             |       protocol 2 | Gap-free sequence plus required step ID, actor, and phase identity                                                                                                      |
+| Host telemetry JSONL      | record version 1 | Gap-free host sequence; step-tagged phases validate matching step, actor, and phase                                                                                     |
 
 Primary run also holds `verification.json`, `review-diff.sha256`, `lifecycle.json`, and `workflow-execution.json`. Controller harvest checks expected run set, receipts, envelopes, ownership, verification, reviewer verdict, base SHA, and reviewed patch. `evidence-manifest.json` hashes harvested remote evidence files.
 

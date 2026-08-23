@@ -25,7 +25,7 @@ Implemented now:
 - Executable read-only planner command: `maquila pi plan`.
 - Code-controlled `feature-pr` recipe: accepted plan becomes strict `workflow-manifest.json`; serial blocks run implement (or trusted docs-only skip), document, deterministic verify, and fresh review; completed work writes `workflow-execution.json` bound to manifest and reviewed patch.
 - Executable local worker/documenter/reviewer lifecycle: `maquila pi worker`; worker owns approved non-doc paths, documenter owns approved docs paths, then deterministic verification and fresh review cover aggregate diff. Omitted local manifest uses compatibility/dev fallback; `maquila run` supplies canonical controller manifest.
-- Deterministic verification: `maquila.verify.json` argv commands plus exact Git diff gate (`src/verify.ts`).
+- Deterministic verification: manifest-pinned argv commands plus exact Git diff gate (`src/verify.ts`).
 - Controller-side assigned Linear `Todo` issue and GitHub base-SHA snapshot primitives with credential-free hashes.
 - Planner decision handoff: blocked plans pause the same run as `awaiting_decision`; the controller retains the VM, checkpoints the completed planner session, removes transient model credentials, and polls a numbered Linear thread for a pinned-assignee `Decision:` reply before resuming the same session. Waits expire after 24 hours and allow at most three rounds.
 - Executable `maquila run`: single-host lock, restart cleanup, pinned Node/Bun bootstrap, remote planner/worker/documenter/verification/reviewer, evidence and patch harvest, VM destruction, then controller-side bot branch and ready-for-review pull-request publication.
@@ -70,14 +70,13 @@ Current execution is not a security sandbox. Read-only tools stop mutation but d
 - `src/workflows/plan.ts` — validates planner inputs, snapshots issue context, runs planner, and writes `plan.md`.
 - `src/workflows/feature-pr.ts`, `manifest.ts`, `execution.ts`, and `worker.ts` — code-owned recipe resolution, strict work-order/completion contracts, and serial block execution.
 - `src/run-artifacts.ts` — creates `.maquila/runs/<run-id>/` and writes evidence.
-- `src/verify.ts` — fail-closed `maquila.verify.json` parsing, command execution, exact Git gate.
+- `src/verify.ts` — manifest-pinned command execution and exact Git gate.
 - `src/integrations/linear.ts`, `src/integrations/github.ts`, and `src/intake.ts` — immutable external input snapshots, assigned-engineer decision comments/replies, idempotency hash, and controller-side GitHub publication.
 - `src/run-state.ts` and `src/integrations/exe.ts` — atomic PoC state plus tested exe.dev SSH/SCP command boundaries.
 - `src/controller-lock.ts`, `src/controller.ts`, and `src/controller-chain.ts` — serial controller ownership, restart reconciliation, remote execution, retained same-run decision polling/resume, harvest, and cleanup.
 - `src/telemetry.ts`, `src/remote-protocol.ts`, `src/run-launcher.ts`, and `src/run-status.ts` — bounded live event contract, detached accepted start, and safe status replay.
 - `src/observer.ts`, `src/observer-ui.ts`, and `src/observer-app.tsx` — loopback-only read API, managed server ownership, and Preact polling dashboard bundled by Bun.
 - `src/cli/index.ts` — `agents list`, setup/doctor, local Pi commands, remote run commands, human dashboard alias, observer machine commands, and exit-code handling.
-- `maquila.verify.json` — this repository's argv verification commands.
 - `src/agents/*.md` — role metadata in YAML frontmatter and role system prompt in Markdown body.
 - `test/*.test.ts` — Node test-runner coverage for CLI, role boundaries, envelopes, failures, and artifact safety.
 - `docs/envelopes.md` — envelope contract and limitations.
@@ -177,7 +176,7 @@ Each role run lives at `.maquila/runs/<run-id>/` and may contain:
 
 Failed or timed-out runs must not expose a successful envelope. Keep receipts honest: skipped, failed, or unavailable checks must never be reported as passing.
 
-Controller evidence lives at `.maquila/controllers/<run-id>/`. Current workflow artifacts include `workflow-manifest.json` version 1, harvested `workflow-execution.json` version 1, `controller-state.json` version 2, `change.patch`, `evidence-manifest.json`, and `publication.json` after publication. Host telemetry lives at `.maquila/telemetry/<run-id>.jsonl`. Hash links prove consistency, not authenticity against a compromised VM.
+Controller evidence lives at `.maquila/controllers/<run-id>/`. Current workflow artifacts include `workflow-manifest.json` version 2, harvested `workflow-execution.json` version 1, `controller-state.json` version 2, `change.patch`, `evidence-manifest.json`, and `publication.json` after publication. Host telemetry lives at `.maquila/telemetry/<run-id>.jsonl`. Hash links prove consistency, not authenticity against a compromised VM.
 
 ## Git Hooks
 

@@ -15,7 +15,7 @@ function plan(paths: string[]): PlannerEnvelope {
     summary: "Plan",
     evidence: ["Issue"],
     changes: paths.map((path) => ({ path, action: "modify", rationale: "Needed" })),
-    verification: ["maquila.verify.json"],
+    verification: ["bun run check"],
     risks: [],
     decisionsNeeded: [],
   };
@@ -34,10 +34,10 @@ test("mixed plan keeps implement then document, verify, and review", () => {
     plan: plan(["src/x.ts", "docs/guide.md"]),
   });
   assert.deepEqual(featurePrRemoteStepsFromManifest(mixed.steps), [
-    { id: "implement", phase: "implementing", actor: "worker" },
-    { id: "document", phase: "documenting", actor: "documenter" },
-    { id: "verify", phase: "verifying", actor: "verifier" },
-    { id: "review", phase: "reviewing", actor: "reviewer" },
+    { id: "implement", phase: "implementing", actor: "worker", actorKind: "agent" },
+    { id: "document", phase: "documenting", actor: "documenter", actorKind: "agent" },
+    { id: "verify", phase: "verifying", actor: "verifier", actorKind: "code" },
+    { id: "review", phase: "reviewing", actor: "reviewer", actorKind: "agent" },
   ]);
 });
 
@@ -51,17 +51,13 @@ test("docs-only plan skips implement", () => {
     plan: plan(["docs/guide.md"]),
   });
   assert.deepEqual(featurePrRemoteStepsFromManifest(docsOnly.steps), [
-    { id: "document", phase: "documenting", actor: "documenter" },
-    { id: "verify", phase: "verifying", actor: "verifier" },
-    { id: "review", phase: "reviewing", actor: "reviewer" },
+    { id: "document", phase: "documenting", actor: "documenter", actorKind: "agent" },
+    { id: "verify", phase: "verifying", actor: "verifier", actorKind: "code" },
+    { id: "review", phase: "reviewing", actor: "reviewer", actorKind: "agent" },
   ]);
   assert.equal(docsOnly.steps.find((step) => step.id === "implement")?.status, "skipped");
 });
 
-test("authorized paths reject duplicates and maquila.verify.json", () => {
+test("authorized paths reject duplicates", () => {
   assert.throws(() => authorizedFeaturePrPaths(plan(["src/a.ts", "src/a.ts"])), /duplicate paths/);
-  assert.throws(
-    () => authorizedFeaturePrPaths(plan(["maquila.verify.json"])),
-    /maquila.verify.json/,
-  );
 });
