@@ -32,19 +32,45 @@ maquila --help
 
 `bun run build:binary` rebuilds only the standalone executable for the current OS and CPU. `bun link` keeps the global command linked to this checkout because Maquila still needs its agent definitions, Pi skill, and source archive at runtime.
 
-## Connect GitHub
+## Guided setup
+
+Run setup from repository Maquila will change, or pass its path explicitly:
 
 ```bash
-gh auth login
+cd /path/to/your-project
+maquila setup
+
+# Equivalent from another directory:
+maquila setup --target /path/to/your-project
 ```
 
-Maquila reuses this login. For CI, `GITHUB_TOKEN` or `GH_TOKEN` also works.
+Setup detects existing credentials, prints direct official links for anything missing, optionally accepts only 1Password `op://` references, and runs read-only readiness checks. It never accepts raw keys, opens browsers, changes SSH state, or creates a VM. Exit code is `0` when required checks pass and `1` when setup remains blocked.
 
-## Connect OpenRouter
+After setup passes:
+
+```bash
+maquila run start --issue RIFF-52
+```
+
+## Credential details
+
+Use these options when guided setup reports missing access.
+
+### GitHub
+
+Use browser login:
+
+```bash
+gh auth login --web --hostname github.com
+```
+
+Or create a fine-grained token at https://github.com/settings/personal-access-tokens/new and set `GITHUB_TOKEN`. For CI, `GH_TOKEN` also works.
+
+### OpenRouter
 
 Remote planner, worker, documenter, and reviewer sessions use the model pinned in each agent definition. Planner uses `openrouter/z-ai/glm-5.3`; worker, documenter, and reviewer use `openrouter/google/gemini-3.7-flash`. Agent definitions are authoritative, not a run-time `--model` override. The runtime does not bundle an OpenRouter model catalog; `maquila doctor` and remote bootstrap validate pinned identifiers against OpenRouter's live catalog. Agent requests cap maximum output at 16,384 tokens so provider credit checks remain bounded.
 
-Export a key for local commands:
+Create keys at https://openrouter.ai/settings/keys. Export a key for local commands:
 
 ```bash
 export OPENROUTER_API_KEY=...
@@ -58,9 +84,9 @@ maquila setup --openrouter-token-reference op://Vault/OpenRouter/api-key
 
 Use a dedicated key with a spend/request cap. During `maquila run`, controller writes this key to a mode-`0600` Pi provider file in the VM, best-effort removes that file before VM destruction, then destroys VM. If cleanup fails, revoke dedicated key. This is deliberate transient exception to host-only credential handling; VM is not a security sandbox.
 
-## Connect Linear
+### Linear
 
-Choose one option.
+Create keys at https://linear.app/settings/api. Choose one option.
 
 ### Shell or CI
 
@@ -76,7 +102,7 @@ maquila setup --linear-token-reference op://Vault/Linear/token
 
 Maquila stores only the `op://` reference, never the Linear key. Config lives at `$XDG_CONFIG_HOME/maquila/config.json` or `~/.config/maquila/config.json` with mode `0600`.
 
-## Connect exe.dev
+### exe.dev
 
 Maquila uses SSH. If this works, you are ready:
 
@@ -135,24 +161,11 @@ export MAQUILA_EXE_IDENTITY="$HOME/.ssh/id_ed25519_exe"
 
 Maquila keeps the SSH key and agent on your host. It never copies them into the VM and explicitly disables agent forwarding.
 
-See exe.dev's official [SSH key setup](https://exe.dev/docs/faq/ssh-key) and [SSH key management](https://exe.dev/docs/cli-ssh-key) documentation.
+See exe.dev's official SSH key setup: https://exe.dev/docs/cli-ssh-key
 
-## Finish setup
+## Repeat readiness checks
 
-Install the optional Pi skill:
-
-```bash
-maquila setup --install-skill
-```
-
-Now enter the repository you want Maquila to change:
-
-```bash
-cd /path/to/your-project
-maquila doctor
-```
-
-`maquila doctor` checks the current repository, GitHub, Linear, exe.dev SSH, the built CLI, and the Pi skill. If something is missing, it prints the command needed to fix it.
+Run `maquila doctor --target /path/to/your-project` later to repeat setup's read-only checks. It checks GitHub target/base access, credential resolution, anonymous model catalog, and exe.dev VM listing; it does not create a VM. Optional Pi skill install and 1Password CLI setup: https://developer.1password.com/docs/cli/get-started/.
 
 ## Start your first run
 

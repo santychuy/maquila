@@ -17,6 +17,10 @@ const SSH_OPTIONS = [
   "-o",
   "HostKeyAlias=exe.dev",
   "-o",
+  "StrictHostKeyChecking=yes",
+  "-o",
+  "UpdateHostKeys=no",
+  "-o",
   "ForwardAgent=no",
 ];
 

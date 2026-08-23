@@ -9,26 +9,26 @@ import {
   resolveOpenRouterKey,
   type CredentialRunner,
 } from "./credentials.js";
-import { resolveTargetRepository } from "./target.js";
+import { ExeClient } from "./integrations/exe.js";
+import { fetchGitHubSnapshot } from "./integrations/github.js";
+import { resolveTargetRepository, type TargetRepository } from "./target.js";
 
 export type CheckStatus = "pass" | "fail" | "warn";
-
 export interface DoctorCheck {
   id: string;
   status: CheckStatus;
   message: string;
   remediation?: string;
 }
-
 export interface DoctorResult {
   version: 1;
   ok: boolean;
   checks: DoctorCheck[];
 }
-
 export interface DoctorOptions {
   json?: boolean;
   target?: string;
+  identity?: string;
   env?: NodeJS.ProcessEnv;
   maquilaRoot: string;
   homedir?: typeof defaultHomedir;
@@ -46,9 +46,20 @@ export interface DoctorOptions {
   ) => Promise<string>;
   resolveModelIds?: () => Promise<Set<string>>;
   loadConfig?: typeof loadMaquilaConfig;
+  fetchGithubSnapshot?: (options: {
+    token: string;
+    owner: string;
+    repo: string;
+    baseRef: string;
+  }) => Promise<unknown>;
+  listVms?: (identity: string | undefined, env: NodeJS.ProcessEnv) => Promise<unknown>;
   write?: (text: string) => void;
 }
 
+const GITHUB_URL = "https://github.com/settings/personal-access-tokens/new";
+const LINEAR_URL = "https://linear.app/settings/api";
+const OPENROUTER_URL = "https://openrouter.ai/settings/keys";
+const EXE_URL = "https://exe.dev/docs/cli-ssh-key";
 function check(
   id: string,
   ok: boolean,
@@ -57,15 +68,15 @@ function check(
   remediation?: string,
   warn = false,
 ): DoctorCheck {
-  if (ok) return { id, status: "pass", message: pass };
-  return {
-    id,
-    status: warn ? "warn" : "fail",
-    message: fail,
-    ...(remediation ? { remediation } : {}),
-  };
+  return ok
+    ? { id, status: "pass", message: pass }
+    : {
+        id,
+        status: warn ? "warn" : "fail",
+        message: fail,
+        ...(remediation ? { remediation } : {}),
+      };
 }
-
 async function resolveOpenRouterModelIds(): Promise<Set<string>> {
   const response = await fetch("https://openrouter.ai/api/v1/models", {
     signal: AbortSignal.timeout(10_000),
@@ -82,121 +93,101 @@ async function resolveOpenRouterModelIds(): Promise<Set<string>> {
     ),
   );
 }
-
-function sshReady(env: NodeJS.ProcessEnv, home: string): boolean {
-  const identity = env.MAQUILA_EXE_IDENTITY?.trim();
-  if (identity) return isAbsolute(identity) && !identity.includes("\0") && existsSync(identity);
-  const sock = env.SSH_AUTH_SOCK;
-  if (sock && sock.trim() && !sock.includes("\0")) return true;
-  return (
-    existsSync(resolve(home, ".ssh", "config")) ||
-    ["id_ed25519", "id_rsa", "id_ecdsa"].some((name) => existsSync(resolve(home, ".ssh", name)))
-  );
-}
-
 export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
-  const env = options.env ?? process.env;
-  const targetPath = options.target ?? process.cwd();
-  const write = options.write ?? ((text) => process.stdout.write(text));
-  const loadConfig = options.loadConfig ?? loadMaquilaConfig;
-  const resolveTarget = options.resolveTarget ?? resolveTargetRepository;
-  const resolveGithub = options.resolveGithub ?? resolveGithubToken;
-  const resolveLinear = options.resolveLinear ?? resolveLinearToken;
-  const resolveOpenRouter = options.resolveOpenRouter ?? resolveOpenRouterKey;
+  const env = options.env ?? process.env,
+    write = options.write ?? ((text) => process.stdout.write(text));
+  const resolveTarget = options.resolveTarget ?? resolveTargetRepository,
+    resolveGithub = options.resolveGithub ?? resolveGithubToken;
+  const resolveLinear = options.resolveLinear ?? resolveLinearToken,
+    resolveOpenRouter = options.resolveOpenRouter ?? resolveOpenRouterKey;
   const checks: DoctorCheck[] = [];
   let config: MaquilaConfig | undefined;
+  let target: TargetRepository | undefined;
   try {
-    config = loadConfig({ env, homedir: options.homedir });
+    config = (options.loadConfig ?? loadMaquilaConfig)({ env, homedir: options.homedir });
     checks.push(check("config", true, "maquila config valid", "invalid maquila config"));
   } catch {
-    checks.push(
-      check("config", false, "", "invalid maquila config", "fix ~/.config/maquila/config.json"),
-    );
+    checks.push(check("config", false, "", "invalid maquila config", "fix maquila config"));
   }
   try {
-    const target = resolveTarget({ target: targetPath, env });
+    target = resolveTarget({ target: options.target ?? process.cwd(), env });
     checks.push(
       check(
         "target",
         true,
-        `${target.owner}/${target.repo}`,
+        "GitHub target resolved",
         "target is not a supported GitHub repository",
+        "cd into a GitHub clone or pass --target",
       ),
     );
-  } catch (error) {
+  } catch {
     checks.push(
       check(
         "target",
         false,
         "",
-        error instanceof Error ? error.message : "target is not a supported GitHub repository",
+        "target is not a supported GitHub repository",
         "cd into a GitHub clone or pass --target",
       ),
     );
   }
-  if (config) {
-    const [github, linear, openrouter] = await Promise.allSettled([
-      resolveGithub(env),
-      resolveLinear(env, config),
-      resolveOpenRouter(env, config),
-    ]);
-    checks.push(
-      check(
-        "github",
-        github.status === "fulfilled",
-        "GitHub credential resolvable",
-        "GitHub credential unavailable",
-        "gh auth login or export GITHUB_TOKEN",
-      ),
-    );
-    checks.push(
-      check(
-        "linear",
-        linear.status === "fulfilled",
-        "Linear credential resolvable",
-        "Linear credential unavailable",
-        "export LINEAR_API_TOKEN or maquila setup --linear-token-reference op://Vault/Item/field",
-      ),
-    );
-    checks.push(
-      check(
-        "openrouter",
-        openrouter.status === "fulfilled",
-        "OpenRouter credential resolvable",
-        "OpenRouter credential unavailable",
-        "export OPENROUTER_API_KEY or maquila setup --openrouter-token-reference op://Vault/Item/field",
-      ),
-    );
-  } else {
-    checks.push(
-      check("github", false, "", "GitHub credential not checked", "fix maquila config first"),
-    );
-    checks.push(
-      check("linear", false, "", "Linear credential not checked", "fix maquila config first"),
-    );
-    checks.push(
-      check(
-        "openrouter",
-        false,
-        "",
-        "OpenRouter credential not checked",
-        "fix maquila config first",
-      ),
-    );
-  }
+  const [github, linear, openrouter] = await Promise.allSettled([
+    resolveGithub(env),
+    resolveLinear(env, config),
+    resolveOpenRouter(env, config),
+  ]);
+  const githubToken = github.status === "fulfilled" ? github.value : undefined;
+  let githubOk = Boolean(githubToken && target);
+  if (githubToken && target)
+    try {
+      await (options.fetchGithubSnapshot ?? fetchGitHubSnapshot)({
+        token: githubToken,
+        owner: target.owner,
+        repo: target.repo,
+        baseRef: target.baseRef,
+      });
+    } catch {
+      githubOk = false;
+    }
+  checks.push(
+    check(
+      "github",
+      githubOk,
+      "GitHub authenticated read-only target/base probe succeeded",
+      "GitHub credential or authenticated target/base read unavailable",
+      `gh auth login --web --hostname github.com or export GITHUB_TOKEN\n${GITHUB_URL}`,
+    ),
+  );
+  checks.push(
+    check(
+      "linear",
+      linear?.status === "fulfilled",
+      "Linear credential resolves; no API access probe run",
+      "Linear credential unavailable",
+      `export LINEAR_API_TOKEN or maquila setup --linear-token-reference op://Vault/Item/field\n${LINEAR_URL}\nhttps://developer.1password.com/docs/cli/get-started/`,
+    ),
+  );
+  checks.push(
+    check(
+      "openrouter",
+      openrouter?.status === "fulfilled",
+      "OpenRouter credential resolves; no authenticated request run",
+      "OpenRouter credential unavailable",
+      `export OPENROUTER_API_KEY or maquila setup --openrouter-token-reference op://Vault/Item/field\n${OPENROUTER_URL}\nhttps://developer.1password.com/docs/cli/get-started/`,
+    ),
+  );
   try {
     const available = await (options.resolveModelIds ?? resolveOpenRouterModelIds)();
-    const configured = [
+    const missing = [
       ...new Set(listAgents().map((agent) => agent.model.slice("openrouter/".length))),
-    ];
-    const missing = configured.filter((model) => !available.has(model));
+    ].filter((model) => !available.has(model));
     checks.push(
       check(
         "models",
-        missing.length === 0,
-        "configured OpenRouter models available",
-        `configured OpenRouter models unavailable: ${missing.join(", ")}`,
-        "pin available model IDs in src/agents/*.md",
+        !missing.length,
+        "configured OpenRouter models listed anonymously",
+        "configured OpenRouter models unavailable",
+        "check https://openrouter.ai/api/v1/models",
       ),
     );
   } catch {
@@ -206,31 +197,49 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
         false,
         "",
         "OpenRouter model catalog unavailable",
-        "check network access to https://openrouter.ai/api/v1/models",
+        "check https://openrouter.ai/api/v1/models",
       ),
     );
   }
-  const home = (options.homedir ?? defaultHomedir)();
-  checks.push(
-    check(
-      "ssh",
-      sshReady(env, home),
-      "exe.dev SSH identity, agent, or user config available",
-      "no exe.dev identity, SSH agent, or OpenSSH user config",
-      "start ssh-agent or set MAQUILA_EXE_IDENTITY",
-    ),
-  );
-  const cli = resolve(options.maquilaRoot, "dist/maquila");
+  try {
+    const identity = options.identity ?? env.MAQUILA_EXE_IDENTITY;
+    if (identity && (!identity.trim() || !isAbsolute(identity) || identity.includes("\0"))) {
+      throw new Error("exe.dev identity must be an absolute path");
+    }
+    await (
+      options.listVms ??
+      ((file, source) => new ExeClient(undefined, undefined, file, undefined, source).listVms())
+    )(identity, env);
+    checks.push(
+      check(
+        "ssh",
+        true,
+        "exe.dev read-only VM list succeeded; no VM was created",
+        "exe.dev SSH access unavailable",
+        `ssh exe.dev whoami or maquila doctor --identity /absolute/key\n${EXE_URL}`,
+      ),
+    );
+  } catch {
+    checks.push(
+      check(
+        "ssh",
+        false,
+        "",
+        "exe.dev SSH access unavailable",
+        `ssh exe.dev whoami or maquila doctor --identity /absolute/key\n${EXE_URL}`,
+      ),
+    );
+  }
   checks.push(
     check(
       "cli",
-      existsSync(cli),
+      existsSync(resolve(options.maquilaRoot, "dist/maquila")),
       "maquila CLI build present",
       "dist/maquila missing",
       "bun run build",
     ),
   );
-  const skill = resolve(home, ".pi", "agent", "skills", "maquila");
+  const skill = resolve((options.homedir ?? defaultHomedir)(), ".pi", "agent", "skills", "maquila");
   checks.push(
     check(
       "skill",
@@ -241,14 +250,16 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
       true,
     ),
   );
-  const ok = checks.every((item) => item.status !== "fail");
-  const result: DoctorResult = { version: 1, ok, checks };
+  const result: DoctorResult = {
+    version: 1,
+    ok: checks.every((item) => item.status !== "fail"),
+    checks,
+  };
   if (options.json) write(`${JSON.stringify(result)}\n`);
-  else {
-    for (const item of checks) {
-      const extra = item.status === "pass" ? item.message : (item.remediation ?? item.message);
-      write(`${item.id}: ${item.status}${extra ? ` — ${extra}` : ""}\n`);
-    }
-  }
+  else
+    for (const item of checks)
+      write(
+        `${item.id}: ${item.status} — ${item.status === "pass" ? item.message : (item.remediation ?? item.message)}\n`,
+      );
   return result;
 }

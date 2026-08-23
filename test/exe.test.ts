@@ -110,6 +110,8 @@ test("external commands receive only operational environment", async () => {
     SSH_AUTH_SOCK: "/tmp/agent.sock",
   });
   assert.equal(fake.calls[0]?.args.includes("-A"), false);
+  assert.ok(fake.calls[0]?.args.includes("StrictHostKeyChecking=yes"));
+  assert.ok(fake.calls[0]?.args.includes("UpdateHostKeys=no"));
   assert.deepEqual(
     fake.calls[0]?.args.slice(
       fake.calls[0].args.indexOf("ForwardAgent=no") - 1,

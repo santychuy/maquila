@@ -7,6 +7,20 @@ import { listAgents, loadAgentFile } from "../src/agents/index.js";
 import { agentExitCode, HELP, main, parseCli } from "../src/cli/index.js";
 import { MAX_TIMEOUT_SECONDS } from "../src/workflows/plan.js";
 
+test("setup and doctor accept target and absolute identity", () => {
+  assert.deepEqual(parseCli(["setup", "--target", "/tmp/repo", "--identity", "/tmp/key"]), {
+    command: "setup",
+    target: "/tmp/repo",
+    identity: "/tmp/key",
+  });
+  assert.deepEqual(parseCli(["doctor", "--target", "/tmp/repo", "--identity", "/tmp/key"]), {
+    command: "doctor",
+    target: "/tmp/repo",
+    identity: "/tmp/key",
+  });
+  assert.throws(() => parseCli(["doctor", "--identity", "relative"]), /absolute path/);
+});
+
 test("planner command accepts required inputs and safe timeout", () => {
   assert.deepEqual(
     parseCli([

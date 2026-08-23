@@ -12,7 +12,7 @@ import { createRemoteProtocolWriter } from "../remote-protocol.js";
 import { loadMaquilaConfig } from "../config.js";
 import { resolveControllerCredentials } from "../credentials.js";
 import { runDoctor } from "../doctor.js";
-import { runSetup } from "../setup.js";
+import { runSetup, SetupCancelled } from "../setup.js";
 import { LAUNCH_INSTANCE_ENV, startDetachedRun, writeLaunchHandshake } from "../run-launcher.js";
 import { foldRunStatus, type RunStatusSummary } from "../run-status.js";
 import { maquilaRoot, isMain } from "../runtime.js";
@@ -139,15 +139,17 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
           linearTokenReference: options.linearTokenReference,
           openRouterTokenReference: options.openRouterTokenReference,
           installSkill: options.installSkill,
+          target: options.target,
+          identity: options.identity,
           maquilaRoot: root,
         });
-        if (options.json) return result.ok ? 0 : 1;
-        return 0;
+        return result.ok ? 0 : 1;
       }
       if (options.command === "doctor") {
         const result = await runDoctor({
           json: options.json,
           target: options.target,
+          identity: options.identity,
           maquilaRoot: root,
         });
         return result.ok ? 0 : 1;
@@ -325,6 +327,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     }
     return agentExitCode(result.status, Boolean(protocol));
   } catch (error) {
+    if (error instanceof SetupCancelled) return 130;
     const message = error instanceof Error ? error.message : String(error);
     if (args.includes("--json")) {
       const terminationUnconfirmed = message.startsWith(
