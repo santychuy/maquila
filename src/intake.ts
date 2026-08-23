@@ -14,14 +14,10 @@ export interface Intake {
   repository: GitHubSnapshot;
   idempotencyKey: string;
 }
-export async function createIntake(
-  linear: Omit<LinearOptions, "issue"> & { issue: string },
-  github: GitHubOptions,
-): Promise<Intake> {
-  const [issue, repository] = await Promise.all([
-    fetchLinearIssue(linear),
-    fetchGitHubSnapshot(github),
-  ]);
+export function createIntakeFromSnapshots(
+  issue: LinearSnapshot,
+  repository: GitHubSnapshot,
+): Intake {
   const input = {
     issueUuid: issue.uuid,
     repositoryId: repository.repositoryId,
@@ -33,4 +29,15 @@ export async function createIntake(
     repository,
     idempotencyKey: createHash("sha256").update(JSON.stringify(input)).digest("hex"),
   };
+}
+
+export async function createIntake(
+  linear: Omit<LinearOptions, "issue"> & { issue: string },
+  github: GitHubOptions,
+): Promise<Intake> {
+  const [issue, repository] = await Promise.all([
+    fetchLinearIssue(linear),
+    fetchGitHubSnapshot(github),
+  ]);
+  return createIntakeFromSnapshots(issue, repository);
 }

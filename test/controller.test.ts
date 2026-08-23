@@ -1964,6 +1964,25 @@ test("controller reaches ready only after remote evidence and VM cleanup", async
   }
 });
 
+test("controller clones public repositories without an exe.dev GitHub integration", async () => {
+  const root = mkdtempSync(join(tmpdir(), "maquila-controller-"));
+  const exe = new FakeExe();
+  try {
+    const result = await runController({
+      ...controllerOptions(root, exe),
+      intake: async () => ({
+        ...snapshot,
+        repository: { ...snapshot.repository, private: false },
+      }),
+    });
+    assert.equal(result.status, "completed", result.error);
+    assert.match(JSON.stringify(exe.calls), /https:\/\/github\.com\/santychuy\/bookbounce\.git/);
+    assert.doesNotMatch(JSON.stringify(exe.calls), /github\.int\.exe\.xyz/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("controller completes docs-only remote lifecycle without a worker run", async () => {
   const root = mkdtempSync(join(tmpdir(), "maquila-controller-"));
   const exe = new DocsOnlyExe();
@@ -2018,6 +2037,28 @@ test("successful archive selection uses execution run IDs not lifecycle identity
     );
     assert.match(JSON.stringify(tar), new RegExp(ids[2]!));
     assert.doesNotMatch(JSON.stringify(tar), /55555555-5555-4555-8555-555555555555/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("controller dry-run publication completes without claiming a pull request", async () => {
+  const root = mkdtempSync(join(tmpdir(), "maquila-controller-"));
+  try {
+    const { publish: _publish, ...options } = controllerOptions(root, new FakeExe());
+    const result = await runController({ ...options, publicationMode: "dry-run" });
+    assert.equal(result.status, "completed", result.error);
+    assert.equal(result.pullRequest, undefined);
+    assert.equal(result.publicationDryRun?.mode, "dry-run");
+    assert.ok(existsSync(join(result.runDir, "publication-dry-run.json")));
+    assert.equal(existsSync(join(result.runDir, "publication.json")), false);
+    const state = readControllerState(result.runDir);
+    assert.equal(state.state, "completed");
+    const events = readTelemetry(telemetryPath(root, state.runId));
+    assert.equal(
+      events.some((event) => event.type === "publication_completed"),
+      false,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

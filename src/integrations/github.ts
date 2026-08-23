@@ -52,6 +52,19 @@ export interface GitHubPublicationOptions {
   patchSha256: string;
 }
 
+export interface GitHubPublicationDryRun {
+  version: 1;
+  mode: "dry-run";
+  repository: string;
+  baseRef: string;
+  baseSha: string;
+  runId: string;
+  idempotencyKey: string;
+  issueIdentifier: string;
+  proposedBranch: string;
+  patchSha256: string;
+}
+
 function text(value: unknown, label: string): string {
   if (typeof value !== "string" || !value.trim()) throw new Error(`${label} must be non-blank`);
   return value;
@@ -225,9 +238,7 @@ function publication(
   return { number, url, branch, commitSha: head.sha };
 }
 
-export async function publishGitHubPullRequest(
-  options: GitHubPublicationOptions,
-): Promise<GitHubPublication> {
+function validateGitHubPublication(options: GitHubPublicationOptions) {
   const token = text(options.token, "GitHub token");
   const owner = text(options.owner, "owner");
   const repo = text(options.repo, "repo");
@@ -238,6 +249,12 @@ export async function publishGitHubPullRequest(
   const issueIdentifier = text(options.issueIdentifier, "issueIdentifier");
   const issueTitle = text(options.issueTitle, "issueTitle").replaceAll(/\s+/g, " ").slice(0, 200);
   const issueUrl = text(options.issueUrl, "issueUrl");
+  let parsedIssueUrl: URL;
+  try {
+    parsedIssueUrl = new URL(issueUrl);
+  } catch {
+    throw new Error("invalid GitHub publication input");
+  }
   const patchPath = resolve(text(options.patchPath, "patchPath"));
   const patchSha256 = text(options.patchSha256, "patchSha256");
   if (
@@ -249,12 +266,63 @@ export async function publishGitHubPullRequest(
     !/^[0-9a-f]{64}$/i.test(patchSha256) ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(runId) ||
     !/^[A-Z][A-Z0-9]*-[1-9][0-9]*$/.test(issueIdentifier) ||
-    !issueUrl.startsWith("https://linear.app/")
+    parsedIssueUrl.origin !== "https://linear.app"
   ) {
     throw new Error("invalid GitHub publication input");
   }
 
-  const branch = `maquila/${issueIdentifier.toLowerCase()}-${idempotencyKey.slice(0, 12)}`;
+  return {
+    token,
+    owner,
+    repo,
+    baseRef,
+    baseSha,
+    runId,
+    idempotencyKey,
+    issueIdentifier,
+    issueTitle,
+    issueUrl,
+    patchPath,
+    patchSha256,
+    branch: `maquila/${issueIdentifier.toLowerCase()}-${idempotencyKey.slice(0, 12)}`,
+  };
+}
+
+export function createGitHubPublicationDryRun(
+  options: GitHubPublicationOptions,
+): GitHubPublicationDryRun {
+  const value = validateGitHubPublication(options);
+  return {
+    version: 1,
+    mode: "dry-run",
+    repository: `${value.owner}/${value.repo}`,
+    baseRef: value.baseRef,
+    baseSha: value.baseSha,
+    runId: value.runId,
+    idempotencyKey: value.idempotencyKey,
+    issueIdentifier: value.issueIdentifier,
+    proposedBranch: value.branch,
+    patchSha256: value.patchSha256,
+  };
+}
+
+export async function publishGitHubPullRequest(
+  options: GitHubPublicationOptions,
+): Promise<GitHubPublication> {
+  const {
+    token,
+    owner,
+    repo,
+    baseRef,
+    baseSha,
+    runId,
+    issueIdentifier,
+    issueTitle,
+    issueUrl,
+    patchPath,
+    patchSha256,
+    branch,
+  } = validateGitHubPublication(options);
   const directory = mkdtempSync(join(tmpdir(), "maquila-publish-"));
   chmodSync(directory, 0o700);
   const askpass = join(directory, "askpass.sh");

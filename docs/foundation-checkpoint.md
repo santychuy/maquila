@@ -28,7 +28,7 @@ GitHub write credentials never enter VM. OpenRouter uses dedicated capped key as
 - `src/run-artifacts.ts` creates `.maquila/runs/<run-id>/`, snapshots input, appends JSONL events, and writes JSON artifacts.
 - `src/verify.ts` executes manifest-pinned repository checks and evaluates the exact Git diff gate.
 - `src/workflows/worker.ts` runs sequential disjoint worker/documenter writers, deterministic verification, and a separate reviewer with aggregate lifecycle evidence.
-- `src/integrations/linear.ts`, `src/integrations/github.ts`, and `src/intake.ts` validate and hash immutable external inputs. Linear intake requires an assignee. A decision request pins that assignee, issue, round, question hash, and request time; only a later numbered `Decision:` reply from that pinned assignee is eligible. `src/integrations/github.ts` publishes an idempotent controller-side branch and ready-for-review pull request without storing credentials.
+- `src/integrations/linear.ts`, `src/integrations/github.ts`, and `src/intake.ts` validate and hash immutable external inputs. Linear intake requires an assignee. A decision request pins that assignee, issue, round, question hash, and request time; only a later numbered `Decision:` reply from that pinned assignee is eligible. `src/integrations/github.ts` publishes an idempotent controller-side branch and ready-for-review pull request without storing credentials; its validated dry-run record supports the live fixture scenario without GitHub writes.
 - `src/run-state.ts` atomically stores fail-closed controller state. New runs use v2 `executing` state plus workflow cursor; readers and decision resume retain v1 compatibility.
 - `src/integrations/exe.ts` provides tested command construction for exe.dev SSH, SCP, and retryable deletion without retaining credentials. Integration boundaries live together under `src/integrations/`.
 - `src/controller-lock.ts`, `src/controller.ts`, and `src/controller-chain.ts` provide single-host ownership, restart cleanup, remote bootstrap/lifecycle, fail-closed evidence harvest, bounded decision-thread polling, and same-run planner-session continuation on a retained VM.
@@ -44,7 +44,9 @@ Latest guided-setup checkpoint verification: `bun run check` passed with 247 tes
 
 Live controller run `fa7b5de1-8125-469f-b723-5db21243d783` completed RIFF-39 against Bookbounce SHA `04c6e9a5efa53727f2f0959e0e6ca4a3639b38c7`. Planner, worker, and fresh reviewer receipts and transcripts were harvested; `bun run validate` passed with 130 tests passed, one integration test skipped, and zero failures; the exact Git gate allowed only the planned assessment artifact; reviewer verdict was `PASS`; cleanup was recorded complete; exe.dev listed zero VMs; controller evidence contained neither controller token. No Bookbounce commit, branch, push, or PR was created. Generated `.maquila/` evidence remains ignored by Git.
 
-Telemetry/streaming, detached launcher, local observer server/UI, maquila-owned Pi skill, and GitHub publication are implemented and covered by deterministic local tests. Publication has not yet completed a credentialed end-to-end smoke run, so the RIFF-39 evidence above proves the earlier controller path only.
+Telemetry/streaming, detached launcher, local observer server/UI, maquila-owned Pi skill, and GitHub publication are implemented and covered by deterministic local tests. `bun run e2e:live` provides a repeatable credentialed happy-path smoke against private `santychuy/maquila-e2e-fixture`: it replaces Linear with `examples/e2e-live/issue.md`, attaches the repository-scoped exe.dev GitHub integration by VM tag, runs the real VM and agents, retains normal evidence, and stops at an honest publication dry run.
+
+Live private-fixture run `1ad3aae0-bd4c-4477-9afe-473df98fe757` completed against fixture SHA `095787ed927408d504b4c5dd7daf0d8f76f928ea`. Planner, worker, documenter, verifier, and reviewer all completed; `bun run check` passed three tests; the exact Git gate allowed only `src/greeting.ts`, `test/greeting.test.ts`, and `docs/greeting.md`; reviewer verdict was `PASS`; patch SHA-256 was `8710a23be5def72ac26c8affa4942b035d1396b6efa1364af740588854278d1a`; cleanup was complete; exe.dev listed zero VMs; and the fixture retained only `main` with zero pull requests. `publication-dry-run.json` recorded the proposed branch without creating it. Publication has not yet completed a credentialed end-to-end write smoke, so neither this scenario nor RIFF-39 proves branch or pull-request creation.
 
 ## Engineer decision flow
 
@@ -102,7 +104,7 @@ An empty `trustedDependencies` list keeps dependency lifecycle scripts blocked u
 
 ## Tests
 
-`bun run test` covers recipe resolution, strict manifest and execution hashes, docs-only skip, serial stop behavior, local manifest fallback, state v2 cursor and v1 resume compatibility, protocol v2 rejection, telemetry identity, status/observer checkpoint display, controller sequence checks, harvest bindings, publication, role boundaries, credentials, and existing intake/observer behavior. Test counts are not promises; run current full gate.
+`bun run test` covers recipe resolution, strict manifest and execution hashes, docs-only skip, serial stop behavior, local manifest fallback, state v2 cursor and v1 resume compatibility, protocol v2 rejection, telemetry identity, status/observer checkpoint display, controller sequence checks, harvest bindings, real and dry-run publication, role boundaries, credentials, and existing intake/observer behavior. Test counts are not promises; run current full gate. `bun run e2e:live` is an explicit credentialed smoke and is not part of the deterministic gate.
 
 ## Failure and security limits
 

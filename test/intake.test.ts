@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fetchGitHubSnapshot, publishGitHubPullRequest } from "../src/integrations/github.js";
+import {
+  createGitHubPublicationDryRun,
+  fetchGitHubSnapshot,
+  publishGitHubPullRequest,
+} from "../src/integrations/github.js";
 import { createIntake } from "../src/intake.js";
 import {
   createLinearDecisionComment,
@@ -448,6 +452,45 @@ test("GitHub transport failures never expose token", async () => {
       error instanceof Error &&
       error.message === "GitHub request failed" &&
       !error.message.includes(token),
+  );
+});
+
+test("GitHub publication dry run validates input without external work", () => {
+  const options = {
+    token: "secret",
+    owner: "santychuy",
+    repo: "bookbounce",
+    baseRef: "main",
+    baseSha: "a".repeat(40),
+    runId: "11111111-1111-4111-8111-111111111111",
+    idempotencyKey: "d".repeat(64),
+    issueIdentifier: "E2E-1",
+    issueTitle: "Live fixture",
+    issueUrl: "https://linear.app/maquila/issue/E2E-1/live-fixture",
+    patchPath: "/tmp/change.patch",
+    patchSha256: "e".repeat(64),
+  };
+  const value = createGitHubPublicationDryRun(options);
+
+  assert.deepEqual(value, {
+    version: 1,
+    mode: "dry-run",
+    repository: "santychuy/bookbounce",
+    baseRef: "main",
+    baseSha: "a".repeat(40),
+    runId: "11111111-1111-4111-8111-111111111111",
+    idempotencyKey: "d".repeat(64),
+    issueIdentifier: "E2E-1",
+    proposedBranch: `maquila/e2e-1-${"d".repeat(12)}`,
+    patchSha256: "e".repeat(64),
+  });
+  assert.throws(
+    () =>
+      createGitHubPublicationDryRun({
+        ...options,
+        issueUrl: "https://linear.app.evil/maquila/issue/E2E-1",
+      }),
+    /invalid GitHub publication input/,
   );
 });
 

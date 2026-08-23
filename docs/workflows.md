@@ -110,6 +110,14 @@ Do not solve this with YAML, a DSL, plugins, inheritance, or user-authored workf
 - Agent envelopes are claims, never acceptance evidence by themselves.
 - Human owns merge or rejection.
 
+## Live happy-path scenario
+
+`bun run e2e:live` replaces only Linear intake and GitHub publication. It reads `examples/e2e-live/issue.md`, snapshots the real `santychuy/maquila-e2e-fixture` base, then runs the real exe.dev VM, OpenRouter agents, manifest, writers, verifier, reviewer, harvest, and cleanup. Publication input is validated and retained as `publication-dry-run.json`; no branch or pull request is created.
+
+The scenario keeps normal controller evidence and telemetry under `.maquila/`, so `maquila dashboard` and `maquila run status --run-id <id>` can inspect it. It requires GitHub read credentials, OpenRouter credentials, exe.dev access, and the private fixture's `maquila-e2e` GitHub integration attached to VM tag `santychuy-maquila-e2e-fixture`; it needs no Linear credential. Override the canonical fixture with `bun run e2e:live -- --repo OWNER/REPO --base-ref REF`. Each invocation gets a fresh synthetic issue UUID so completed idempotency claims do not block a rerun. A planner decision fails this first scenario because no Linear decision thread exists.
+
+This is a credentialed development smoke test, not part of `bun run check`. Real model output and vendor availability make it rerunnable but not deterministic.
+
 ## Checks
 
 Run focused workflow checks, then full gate:

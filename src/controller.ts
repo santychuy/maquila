@@ -22,7 +22,13 @@ import {
   type LinearDecisionReply,
   type LinearDecisionRequest as LinearDecisionThreadRequest,
 } from "./integrations/linear.js";
-import { publishGitHubPullRequest, type GitHubPublication } from "./integrations/github.js";
+import {
+  createGitHubPublicationDryRun,
+  publishGitHubPullRequest,
+  type GitHubPublication,
+  type GitHubPublicationDryRun,
+  type GitHubPublicationOptions,
+} from "./integrations/github.js";
 import { parseEnvelope, type EnvelopeParseResult, type PlannerEnvelope } from "./envelope.js";
 import { assertSafeRepoPath } from "./verify.js";
 import {
@@ -131,6 +137,7 @@ export interface ControllerOptions {
   runId?: string;
   telemetry?: typeof createTelemetryWriter;
   publish?: typeof publishGitHubPullRequest;
+  publicationMode?: "publish" | "dry-run";
   onAccepted?: () => void;
   heartbeatMilliseconds?: number;
   decision?: ControllerDecisionContext;
@@ -181,6 +188,7 @@ export interface ControllerResult {
   status: "awaiting_decision" | "cancelled" | "completed" | "failed";
   runDir: string;
   pullRequest?: GitHubPublication;
+  publicationDryRun?: GitHubPublicationDryRun;
   decisionRequest?: ControllerDecisionRequest;
   error?: string;
 }
@@ -863,6 +871,8 @@ export async function runController(options: ControllerOptions): Promise<Control
   if (!options.linearToken.trim()) throw new Error("Linear token missing");
   if (!options.githubToken.trim()) throw new Error("GitHub token missing");
   if (!options.openRouterKey.trim()) throw new Error("OpenRouter key missing");
+  if (options.publicationMode === "dry-run" && options.publish)
+    throw new Error("dry-run publication cannot use a publisher");
   if (options.identity) requireAbsolute(options.identity);
   validateDecision(options.decision);
   safeRepo(options.owner, options.repo);
@@ -1299,10 +1309,12 @@ export async function runController(options: ControllerOptions): Promise<Control
       }
       advance(runDir, "bootstrapping");
       publicFailureMessage = "repository clone failed";
+      if (!intakeSnapshot) throw new Error("repository intake snapshot missing");
+      const cloneHost = intakeSnapshot.repository.private ? "github.int.exe.xyz" : "github.com";
       await remote(
         exe,
         vm.sshDest,
-        ["git", "clone", `https://github.int.exe.xyz/${state.repositoryFullName}.git`, REMOTE_WORK],
+        ["git", "clone", `https://${cloneHost}/${state.repositoryFullName}.git`, REMOTE_WORK],
         120_000,
       );
       publicFailureMessage = "repository checkout failed";
@@ -2451,7 +2463,7 @@ export async function runController(options: ControllerOptions): Promise<Control
         stage = "ready_for_publication";
         publicFailureMessage = "controller stage failed";
         advance(runDir, "publishing");
-        const pullRequest = await (options.publish ?? publishGitHubPullRequest)({
+        const publicationInput: GitHubPublicationOptions = {
           token: options.githubToken,
           owner: options.owner,
           repo: options.repo,
@@ -2464,23 +2476,41 @@ export async function runController(options: ControllerOptions): Promise<Control
           issueUrl: intakeSnapshot.issue.url,
           patchPath: resolve(runDir, "change.patch"),
           patchSha256: reviewedPatchSha256,
-        });
-        const publicationPath = resolve(runDir, "publication.json");
-        writeJson(publicationPath, pullRequest);
-        emit({
-          type: "artifact_available",
-          actor: "controller",
-          payload: {
-            name: "publication.json",
-            size: statSync(publicationPath).size,
-            sha256: hash(publicationPath),
-          },
-        });
-        emit({
-          type: "publication_completed",
-          actor: "controller",
-          payload: pullRequest,
-        });
+        };
+        let pullRequest: GitHubPublication | undefined;
+        let publicationDryRun: GitHubPublicationDryRun | undefined;
+        if (options.publicationMode === "dry-run") {
+          publicationDryRun = createGitHubPublicationDryRun(publicationInput);
+          const publicationPath = resolve(runDir, "publication-dry-run.json");
+          writeJson(publicationPath, publicationDryRun);
+          emit({
+            type: "artifact_available",
+            actor: "controller",
+            payload: {
+              name: "publication-dry-run.json",
+              size: statSync(publicationPath).size,
+              sha256: hash(publicationPath),
+            },
+          });
+        } else {
+          pullRequest = await (options.publish ?? publishGitHubPullRequest)(publicationInput);
+          const publicationPath = resolve(runDir, "publication.json");
+          writeJson(publicationPath, pullRequest);
+          emit({
+            type: "artifact_available",
+            actor: "controller",
+            payload: {
+              name: "publication.json",
+              size: statSync(publicationPath).size,
+              sha256: hash(publicationPath),
+            },
+          });
+          emit({
+            type: "publication_completed",
+            actor: "controller",
+            payload: pullRequest,
+          });
+        }
         advance(runDir, "completed");
         stopHeartbeat();
         writeJson(resolve(runDir, "receipt.json"), {
@@ -2491,14 +2521,18 @@ export async function runController(options: ControllerOptions): Promise<Control
           finishedAt: new Date().toISOString(),
           cleanup: "complete",
           artifacts: readdirArtifacts(runDir),
-          pullRequest,
+          ...(pullRequest ? { pullRequest } : { publicationDryRun }),
         });
         emit({
           type: "run_finished",
           actor: "controller",
           payload: { status: "completed", cleanup: "complete" },
         });
-        result = { status: "completed", runDir, pullRequest };
+        result = {
+          status: "completed",
+          runDir,
+          ...(pullRequest ? { pullRequest } : { publicationDryRun }),
+        };
       } catch (error) {
         result = failedResult(error instanceof Error ? error.message : String(error));
       }
