@@ -40,6 +40,8 @@ GitHub write credentials never enter VM. OpenRouter uses dedicated capped key as
 
 ## Evidence
 
+Latest guided-setup checkpoint verification: `bun run check` passed with 247 tests; final independent review verdict was `PASS`. This is local deterministic evidence, not live credentialed end-to-end proof for setup, publication, or vendor access.
+
 Live controller run `fa7b5de1-8125-469f-b723-5db21243d783` completed RIFF-39 against Bookbounce SHA `04c6e9a5efa53727f2f0959e0e6ca4a3639b38c7`. Planner, worker, and fresh reviewer receipts and transcripts were harvested; `bun run validate` passed with 130 tests passed, one integration test skipped, and zero failures; the exact Git gate allowed only the planned assessment artifact; reviewer verdict was `PASS`; cleanup was recorded complete; exe.dev listed zero VMs; controller evidence contained neither controller token. No Bookbounce commit, branch, push, or PR was created. Generated `.maquila/` evidence remains ignored by Git.
 
 Telemetry/streaming, detached launcher, local observer server/UI, maquila-owned Pi skill, and GitHub publication are implemented and covered by deterministic local tests. Publication has not yet completed a credentialed end-to-end smoke run, so the RIFF-39 evidence above proves the earlier controller path only.
@@ -72,7 +74,13 @@ The CLI is split into small, zero-dependency modules under `src/cli/`: `types.ts
 
 The architecture council compared Node's built-in `node:util.parseArgs`, Commander, and CAC. It chose `parseArgs` plus a static TypeScript dispatcher: no new dependency, `trustedDependencies` stays empty, and Bun compilation remains direct. CAC was rejected because it does not provide the nested subcommand support required here. Commander was not selected because a framework adds dependency and abstraction cost that this modular command layout does not need.
 
-## Maquila DX
+## Guided setup checkpoint
+
+Guided setup is primary onboarding. From target repository, run `maquila setup`; use `--target PATH` when current directory is not target. `--identity /absolute/key` selects exe.dev SSH identity; `MAQUILA_EXE_IDENTITY` is fallback. Human TTY setup prints direct official links for [GitHub tokens](https://github.com/settings/personal-access-tokens/new), [Linear API keys](https://linear.app/settings/api), [OpenRouter keys](https://openrouter.ai/settings/keys), and [1Password CLI](https://developer.1password.com/docs/cli/get-started/). It accepts only validated `op://Vault/Item/field` references or environment-provided credentials. It never accepts raw secrets, opens browsers, automates vendor login, mutates SSH, creates VMs, or performs authenticated Linear/OpenRouter probes.
+
+`--json` and non-TTY setup do not prompt or create empty config. Setup and doctor use human output by default, JSON when requested. Exit status `0` means checks pass, `1` means blocked or failed, and `130` means setup prompt interruption. `maquila doctor` repeats read-only readiness checks: resolves target and GitHub base, performs a GitHub target/base read, resolves Linear/OpenRouter credentials without API probes, checks pinned models against OpenRouter's anonymous catalog, and lists exe.dev VMs without creating one. SSH identity paths must be absolute; host-key verification remains strict. GitHub, Linear, and OpenRouter resolution stays controller-side; OpenRouter remains a dedicated capped key's transient VM exception during runs.
+
+Run the isolated happy-path mock with `bun run prototype:setup`; it uses temporary config plus injected credential, GitHub snapshot, model-catalog, and VM-list mocks, then deletes the temporary state. The real journey remains `maquila setup --target /path/to/project`, followed by `maquila run start --target /path/to/project --issue RIFF-52`; `maquila doctor` repeats readiness checks when needed. No credentialed end-to-end setup proof is claimed. Inspect `scripts/prototype-setup-happy-path.ts`, `src/setup.ts`, `src/doctor.ts`, `src/cli/parse.ts`, `src/cli/commands/setup-doctor.ts`, `src/cli/index.ts`, `test/setup.test.ts`, `test/doctor.test.ts`, and `test/cli.test.ts` before changing this surface.
 
 Build and link the current-platform standalone executable with `bun run build` then `bun link`. Commands target current working directory by default; `--target PATH` overrides it. Human output is default; `--json` is machine mode. The global command stays linked to the checkout because runtime agent definitions, skill files, and the source archive remain repository-owned. `bun run build:binary` rebuilds only `dist/maquila`; check `test -x ./dist/maquila` before linking, or run `maquila doctor`, which reports a missing binary and its `bun run build` remedy.
 
