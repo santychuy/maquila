@@ -14,9 +14,16 @@ import { resolveControllerCredentials } from "../credentials.js";
 import { runDoctor } from "../doctor.js";
 import { runSetup, SetupCancelled } from "../setup.js";
 import { LAUNCH_INSTANCE_ENV, startDetachedRun, writeLaunchHandshake } from "../run-launcher.js";
+import {
+  createBatch,
+  readBatchState,
+  runBatch,
+  startDetachedBatch,
+  type BatchState,
+} from "../run-batch.js";
 import { foldRunStatus, type RunStatusSummary } from "../run-status.js";
 import { maquilaRoot, isMain } from "../runtime.js";
-import { validateResolvedTarget } from "../target.js";
+import { resolveTargetRepository, validateResolvedTarget } from "../target.js";
 import {
   ensureObserver,
   observerStatus,
@@ -40,6 +47,12 @@ export function agentExitCode(
 
 function json(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value)}\n`);
+}
+
+function writeHumanBatch(state: BatchState): void {
+  process.stdout.write(`Batch: ${state.batchId}\nStatus: ${state.status}\n`);
+  for (const item of state.items)
+    process.stdout.write(`${item.issue}: ${item.runId} ${item.status}\n`);
 }
 
 async function writeHumanStart(root: string, runId: string): Promise<void> {
@@ -114,6 +127,8 @@ function publicJsonError(message: string): string {
     /^exe\.dev identity must be an absolute path$/,
     /^controller child (?:could not start|rejected startup)$/,
     /^controller child termination unconfirmed for run [0-9a-f-]{36}$/,
+    /^batch (?:requires|coordinator)/,
+    /^invalid batch/,
     /^observer /,
     /^--port must/,
   ];
@@ -188,6 +203,59 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         json({ version: 1, ok: true, stopped: true, observer: stopped });
         return 0;
       }
+      if (options.command === "run-batch-status") {
+        const state = readBatchState(root, options.batchId);
+        if (options.json) json(state);
+        else writeHumanBatch(state);
+        return 0;
+      }
+      if (options.command === "run-batch") {
+        const launchEnv = { ...process.env };
+        const credentials = await resolveControllerCredentials({
+          env: launchEnv,
+          identityFlag: options.identity,
+          config: loadMaquilaConfig({ env: launchEnv }),
+        });
+        const target = resolveTargetRepository({
+          target: options.target,
+          ...(options.owner ? { owner: options.owner } : {}),
+          ...(options.repo ? { repo: options.repo } : {}),
+          ...(options.baseRef ? { baseRef: options.baseRef } : {}),
+          ...(options.tag ? { tag: options.tag } : {}),
+        });
+        const state = createBatch({
+          root,
+          issues: options.issues,
+          target: {
+            owner: target.owner,
+            repo: target.repo,
+            baseRef: target.baseRef,
+            tag: target.tag,
+          },
+          timeoutSeconds: options.timeoutSeconds,
+        });
+        const result = await startDetachedBatch({
+          root,
+          batchId: state.batchId,
+          cliPath: process.argv[1],
+          env: {
+            ...launchEnv,
+            LINEAR_API_TOKEN: credentials.linearToken,
+            GITHUB_TOKEN: credentials.githubToken,
+            OPENROUTER_API_KEY: credentials.openRouterKey,
+            ...(credentials.identity ? { MAQUILA_EXE_IDENTITY: credentials.identity } : {}),
+          },
+          ...(credentials.identity ? { identity: credentials.identity } : {}),
+        });
+        delete process.env.LINEAR_API_TOKEN;
+        delete process.env.GITHUB_TOKEN;
+        delete process.env.GH_TOKEN;
+        delete process.env.OPENROUTER_API_KEY;
+        delete process.env.MAQUILA_EXE_IDENTITY;
+        if (options.json) json(result);
+        else writeHumanBatch(readBatchState(root, state.batchId));
+        return 0;
+      }
       if (options.command === "run-start") {
         const launchEnv = { ...process.env };
         const credentials = await resolveControllerCredentials({
@@ -249,6 +317,24 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         });
         if (options.json) json(status);
         else writeHumanStatus(status);
+        return 0;
+      }
+      if (options.command === "run-batch-execute") {
+        const { linearToken, githubToken, openRouterKey, identity, instanceId } =
+          takeControllerEnvironment();
+        if (!linearToken || !githubToken || !openRouterKey || !instanceId)
+          throw new Error("batch coordinator environment is incomplete");
+        const result = await runBatch({
+          root,
+          maquilaRoot: root,
+          batchId: options.batchId,
+          linearToken,
+          githubToken,
+          openRouterKey,
+          ...(identity ? { identity } : {}),
+          onAccepted: () => writeLaunchHandshake(root, options.batchId, instanceId),
+        });
+        writeHumanBatch(result);
         return 0;
       }
       if (options.command !== "run-execute") throw new Error("invalid observer command");

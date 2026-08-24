@@ -112,7 +112,7 @@ function recordTerminationUnconfirmed(
   });
 }
 
-function parseHandshake(path: string): LaunchHandshake | undefined {
+export function readLaunchHandshake(path: string): LaunchHandshake | undefined {
   try {
     const value: unknown = JSON.parse(readFileSync(path, "utf8"));
     if (
@@ -262,7 +262,7 @@ export async function startDetachedRun(options: StartDetachedRunOptions): Promis
   const deadline = Date.now() + (options.startupTimeoutMs ?? 5000);
   for (;;) {
     const handshake = existsSync(handshakePath(root, runId))
-      ? parseHandshake(handshakePath(root, runId))
+      ? readLaunchHandshake(handshakePath(root, runId))
       : undefined;
     if (
       handshake?.runId === runId &&

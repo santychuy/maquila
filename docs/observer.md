@@ -51,6 +51,17 @@ maquila run start --target /absolute/path/to/target-repository --issue RIFF-52 -
 
 `run start` returns accepted run ID before workflow completion. Open `<observer-url>/runs/<run-id>`. Pi users may use `/skill:maquila` from target repository with only issue ID.
 
+Queue multiple Linear issues with one detached batch. Pass 2–10 unique issue IDs; repeated `--issue` values preserve CLI order:
+
+```bash
+maquila run batch --issue RIFF-52 --issue RIFF-53 --target /absolute/path/to/target-repository --json
+maquila run batch status --batch-id <batch-id> --json
+```
+
+Batch startup preallocates one independent run ID per issue. Coordinator executes runs strictly serially in CLI order. A run waiting for an engineer reply reports `awaiting_decision` through `run status`; its batch item remains `running`, and later issues wait until that run finishes. A failed or cancelled controller result does not stop later items. A controller startup failure stops the coordinator and leaves remaining items queued. Each item keeps its own VM, Linear intake, evidence, idempotency, and pull-request authority. Batch metadata only coordinates items in `.maquila/batches/<batch-id>/batch.json`; it does not replace per-run status or evidence.
+
+Batch has no parallel execution, pause, reorder, cancel, or crash-resume command. A coordinator crash does not resume the batch.
+
 When planner needs an engineer decision, run stays `awaiting_decision` and status exposes the live Linear thread. Answer numbered questions in marked Linear thread. After a valid reply, wait phase finishes and status drops `decision` so observer and `run status` stop asking. Detached process polls for reply. Inspect or restart polling with same run ID:
 
 ```bash

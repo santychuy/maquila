@@ -2,6 +2,9 @@ import { isAbsolute } from "node:path";
 import { parseTimeout, rejectOptions } from "../helpers.js";
 import type {
   DirectRunOptions,
+  RunBatchCommand,
+  RunBatchExecuteCommand,
+  RunBatchStatusCommand,
   RunExecuteCommand,
   RunResumeCommand,
   RunStartCommand,
@@ -10,11 +13,34 @@ import type {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+type RunCommand =
+  | DirectRunOptions
+  | RunStartCommand
+  | RunBatchCommand
+  | RunBatchExecuteCommand
+  | RunBatchStatusCommand
+  | RunExecuteCommand
+  | RunResumeCommand
+  | RunStatusCommand;
+
+function singleIssue(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value) && value.length === 1 && typeof value[0] === "string") return value[0];
+  return undefined;
+}
+
+function batchIssues(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.every((issue) => typeof issue === "string")
+    ? value
+    : undefined;
+}
+
 export function parseRunCommand(
   subcommand: string | undefined,
+  nested: string | undefined,
   values: Record<string, unknown>,
-): DirectRunOptions | RunStartCommand | RunExecuteCommand | RunResumeCommand | RunStatusCommand {
-  if (subcommand === "start") {
+): RunCommand {
+  if (subcommand === "start" && nested === undefined) {
     rejectOptions(values, [
       "json",
       "target",
@@ -26,11 +52,15 @@ export function parseRunCommand(
       "identity",
       "timeout-seconds",
     ]);
-    if (!values.issue || typeof values.issue !== "string") throw new Error("--issue is required");
+    const issue = singleIssue(values.issue);
+    if (!issue)
+      throw new Error(
+        values.issue === undefined ? "--issue is required" : "--issue must appear once",
+      );
     return {
       command: "run-start",
       target: typeof values.target === "string" ? values.target : process.cwd(),
-      issue: values.issue,
+      issue,
       timeoutSeconds: parseTimeout(
         typeof values["timeout-seconds"] === "string" ? values["timeout-seconds"] : undefined,
         "900",
@@ -44,7 +74,62 @@ export function parseRunCommand(
     };
   }
 
-  if (subcommand === "execute") {
+  if (subcommand === "batch" && nested === "status") {
+    rejectOptions(values, ["json", "batch-id"]);
+    if (typeof values["batch-id"] !== "string" || !UUID.test(values["batch-id"]))
+      throw new Error("invalid batch status --batch-id");
+    return {
+      command: "run-batch-status",
+      batchId: values["batch-id"],
+      ...(values.json ? { json: true } : {}),
+    };
+  }
+
+  if (subcommand === "batch" && nested === "execute") {
+    rejectOptions(values, ["batch-id"]);
+    if (typeof values["batch-id"] !== "string" || !UUID.test(values["batch-id"]))
+      throw new Error("invalid internal batch ID");
+    return { command: "run-batch-execute", batchId: values["batch-id"] };
+  }
+
+  if (subcommand === "batch" && nested === undefined) {
+    rejectOptions(values, [
+      "json",
+      "target",
+      "issue",
+      "owner",
+      "repo",
+      "base-ref",
+      "tag",
+      "identity",
+      "timeout-seconds",
+    ]);
+    const issues = batchIssues(values.issue);
+    if (
+      !issues ||
+      issues.length < 2 ||
+      issues.length > 10 ||
+      new Set(issues).size !== issues.length
+    )
+      throw new Error("batch requires 2 to 10 unique --issue values");
+    return {
+      command: "run-batch",
+      target: typeof values.target === "string" ? values.target : process.cwd(),
+      issues,
+      timeoutSeconds: parseTimeout(
+        typeof values["timeout-seconds"] === "string" ? values["timeout-seconds"] : undefined,
+        "900",
+      ),
+      ...(typeof values.owner === "string" ? { owner: values.owner } : {}),
+      ...(typeof values.repo === "string" ? { repo: values.repo } : {}),
+      ...(typeof values["base-ref"] === "string" ? { baseRef: values["base-ref"] } : {}),
+      ...(typeof values.tag === "string" ? { tag: values.tag } : {}),
+      ...(typeof values.identity === "string" ? { identity: values.identity } : {}),
+      ...(values.json ? { json: true } : {}),
+    };
+  }
+
+  if (subcommand === "execute" && nested === undefined) {
     rejectOptions(values, [
       "run-id",
       "issue",
@@ -54,9 +139,10 @@ export function parseRunCommand(
       "tag",
       "timeout-seconds",
     ]);
+    const issue = singleIssue(values.issue);
     if (
       typeof values["run-id"] !== "string" ||
-      typeof values.issue !== "string" ||
+      !issue ||
       typeof values.owner !== "string" ||
       typeof values.repo !== "string" ||
       typeof values["base-ref"] !== "string" ||
@@ -66,7 +152,7 @@ export function parseRunCommand(
     return {
       command: "run-execute",
       runId: values["run-id"],
-      issue: values.issue,
+      issue,
       owner: values.owner,
       repo: values.repo,
       baseRef: values["base-ref"],
@@ -78,7 +164,7 @@ export function parseRunCommand(
     };
   }
 
-  if (subcommand === "resume") {
+  if (subcommand === "resume" && nested === undefined) {
     rejectOptions(values, ["json", "run-id", "identity"]);
     if (typeof values["run-id"] !== "string" || !UUID.test(values["run-id"]))
       throw new Error("invalid run resume --run-id");
@@ -94,7 +180,7 @@ export function parseRunCommand(
     };
   }
 
-  if (subcommand === "status") {
+  if (subcommand === "status" && nested === undefined) {
     rejectOptions(values, ["json", "run-id"]);
     if (typeof values["run-id"] !== "string" || !values["run-id"])
       throw new Error("run status requires --run-id");
@@ -105,7 +191,7 @@ export function parseRunCommand(
     };
   }
 
-  if (subcommand === undefined) {
+  if (subcommand === undefined && nested === undefined) {
     rejectOptions(values, [
       "issue",
       "owner",
@@ -115,8 +201,9 @@ export function parseRunCommand(
       "identity",
       "timeout-seconds",
     ]);
+    const issue = singleIssue(values.issue);
     if (
-      typeof values.issue !== "string" ||
+      !issue ||
       typeof values.owner !== "string" ||
       typeof values.repo !== "string" ||
       typeof values["base-ref"] !== "string" ||
@@ -128,7 +215,7 @@ export function parseRunCommand(
     if (identity && (!isAbsolute(identity) || identity.includes("\0")))
       throw new Error("exe.dev identity must be an absolute path");
     return {
-      issue: values.issue,
+      issue,
       owner: values.owner,
       repo: values.repo,
       baseRef: values["base-ref"],
@@ -142,6 +229,6 @@ export function parseRunCommand(
   }
 
   throw new Error(
-    "Expected command: agents list, setup, doctor, pi plan, pi worker, run, run start, run resume, run status, dashboard, or observer",
+    "Expected command: agents list, setup, doctor, pi plan, pi worker, run, run start, run batch, run resume, run status, dashboard, or observer",
   );
 }

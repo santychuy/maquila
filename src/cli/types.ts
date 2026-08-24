@@ -10,6 +10,8 @@ export const HELP = `Usage:
   maquila pi worker --repo PATH --issue PATH --planner PATH --base-sha SHA [--timeout-seconds 300]
   maquila run --issue ID --owner OWNER --repo REPO --base-ref REF --tag TAG [--identity ABS] [--timeout-seconds 900]
   maquila run start --issue ID [--target PATH] [--owner OWNER] [--repo REPO] [--base-ref REF] [--tag TAG] [--identity ABS] [--timeout-seconds 900] [--json]
+  maquila run batch --issue ID --issue ID [--target PATH] [--owner OWNER] [--repo REPO] [--base-ref REF] [--tag TAG] [--identity ABS] [--timeout-seconds 900] [--json]
+  maquila run batch status --batch-id UUID [--json]
   maquila run resume --run-id UUID [--identity ABS] [--json]
   maquila run status --run-id UUID [--json]
   maquila dashboard [--port 4600]
@@ -32,6 +34,32 @@ export interface RunStartCommand {
   identity?: string;
   timeoutSeconds: number;
   json?: boolean;
+}
+
+export interface RunBatchCommand {
+  command: "run-batch";
+  target: string;
+  issues: string[];
+  owner?: string;
+  repo?: string;
+  baseRef?: string;
+  tag?: string;
+  identity?: string;
+  timeoutSeconds: number;
+  json?: boolean;
+}
+
+export interface RunBatchExecuteCommand {
+  command: "run-batch-execute";
+  batchId: string;
+  timeoutSeconds?: undefined;
+}
+
+export interface RunBatchStatusCommand {
+  command: "run-batch-status";
+  batchId: string;
+  json?: boolean;
+  timeoutSeconds?: undefined;
 }
 
 export interface RunExecuteCommand {
@@ -102,6 +130,9 @@ export type ParsedCli =
   | WorkerCliOptions
   | DirectRunOptions
   | RunStartCommand
+  | RunBatchCommand
+  | RunBatchExecuteCommand
+  | RunBatchStatusCommand
   | RunExecuteCommand
   | RunResumeCommand
   | RunStatusCommand

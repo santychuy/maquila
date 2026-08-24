@@ -31,6 +31,7 @@ Implemented now:
 - Executable `maquila run`: single-host lock, restart cleanup, pinned Node/Bun bootstrap, remote planner/worker/documenter/verification/reviewer, evidence and patch harvest, VM destruction, then controller-side bot branch and ready-for-review pull-request publication.
 - Remote protocol v2 and host telemetry carry strict workflow step identity. New controller state v2 records recipe, manifest hash, step, and attempt; state v1 remains readable and resumable for retained decision waits. `run status` and observer expose current workflow checkpoint.
 - Accepted detached `run start` and read-only `run status`.
+- Detached serial `run batch` for 2–10 unique Linear issues, with preallocated independent run IDs, per-item controller authority, continue-after-result behavior, and read-only batch status.
 - Managed loopback observer server/UI with replay/cursor polling, human `maquila dashboard` startup alias, and maquila-owned `.pi/skills/maquila` command routing.
 - Global `maquila` executable through a Bun-compiled binary and `bun link`, with cwd target inference, `--target` override, human output, and explicit `--json` mode.
 - `maquila setup` and `maquila doctor` for strict XDG config, optional Linear and OpenRouter `op://` references, optional user-scope Pi skill, credential checks, and remediation.
@@ -75,6 +76,7 @@ Current execution is not a security sandbox. Read-only tools stop mutation but d
 - `src/run-state.ts` and `src/integrations/exe.ts` — atomic PoC state plus tested exe.dev SSH/SCP command boundaries.
 - `src/controller-lock.ts`, `src/controller.ts`, and `src/controller-chain.ts` — serial controller ownership, restart reconciliation, remote execution, retained same-run decision polling/resume, harvest, and cleanup.
 - `src/telemetry.ts`, `src/remote-protocol.ts`, `src/run-launcher.ts`, and `src/run-status.ts` — bounded live event contract, detached accepted start, and safe status replay.
+- `src/run-batch.ts` — strict batch state, detached coordinator startup, and serial independent controller dispatch.
 - `src/observer/` (`shared.ts`, `server.ts`, `process.ts`, `ui.ts`, `app.tsx`, generated `bundle.generated.ts`) — loopback-only read API, managed server ownership, and Preact polling dashboard bundled by Bun.
 - `src/cli/index.ts` — `agents list`, setup/doctor, local Pi commands, remote run commands, human dashboard alias, observer machine commands, and exit-code handling.
 - `src/agents/*.md` — role metadata in YAML frontmatter and role system prompt in Markdown body.
@@ -176,7 +178,7 @@ Each role run lives at `.maquila/runs/<run-id>/` and may contain:
 
 Failed or timed-out runs must not expose a successful envelope. Keep receipts honest: skipped, failed, or unavailable checks must never be reported as passing.
 
-Controller evidence lives at `.maquila/controllers/<run-id>/`. Current workflow artifacts include `workflow-manifest.json` version 2, harvested `workflow-execution.json` version 1, `controller-state.json` version 2, `change.patch`, `evidence-manifest.json`, and `publication.json` after publication. Host telemetry lives at `.maquila/telemetry/<run-id>.jsonl`. Hash links prove consistency, not authenticity against a compromised VM.
+Controller evidence lives at `.maquila/controllers/<run-id>/`. Current workflow artifacts include `workflow-manifest.json` version 2, harvested `workflow-execution.json` version 1, `controller-state.json` version 2, `change.patch`, `evidence-manifest.json`, and `publication.json` after publication. Host telemetry lives at `.maquila/telemetry/<run-id>.jsonl`. Batch coordination metadata lives at `.maquila/batches/<batch-id>/batch.json`; per-run evidence remains authoritative. Hash links prove consistency, not authenticity against a compromised VM.
 
 ## Git Hooks
 

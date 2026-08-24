@@ -70,6 +70,14 @@ Remote protocol v2 requires every phase/activity event to carry valid step ident
 
 Telemetry copies safe activity into append-only host JSONL. `run status` folds latest `currentStepId`; it keeps `plan` visible during engineer wait and `review` visible through cleanup and publication. Observer displays this as workflow checkpoint. Observer remains read-only and has no workflow authority.
 
+## Detached serial issue batches
+
+`maquila run batch --issue ID --issue ID [common target options] [--json]` accepts 2–10 unique Linear issue IDs. It preallocates one independent UUID run ID per issue, then starts a detached coordinator. Coordinator runs items strictly serially in CLI order. An active run waiting for an engineer decision reports `awaiting_decision` through per-run status while its batch item remains `running`; later items remain queued. Failed or cancelled controller results do not stop later items. A controller that cannot start is a coordinator failure and leaves remaining items queued.
+
+Each item remains authoritative for its own VM, Linear intake snapshot, evidence, idempotency, and pull request. Batch state is coordination metadata at `.maquila/batches/<batch-id>/batch.json`; inspect it with `maquila run batch status --batch-id UUID [--json]`. Batch state does not replace per-run state or evidence.
+
+Batch has no parallelism, pause, reorder, cancel, or crash resume. A coordinator crash does not resume the batch.
+
 ## Local compatibility path
 
 `maquila pi worker` accepts controller-supplied manifest. If omitted, `runWorkerLifecycle()` derives equivalent `feature-pr` manifest from local planner envelope and uses planner ID `local`. This is development and compatibility behavior. During `maquila run`, controller-generated host `workflow-manifest.json` is canonical and is copied into VM.

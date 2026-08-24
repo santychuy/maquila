@@ -12,6 +12,7 @@ Implemented foundation through M1–M5:
 - Serial block executor runs implement (or trusted docs-only skip), document, deterministic verify, and fresh review. The verifier is a code actor that runs manifest-pinned `bun run check` plus the exact Git gate. Successful result writes version-1 `workflow-execution.json` bound to manifest and reviewed patch.
 - Remote protocol v2 carries canonical step identity. New controller state v2 records recipe, pinned manifest hash, current step, and attempt; state v1 remains readable and resumable for retained decision waits.
 - Host telemetry, `run status`, and observer preserve current workflow checkpoint. Observer remains read-only.
+- Detached serial issue batching accepts 2–10 unique Linear issues, preallocates independent run IDs, and executes them in CLI order. Each item retains authoritative per-run VM, intake, evidence, idempotency, and pull-request handling; `.maquila/batches/<batch-id>/batch.json` stores coordination metadata only.
 
 All four role schemas run locally and through `maquila run` in a fresh exe.dev VM. Worker owns approved non-doc paths, then documenter owns approved docs paths. Verification and reviewer inspect aggregate diff. Verification is deterministic code, so execution record may link verify to primary writer run rather than inventing verifier session. Controller creates canonical host manifest, copies it into VM, validates remote serial sequence, checks manifest/execution/receipt/envelope/verification/review links, binds reviewed diff to harvested patch, and destroys VM. Trusted controller then verifies pinned base in temporary clone, applies reviewed patch, creates deterministic commit and branch, and opens ready-for-review pull request before reporting `completed`.
 
@@ -65,6 +66,10 @@ Only a reply after the request time from the pinned assignee is accepted. Maquil
 Before accepting a reply, Maquila checks the 24-hour expiry and snapshots Linear issue and GitHub base again. Changed issue input, repository identity, or base SHA fails the run. It also checks the retained workspace and Maquila runtime before putting the OpenRouter config back. The same controller run then opens the completed Pi session checkpoint and starts the next planner turn. Deterministic verification, fresh review, cleanup, and publication remain unchanged.
 
 A missing retained VM gets one replacement attempt. Maquila rebuilds the pinned workspace from controller state and restores the bounded checkpoint; another loss fails. Each wait lasts at most 24 hours, and one run allows at most three decision rounds. Expiry records `cancelled`, emits terminal telemetry, and attempts VM cleanup. Observer and `run status` keep an open wait as `awaiting_decision` rather than stale activity, and drop the live decision prompt once that wait phase finishes.
+
+## Batch limitations
+
+Batches have no parallelism, pause, reorder, cancel, or crash-resume behavior. A failed or cancelled controller result does not stop later items. An active run waiting for an engineer decision reports `awaiting_decision` through per-run status while its batch item remains `running`; later items wait. A controller startup failure stops the coordinator and leaves remaining items queued.
 
 ## Controller limitations
 

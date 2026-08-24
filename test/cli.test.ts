@@ -221,6 +221,49 @@ test("detached run and status commands default target to cwd and treat JSON as o
   assert.match(HELP, /run status/);
 });
 
+test("batch command accepts bounded repeated issues and exposes status", () => {
+  assert.deepEqual(
+    parseCli([
+      "run",
+      "batch",
+      "--target",
+      "/tmp/target",
+      "--issue",
+      "RIFF-101",
+      "--issue",
+      "RIFF-102",
+      "--json",
+    ]),
+    {
+      command: "run-batch",
+      target: "/tmp/target",
+      issues: ["RIFF-101", "RIFF-102"],
+      timeoutSeconds: 900,
+      json: true,
+    },
+  );
+  assert.deepEqual(
+    parseCli([
+      "run",
+      "batch",
+      "status",
+      "--batch-id",
+      "11111111-1111-4111-8111-111111111111",
+      "--json",
+    ]),
+    {
+      command: "run-batch-status",
+      batchId: "11111111-1111-4111-8111-111111111111",
+      json: true,
+    },
+  );
+  assert.throws(() => parseCli(["run", "batch", "--issue", "RIFF-101"]), /2 to 10 unique/);
+  assert.throws(
+    () => parseCli(["run", "start", "--issue", "RIFF-101", "--issue", "RIFF-102"]),
+    /must appear once/,
+  );
+});
+
 test("JSON command errors remain strict and bounded", async () => {
   let output = "";
   const write = process.stdout.write.bind(process.stdout);

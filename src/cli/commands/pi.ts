@@ -1,6 +1,14 @@
 import { parseTimeout, rejectOptions } from "../helpers.js";
 import type { PlanCliOptions, WorkerCliOptions } from "../types.js";
 
+function singleIssue(value: unknown): string | undefined {
+  return Array.isArray(value) && value.length === 1 && typeof value[0] === "string"
+    ? value[0]
+    : typeof value === "string"
+      ? value
+      : undefined;
+}
+
 export function parsePiCommand(
   subcommand: string,
   values: Record<string, unknown>,
@@ -15,16 +23,17 @@ export function parsePiCommand(
       "machine",
       "workflow-manifest",
     ]);
+    const issue = singleIssue(values.issue);
     if (
       typeof values.repo !== "string" ||
-      typeof values.issue !== "string" ||
+      !issue ||
       typeof values.planner !== "string" ||
       typeof values["base-sha"] !== "string"
     )
       throw new Error("--repo, --issue, --planner, --base-sha are required");
     return {
       repo: values.repo,
-      issue: values.issue,
+      issue,
       plannerEnvelope: values.planner,
       baseSha: values["base-sha"],
       timeoutSeconds: parseTimeout(
@@ -48,8 +57,8 @@ export function parsePiCommand(
       "session-id",
       "session-sha256",
     ]);
-    if (typeof values.repo !== "string" || typeof values.issue !== "string")
-      throw new Error("--repo, --issue are required");
+    const issue = singleIssue(values.issue);
+    if (typeof values.repo !== "string" || !issue) throw new Error("--repo, --issue are required");
     const resume = values["resume-session"];
     const sessionId = values["session-id"];
     const sessionSha256 = values["session-sha256"];
@@ -67,7 +76,7 @@ export function parsePiCommand(
             })();
     return {
       repo: values.repo,
-      issue: values.issue,
+      issue,
       ...(resumeSession ? { resumeSession } : {}),
       timeoutSeconds: parseTimeout(
         typeof values["timeout-seconds"] === "string" ? values["timeout-seconds"] : undefined,

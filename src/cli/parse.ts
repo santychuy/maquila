@@ -14,7 +14,7 @@ export function parseCli(args: string[]): ParsedCli {
     options: {
       help: { type: "boolean", short: "h" },
       repo: { type: "string" },
-      issue: { type: "string" },
+      issue: { type: "string", multiple: true },
       planner: { type: "string" },
       "base-sha": { type: "string" },
       "timeout-seconds": { type: "string" },
@@ -25,6 +25,7 @@ export function parseCli(args: string[]): ParsedCli {
       machine: { type: "boolean" },
       target: { type: "string" },
       "run-id": { type: "string" },
+      "batch-id": { type: "string" },
       "resume-session": { type: "string" },
       "session-id": { type: "string" },
       "session-sha256": { type: "string" },
@@ -44,6 +45,7 @@ export function parseCli(args: string[]): ParsedCli {
 
   const primary = positionals[0];
   const secondary = positionals[1];
+  const tertiary = positionals[2];
   const command = positionals.join(" ");
 
   if (command === "setup") return parseSetupCommand(values);
@@ -57,7 +59,8 @@ export function parseCli(args: string[]): ParsedCli {
   }
 
   if (primary === "run") {
-    return parseRunCommand(secondary, values);
+    if (positionals.length > 3) throw new Error("invalid run command");
+    return parseRunCommand(secondary, tertiary, values);
   }
 
   if (primary === "pi") {
