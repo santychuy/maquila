@@ -7,15 +7,14 @@ import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { test } from "node:test";
+import { archivedSystemPrompt, createObserverServer } from "../src/observer/server.js";
 import {
-  archivedSystemPrompt,
-  createObserverServer,
   ensureObserver,
   observerDescriptorPath,
   stopObserver,
   type ObserverDescriptor,
-} from "../src/observer.js";
-import { OBSERVER_CSS, OBSERVER_HTML, OBSERVER_JS } from "../src/observer-ui.js";
+} from "../src/observer/process.js";
+import { OBSERVER_CSS, OBSERVER_HTML, OBSERVER_JS } from "../src/observer/ui.js";
 import {
   formatDuration,
   formatRelativeTime,
@@ -23,11 +22,14 @@ import {
   formatTokens,
   sumReportedCosts,
   workflowCheckpointDisplay,
-} from "../src/observer-app.js";
+} from "../src/observer/app.js";
 import { parseAgentDefinition } from "../src/agents/index.js";
 import { createTelemetryWriter, telemetryPath } from "../src/telemetry.js";
 
-const observerAppSource = readFileSync(resolve(process.cwd(), "src", "observer-app.tsx"), "utf8");
+const observerAppSource = readFileSync(
+  resolve(process.cwd(), "src", "observer", "app.tsx"),
+  "utf8",
+);
 
 const runId = "11111111-1111-4111-8111-111111111111";
 const instanceId = "22222222-2222-4222-8222-222222222222";

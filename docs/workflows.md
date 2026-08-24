@@ -42,6 +42,7 @@ Any failed or timed-out block stops later blocks. Reviewer `FAIL`, missing gate 
 | VM stream frames                                                 | `src/remote-protocol.ts`      |
 | Host event ledger                                                | `src/telemetry.ts`            |
 | Status folding and current checkpoint                            | `src/run-status.ts`           |
+| Local observer contracts, server, lifecycle, and UI              | `src/observer/`               |
 
 Change concern in owner above. Keep IDs aligned through `workflowStep()` instead of copying actor/phase strings.
 

@@ -1,4 +1,4 @@
-import { DEFAULT_OBSERVER_PORT } from "../observer.js";
+import { DEFAULT_OBSERVER_PORT } from "../observer/shared.js";
 
 export function rejectOptions(values: Record<string, unknown>, allowed: string[]): void {
   const extra = Object.entries(values)

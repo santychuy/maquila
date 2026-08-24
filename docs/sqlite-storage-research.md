@@ -39,8 +39,8 @@ Key behavior:
 - `src/telemetry.ts:410-569` reads the complete ledger, ignores an incomplete trailing line, validates every event, and enforces gap-free sequence and lifecycle semantics.
 - `src/telemetry.ts:577-750` replays existing telemetry when opening a writer, truncates an incomplete tail, validates each append, enforces line and file limits, and appends with `flush: true`.
 - `src/run-status.ts` folds the complete event list into one current status.
-- `src/observer.ts:186-204` lists telemetry files and loads complete ledgers.
-- `src/observer.ts:259-299` folds every listed run before sorting and limiting results; event pagination still parses the full selected ledger before filtering by cursor.
+- `src/observer/server.ts:59-78` lists telemetry files and loads complete ledgers.
+- `src/observer/server.ts:166-208` folds every listed run before sorting and limiting results; event pagination still parses the full selected ledger before filtering by cursor.
 
 This is append-only evidence with query-heavy readers. It is the clearest SQLite candidate.
 

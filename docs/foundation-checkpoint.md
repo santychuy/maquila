@@ -35,7 +35,7 @@ GitHub write credentials never enter VM. OpenRouter uses dedicated capped key as
 - `src/telemetry.ts` adds a strict append-only host event ledger with gap-free sequencing, safe replay, bounded public fields, and terminal cleanup reconciliation.
 - `src/remote-protocol.ts` protocol v2 plus streaming exe.dev SSH expose step-tagged phase, agent/tool, gate, and review activity without prompts, tool arguments/results, or raw output. Mixed binaries and mismatched step/actor/phase identity fail closed. Controller still owns state and acceptance.
 - `src/target.ts`, `src/run-launcher.ts`, and `src/run-status.ts` add target-repository inference, accepted detached controller startup with a preallocated run ID, and read-only telemetry status folding.
-- `src/observer.ts`, `src/observer-ui.ts`, and Preact components in `src/observer-app.tsx` add a managed loopback-only GET/HEAD server, ownership-checked process lifecycle, replay/cursor API, and accessible polling UI bundled into the binary.
+- `src/observer/` (`shared.ts`, `server.ts`, `process.ts`, `ui.ts`, `app.tsx`, generated `bundle.generated.ts`) adds a managed loopback-only GET/HEAD server, ownership-checked process lifecycle, replay/cursor API, and accessible polling UI bundled into the binary.
 - `.pi/skills/maquila/SKILL.md` provides a thin maquila-owned Pi command router for observed start and status flows.
 
 ## Evidence

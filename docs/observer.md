@@ -8,6 +8,19 @@ Three responsibilities stay separate:
 - **Agent roles:** reason, plan, write, and review. Their output is a proposal or report, not an acceptance decision.
 - **Code roles:** controller, verifier, and related deterministic code orchestrate work, enforce gates and limits, and record evidence. Model claims do not replace these checks.
 
+## Source map
+
+Observer code lives under `src/observer/`. Each file has one job:
+
+- `shared.ts` holds shared constants, descriptor types, and small validators.
+- `server.ts` serves loopback-only HTTP routes, reads telemetry, folds run status, and serves observer HTML and assets.
+- `process.ts` owns detached-process startup, health checks, descriptor files, private logs, and safe stop/reuse decisions.
+- `ui.ts` holds inline HTML and CSS plus the generated JavaScript export used by the server.
+- `app.tsx` is the Preact UI source: polling, run lists, phase details, and accessibility behavior.
+- `bundle.generated.ts` is generated JavaScript from `app.tsx`; rebuild it with `bun run build:observer` rather than editing it.
+
+Keep server contracts and process ownership in their files. Keep browser behavior in `app.tsx`; do not move UI logic into the HTTP server.
+
 ## Daily workflow
 
 Build and link global executable once, then configure host tools:

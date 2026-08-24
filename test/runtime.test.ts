@@ -7,6 +7,9 @@ test("runtime paths support source, compiled JavaScript, and Bun executables", (
   const root = process.cwd();
   assert.equal(maquilaRoot(resolve(root, "src")), root);
   assert.equal(maquilaRoot(resolve(root, "dist/src")), root);
+  assert.equal(maquilaRoot(resolve(root, "src/observer")), root);
+  assert.equal(maquilaRoot(resolve(root, "dist/src/observer")), resolve(root, "dist"));
+  assert.equal(maquilaRoot(resolve(root, "dist/src/observer", "..")), root);
   assert.deepEqual(cliInvocation("/$bunfs/root/maquila", ["--help"], "/maquila/dist/maquila"), {
     command: "/maquila/dist/maquila",
     args: ["--help"],

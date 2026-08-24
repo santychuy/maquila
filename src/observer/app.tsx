@@ -3,8 +3,8 @@ import localizedFormat from "dayjs/plugin/localizedFormat.js";
 import relativeTime from "dayjs/plugin/relativeTime.js";
 import updateLocale from "dayjs/plugin/updateLocale.js";
 import { render } from "preact";
-import type { RunStatusSummary } from "./run-status.js";
-import type { TelemetryRecord } from "./telemetry.js";
+import type { RunStatusSummary } from "../run-status.js";
+import type { TelemetryRecord } from "../telemetry.js";
 
 dayjs.extend(localizedFormat);
 dayjs.extend(relativeTime);

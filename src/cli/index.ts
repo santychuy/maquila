@@ -17,7 +17,12 @@ import { LAUNCH_INSTANCE_ENV, startDetachedRun, writeLaunchHandshake } from "../
 import { foldRunStatus, type RunStatusSummary } from "../run-status.js";
 import { maquilaRoot, isMain } from "../runtime.js";
 import { validateResolvedTarget } from "../target.js";
-import { ensureObserver, observerStatus, serveObserver, stopObserver } from "../observer.js";
+import {
+  ensureObserver,
+  observerStatus,
+  serveObserver,
+  stopObserver,
+} from "../observer/process.js";
 import { parseCli } from "./parse.js";
 import { HELP } from "./types.js";
 
