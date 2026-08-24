@@ -206,8 +206,48 @@ export const TelemetryRecordSchema = Type.Union([
         cacheRead: SafeInteger,
         cacheWrite: SafeInteger,
         total: SafeInteger,
+        contextTokens: Type.Optional(SafeInteger),
+        contextWindow: Type.Optional(
+          Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+        ),
         reportedCostNanoUsd: Type.Optional(SafeInteger),
         referenceEstimateNanoUsd: Type.Optional(SafeInteger),
+      },
+      { additionalProperties: false },
+    ),
+  ),
+  eventSchema(
+    "agent_content",
+    Type.Object(
+      {
+        contentId: Type.String({ minLength: 1, maxLength: 200 }),
+        kind: Type.Union([
+          Type.Literal("user_prompt"),
+          Type.Literal("assistant_message"),
+          Type.Literal("reasoning"),
+        ]),
+        chunkIndex: Type.Integer({ minimum: 0 }),
+        chunkCount: Type.Integer({ minimum: 1, maximum: 32 }),
+        text: Type.String({ maxLength: 8192 }),
+      },
+      { additionalProperties: false },
+    ),
+  ),
+  eventSchema(
+    "agent_content_unavailable",
+    Type.Object(
+      {
+        contentId: Type.String({ minLength: 1, maxLength: 200 }),
+        kind: Type.Union([
+          Type.Literal("user_prompt"),
+          Type.Literal("assistant_message"),
+          Type.Literal("reasoning"),
+        ]),
+        reason: Type.Union([
+          Type.Literal("item_too_large"),
+          Type.Literal("phase_budget_exhausted"),
+          Type.Literal("provider_redacted"),
+        ]),
       },
       { additionalProperties: false },
     ),
@@ -375,6 +415,12 @@ export function parseTelemetryRecord(value: unknown): TelemetryRecord {
     if (record.phase.name !== expected.phase || record.actor !== expected.actor)
       throw new Error("invalid telemetry step identity");
   }
+  if (record.type === "agent_content") {
+    if (Buffer.byteLength(record.payload.text) > 8 * 1024)
+      throw new Error("agent content chunk exceeds byte limit");
+    if (record.payload.chunkIndex >= record.payload.chunkCount)
+      throw new Error("invalid agent content chunk index");
+  }
   if (record.type === "agent_context" && record.payload.modelReference) {
     for (const dateValue of [
       record.payload.modelReference.knowledgeCutoff,
@@ -394,6 +440,8 @@ export function parseTelemetryRecord(value: unknown): TelemetryRecord {
       "agent_finished",
       "agent_context",
       "agent_usage",
+      "agent_content",
+      "agent_content_unavailable",
       "tool_started",
       "tool_finished",
       "gate_finished",
@@ -415,15 +463,21 @@ export function parseTelemetryRecord(value: unknown): TelemetryRecord {
     )
       throw new Error("invalid telemetry artifact name");
   }
-  if (
-    record.type === "agent_usage" &&
-    BigInt(record.payload.total) !==
+  if (record.type === "agent_usage") {
+    if (
+      BigInt(record.payload.total) !==
       BigInt(record.payload.input) +
         BigInt(record.payload.output) +
         BigInt(record.payload.cacheRead) +
         BigInt(record.payload.cacheWrite)
-  )
-    throw new Error("invalid telemetry token total");
+    )
+      throw new Error("invalid telemetry token total");
+    if (
+      (record.payload.contextTokens === undefined) !==
+      (record.payload.contextWindow === undefined)
+    )
+      throw new Error("invalid telemetry context usage");
+  }
   if (
     record.type === "run_finished" &&
     (record.payload.status === "awaiting_decision" ||
@@ -464,6 +518,11 @@ export function readTelemetry(path: string): TelemetryRecord[] {
       }
       return parseTelemetryRecord(value);
     });
+  validateTelemetryRecords(records);
+  return records;
+}
+
+function validateTelemetryRecords(records: TelemetryRecord[]): void {
   let terminal: Extract<TelemetryRecord, { type: "run_finished" }> | undefined;
   let reconciled = false;
   const contexts = new Set<string>();
@@ -474,6 +533,17 @@ export function readTelemetry(path: string): TelemetryRecord[] {
   const usages = new Set<string>();
   const agentStates = new Map<string, "started" | "completed" | "failed" | "timed_out">();
   const activeTools = new Map<string, { phaseId: string; name: string }>();
+  const contentChunks = new Map<
+    string,
+    {
+      phaseId: string;
+      kind: "user_prompt" | "assistant_message" | "reasoning";
+      next: number;
+      count: number;
+    }
+  >();
+  let pendingContentKey: string | undefined;
+  const contentBytes = new Map<string, number>();
   const seenPhases = new Set<string>();
   const openPhases = new Map<
     string,
@@ -482,6 +552,13 @@ export function readTelemetry(path: string): TelemetryRecord[] {
   for (const [index, record] of records.entries()) {
     if (record.seq !== index + 1) throw new Error("telemetry sequence is not gap-free");
     if (index > 0 && record.runId !== records[0]?.runId) throw new Error("mixed telemetry runId");
+    if (
+      pendingContentKey &&
+      (record.type !== "agent_content" ||
+        !record.phase ||
+        `${record.phase.id}:${record.payload.contentId}` !== pendingContentKey)
+    )
+      throw new Error("event interleaved with incomplete agent content");
     if (terminal) {
       if (
         reconciled ||
@@ -508,7 +585,14 @@ export function readTelemetry(path: string): TelemetryRecord[] {
     }
     if (
       record.phase &&
-      ["agent_started", "agent_finished", "tool_started", "tool_finished"].includes(record.type)
+      [
+        "agent_started",
+        "agent_finished",
+        "tool_started",
+        "tool_finished",
+        "agent_content",
+        "agent_content_unavailable",
+      ].includes(record.type)
     ) {
       const started = openPhases.get(record.phase.id);
       if (
@@ -531,6 +615,48 @@ export function readTelemetry(path: string): TelemetryRecord[] {
       if ([...activeTools.values()].some((tool) => tool.phaseId === record.phase!.id))
         throw new Error("agent finished with active tool calls");
       agentStates.set(record.phase.id, record.payload.status);
+    }
+    if (
+      (record.type === "agent_content" || record.type === "agent_content_unavailable") &&
+      record.phase
+    ) {
+      if (agentStates.get(record.phase.id) !== "started")
+        throw new Error("agent content outside active agent");
+      const key = `${record.phase.id}:${record.payload.contentId}`;
+      if (record.type === "agent_content_unavailable") {
+        if (contentChunks.has(key)) throw new Error("duplicate agent content");
+        contentChunks.set(key, {
+          phaseId: record.phase.id,
+          kind: record.payload.kind,
+          next: 0,
+          count: 0,
+        });
+      } else {
+        const bytes =
+          (contentBytes.get(record.phase.id) ?? 0) + Buffer.byteLength(record.payload.text);
+        if (bytes > 512 * 1024) throw new Error("agent content exceeds phase limit");
+        contentBytes.set(record.phase.id, bytes);
+        const state = contentChunks.get(key);
+        if (!state && record.payload.chunkIndex !== 0)
+          throw new Error("agent content does not start at first chunk");
+        if (state?.kind !== undefined && state.kind !== record.payload.kind)
+          throw new Error("agent content kind changed");
+        if (
+          state &&
+          (state.count === 0 ||
+            state.next !== record.payload.chunkIndex ||
+            state.count !== record.payload.chunkCount)
+        )
+          throw new Error("invalid agent content chunk sequence");
+        const next = record.payload.chunkIndex + 1;
+        contentChunks.set(key, {
+          phaseId: record.phase.id,
+          kind: record.payload.kind,
+          next,
+          count: record.payload.chunkCount,
+        });
+        pendingContentKey = next < record.payload.chunkCount ? key : undefined;
+      }
     }
     if (record.type === "tool_started" && record.phase) {
       if (agentStates.get(record.phase.id) !== "started")
@@ -593,6 +719,12 @@ export function readTelemetry(path: string): TelemetryRecord[] {
       )
         throw new Error("phase closure does not match active phase");
       if (
+        [...contentChunks.values()].some(
+          (state) => state.phaseId === record.phase!.id && state.count > state.next,
+        )
+      )
+        throw new Error("phase closure has incomplete agent content");
+      if (
         record.payload.status === "completed" &&
         ([...activeTools.values()].some((tool) => tool.phaseId === record.phase!.id) ||
           (record.phase.stepId &&
@@ -604,7 +736,6 @@ export function readTelemetry(path: string): TelemetryRecord[] {
     }
     if (record.type === "run_finished") terminal = record;
   }
-  return records;
 }
 
 export interface TelemetryWriter {
@@ -795,6 +926,7 @@ export function createTelemetryWriter(root: string, runId: string): TelemetryWri
             throw new Error("duplicate agent usage");
         }
       }
+      validateTelemetryRecords([...previous, record]);
       const line = `${JSON.stringify(record)}\n`;
       const lineBytes = Buffer.byteLength(line);
       if (lineBytes > MAX_TELEMETRY_LINE_BYTES) throw new Error("telemetry line exceeds limit");

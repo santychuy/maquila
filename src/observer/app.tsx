@@ -39,6 +39,7 @@ type PhaseSegment = {
   context?: Extract<TelemetryRecord, { type: "agent_context" }>;
   usage?: Extract<TelemetryRecord, { type: "agent_usage" }>;
   tools: ToolEvent[];
+  records: TelemetryRecord[];
   effectiveEnd: number;
 };
 type EventPage = {
@@ -94,6 +95,36 @@ export function formatTokens(value: number): string {
   const divisor = value >= 1_000_000 ? 1_000_000 : value >= 1_000 ? 1_000 : 1;
   const suffix = divisor === 1_000_000 ? "M" : divisor === 1_000 ? "K" : "";
   return `${Number((value / divisor).toFixed(1))}${suffix}`;
+}
+export function contextWindowUsage(
+  tokens: number | undefined,
+  contextWindow: number | undefined,
+):
+  | {
+      tokens: number;
+      contextWindow: number;
+      percent: number;
+      fillPercent: number;
+      label: string;
+    }
+  | undefined {
+  if (
+    tokens === undefined ||
+    contextWindow === undefined ||
+    !Number.isSafeInteger(tokens) ||
+    !Number.isSafeInteger(contextWindow) ||
+    tokens < 0 ||
+    contextWindow < 1
+  )
+    return undefined;
+  const percent = (tokens / contextWindow) * 100;
+  return {
+    tokens,
+    contextWindow,
+    percent,
+    fillPercent: Math.min(percent, 100),
+    label: `${Number(percent.toFixed(1))}%`,
+  };
 }
 function setConnection(label: string, live: boolean): void {
   text($("connection"), label);
@@ -220,6 +251,7 @@ function segments(events: TelemetryRecord[]): PhaseSegment[] {
           (event.type === "tool_started" || event.type === "tool_finished") &&
           event.phase?.id === start.phase.id,
       ),
+      records: events.filter((event) => event.phase?.id === start.phase.id),
       effectiveEnd: 0,
     }));
 }
@@ -246,7 +278,7 @@ function PromptDisclosure({ segment }: { segment: PhaseSegment }) {
     output.textContent = "Loading archived prompt…";
     try {
       const result = await get<{ prompt: string }>(
-        `/api/v1/runs/${encodeURIComponent(segment.start.runId)}/prompts/${segment.start.actor}`,
+        `/api/v1/runs/${encodeURIComponent(segment.start.runId)}/prompts/${segment.start.actor}?phase=${encodeURIComponent(segment.id)}`,
       );
       output.textContent = result.prompt;
       output.dataset.loaded = "true";
@@ -319,6 +351,36 @@ function PhaseIcon({ kind }: { kind: PhaseKind }) {
     </svg>
   );
 }
+function ContextWindowBar({
+  contextTokens,
+  contextWindow,
+}: {
+  contextTokens: number | undefined;
+  contextWindow: number | undefined;
+}) {
+  const usage = contextWindowUsage(contextTokens, contextWindow);
+  if (!usage) return null;
+  const overLimit = usage.percent > 100;
+  const progressLabel = overLimit
+    ? `Context window full; estimated usage ${usage.label}`
+    : `Context window ${usage.label} used`;
+  return (
+    <div class="context-usage">
+      <div class="context-usage-head">
+        <span class="label">Context window</span>
+        <strong>
+          {overLimit ? `100% full · ${usage.label} estimated` : `${usage.label} used`}
+        </strong>
+        <span>
+          {formatTokens(usage.tokens)} / {formatTokens(usage.contextWindow)} tokens
+        </span>
+      </div>
+      <progress max={100} value={usage.fillPercent} aria-label={progressLabel}>
+        {usage.label}
+      </progress>
+    </div>
+  );
+}
 function SegmentButton({
   segment,
   selected,
@@ -335,6 +397,7 @@ function SegmentButton({
   const groups = toolGroups(segment);
   const running = [...groups.entries()].find(([, group]) => group.running);
   const usage = segment.usage?.payload;
+  const contextUsage = contextWindowUsage(usage?.contextTokens, usage?.contextWindow);
   const preview = [
     running
       ? `${running[0]} running`
@@ -342,6 +405,7 @@ function SegmentButton({
         ? `${[...groups.values()].reduce((count, group) => count + group.count, 0)} tool calls`
         : "",
     usage ? `${formatTokens(usage.total)} tokens` : "",
+    contextUsage ? `${contextUsage.label} context` : "",
     usage?.reportedCostNanoUsd === undefined ? "" : money(usage.reportedCostNanoUsd),
   ]
     .filter(Boolean)
@@ -395,6 +459,104 @@ function SegmentButton({
     </li>
   );
 }
+export type PhaseActivity = {
+  seq: number;
+  at: string;
+  kind: "user_prompt" | "assistant_message" | "reasoning" | "tool" | "lifecycle" | "unavailable";
+  label: string;
+  text?: string;
+  status?: string;
+  duration?: number;
+};
+
+export function buildPhaseActivity(events: TelemetryRecord[], phaseId: string): PhaseActivity[] {
+  const scoped = events.filter((event) => event.phase?.id === phaseId);
+  const chunks = new Map<string, Extract<TelemetryRecord, { type: "agent_content" }>[]>();
+  const tools = new Map<string, Extract<TelemetryRecord, { type: "tool_started" }>>();
+  const activity: PhaseActivity[] = [];
+  for (const event of scoped) {
+    if (event.type === "agent_content") {
+      const values = chunks.get(event.payload.contentId) ?? [];
+      values.push(event);
+      chunks.set(event.payload.contentId, values);
+      if (values.length === event.payload.chunkCount) {
+        values.sort((left, right) => left.payload.chunkIndex - right.payload.chunkIndex);
+        activity.push({
+          seq: values[0]!.seq,
+          at: values[0]!.recordedAt,
+          kind: event.payload.kind,
+          label: event.payload.kind.replaceAll("_", " "),
+          text: values.map((value) => value.payload.text).join(""),
+        });
+      }
+    } else if (event.type === "agent_content_unavailable") {
+      activity.push({
+        seq: event.seq,
+        at: event.recordedAt,
+        kind: "unavailable",
+        label: event.payload.kind.replaceAll("_", " "),
+        status: event.payload.reason.replaceAll("_", " "),
+      });
+    } else if (event.type === "tool_started") {
+      tools.set(event.payload.toolCallId, event);
+    } else if (event.type === "tool_finished") {
+      const start = tools.get(event.payload.toolCallId);
+      if (start) {
+        tools.delete(event.payload.toolCallId);
+        activity.push({
+          seq: start.seq,
+          at: start.recordedAt,
+          kind: "tool",
+          label: start.payload.toolName,
+          status: event.payload.isError ? "failed" : "completed",
+          duration: Math.max(0, Date.parse(event.recordedAt) - Date.parse(start.recordedAt)),
+        });
+      }
+    } else if (["agent_started", "agent_finished", "agent_usage"].includes(event.type)) {
+      activity.push({
+        seq: event.seq,
+        at: event.recordedAt,
+        kind: "lifecycle",
+        label: event.type.replaceAll("_", " "),
+        status: eventDetail(event),
+      });
+    }
+  }
+  for (const start of tools.values())
+    activity.push({
+      seq: start.seq,
+      at: start.recordedAt,
+      kind: "tool",
+      label: start.payload.toolName,
+      status: scoped.some((event) => event.type === "phase_finished") ? "interrupted" : "running",
+    });
+  return activity.toSorted((left, right) => left.seq - right.seq);
+}
+
+function PhaseActivityList({ segment }: { segment: PhaseSegment }) {
+  const activity = buildPhaseActivity(segment.records, segment.id);
+  return activity.length ? (
+    <ol class="phase-activity">
+      {activity.map((item) => (
+        <li key={`${item.seq}-${item.kind}`}>
+          <time dateTime={item.at}>{dayjs(item.at).format("LTS")}</time>
+          <span class="event-type">{item.label}</span>
+          {item.status && <span>{item.status}</span>}
+          {item.duration !== undefined && <span>{formatDuration(item.duration)}</span>}
+          {item.text !== undefined && (
+            <details>
+              <summary>Show content</summary>
+              <pre>{item.text}</pre>
+            </details>
+          )}
+        </li>
+      ))}
+    </ol>
+  ) : (
+    <p class="empty">No detailed phase activity recorded.</p>
+  );
+}
+
 function SegmentDetailPanel({ segment }: { segment: PhaseSegment }) {
   const end = segment.boundary;
   const context = segment.context?.payload;
@@ -417,6 +579,7 @@ function SegmentDetailPanel({ segment }: { segment: PhaseSegment }) {
         {context && <MetricField label="Role" value={context.description} />}
         {context && <MetricField label="Available tools" value={String(context.tools.length)} />}
       </div>
+      <ContextWindowBar contextTokens={usage?.contextTokens} contextWindow={usage?.contextWindow} />
       <details>
         <summary>Phase metadata</summary>
         <dl>
@@ -469,7 +632,7 @@ function SegmentDetailPanel({ segment }: { segment: PhaseSegment }) {
       {context && <PromptDisclosure key={segment.id} segment={segment} />}
       {groups.size > 0 && (
         <>
-          <h4>Tool activity</h4>
+          <h4>Tool call summary</h4>
           <ul class="tools">
             {[...groups.entries()].map(([name, group]) => (
               <li key={name}>
@@ -482,6 +645,8 @@ function SegmentDetailPanel({ segment }: { segment: PhaseSegment }) {
           </ul>
         </>
       )}
+      <h4>Phase activity</h4>
+      <PhaseActivityList segment={segment} />
     </>
   );
 }
@@ -522,27 +687,6 @@ function SummaryGrid({
         </div>
       )}
     </>
-  );
-}
-function EventRow({ event }: { event: TelemetryRecord }) {
-  return (
-    <li class="event">
-      <span class="seq">#{event.seq}</span>
-      <span class="event-type">{event.type.replaceAll("_", " ")}</span>
-      <span class="event-actor">{event.phase?.name || event.actor}</span>
-      <span class="event-detail">{eventDetail(event)}</span>
-    </li>
-  );
-}
-function EventLog({ events }: { events: TelemetryRecord[] }) {
-  return events.length ? (
-    <>
-      {events.map((event) => (
-        <EventRow key={event.seq} event={event} />
-      ))}
-    </>
-  ) : (
-    <li class="empty">No telemetry events recorded yet.</li>
   );
 }
 function renderTimeline(): void {
@@ -624,7 +768,6 @@ function renderDetail(
     $("summary"),
   );
   renderTimeline();
-  render(<EventLog events={events} />, $("events"));
   if (focused)
     $("timeline")
       .querySelector<HTMLElement>(`[data-segment="${CSS.escape(focused)}"]`)

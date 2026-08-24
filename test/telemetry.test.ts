@@ -67,6 +67,60 @@ test("telemetry schema rejects unknown fields and inconsistent identity", () => 
       ),
     /requires phase/,
   );
+  for (const value of [
+    {
+      type: "agent_content",
+      actor: "planner",
+      payload: {
+        contentId: "content-1",
+        kind: "user_prompt",
+        chunkIndex: 0,
+        chunkCount: 1,
+        text: "prompt",
+      },
+    },
+    {
+      type: "agent_content_unavailable",
+      actor: "planner",
+      payload: { contentId: "content-1", kind: "reasoning", reason: "provider_redacted" },
+    },
+  ])
+    assert.throws(() => parseTelemetryRecord(record(value)), /requires phase/);
+});
+
+test("telemetry agent content enforces UTF-8 bytes and chunk indexes", () => {
+  const content = {
+    type: "agent_content",
+    actor: "planner",
+    phase: { id: "plan:1", name: "planning", stepId: "plan", attempt: 1 },
+    payload: {
+      contentId: "content-1",
+      kind: "user_prompt",
+      chunkIndex: 0,
+      chunkCount: 1,
+      text: "prompt",
+    },
+  };
+  assert.throws(
+    () =>
+      parseTelemetryRecord(
+        record({
+          ...content,
+          payload: { ...content.payload, text: "🙂".repeat(3_000) },
+        }),
+      ),
+    /byte limit/,
+  );
+  assert.throws(
+    () =>
+      parseTelemetryRecord(
+        record({
+          ...content,
+          payload: { ...content.payload, chunkIndex: 1 },
+        }),
+      ),
+    /chunk index/,
+  );
 });
 
 test("telemetry accepts legacy phases and strictly validates new workflow steps", () => {
@@ -142,6 +196,272 @@ test("full telemetry replay preserves legacy agent ledgers without context or us
         .join("\n") + "\n",
     );
     assert.equal(readTelemetry(path).length, inputs.length);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("telemetry replay rejects events interleaved between content chunks", () => {
+  const root = mkdtempSync(join(tmpdir(), "maquila-telemetry-content-order-"));
+  try {
+    const path = createTelemetryWriter(root, runId).path;
+    const phase = { id: "planning:1", name: "planning", attempt: 1 };
+    const before = [
+      { type: "run_created", actor: "controller", payload: { status: "created" } },
+      { type: "phase_started", actor: "planner", phase, payload: {} },
+      { type: "agent_started", actor: "planner", phase, payload: {} },
+      {
+        type: "agent_content",
+        actor: "planner",
+        phase,
+        payload: {
+          contentId: "content-1",
+          kind: "assistant_message",
+          chunkIndex: 0,
+          chunkCount: 2,
+          text: "first",
+        },
+      },
+    ];
+    const last = {
+      type: "agent_content",
+      actor: "planner",
+      phase,
+      payload: {
+        contentId: "content-1",
+        kind: "assistant_message",
+        chunkIndex: 1,
+        chunkCount: 2,
+        text: "last",
+      },
+    };
+    const write = (inputs: Record<string, unknown>[]) =>
+      writeFileSync(
+        path,
+        inputs
+          .map((input, index) =>
+            JSON.stringify(record({ ...input, seq: index + 1, eventId: `${runId}:${index + 1}` })),
+          )
+          .join("\n") + "\n",
+      );
+
+    write([...before, last]);
+    assert.equal(readTelemetry(path).length, 5);
+    write([
+      ...before,
+      {
+        ...last,
+        payload: { ...last.payload, kind: "reasoning" },
+      },
+    ]);
+    assert.throws(() => readTelemetry(path), /agent content kind changed/);
+    write([
+      ...before,
+      {
+        type: "tool_started",
+        actor: "planner",
+        phase,
+        payload: { toolName: "read", toolCallId: "tool-1" },
+      },
+      {
+        type: "tool_finished",
+        actor: "planner",
+        phase,
+        payload: { toolName: "read", toolCallId: "tool-1", isError: false },
+      },
+      last,
+    ]);
+    assert.throws(() => readTelemetry(path), /interleaved with incomplete agent content/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("telemetry writer rejects content interleaving and incomplete phase closure without mutation", () => {
+  const root = mkdtempSync(join(tmpdir(), "maquila-telemetry-content-writer-"));
+  try {
+    const writer = createTelemetryWriter(root, runId);
+    const phase = { id: "planning:1", name: "planning" as const, attempt: 1 };
+    writer.append({ type: "phase_started", actor: "planner", phase, payload: {} });
+    writer.append({ type: "agent_started", actor: "planner", phase, payload: {} });
+    writer.append({
+      type: "agent_content",
+      actor: "planner",
+      phase,
+      payload: {
+        contentId: "content-1",
+        kind: "assistant_message",
+        chunkIndex: 0,
+        chunkCount: 2,
+        text: "first",
+      },
+    });
+    const beforeInterleaving = readFileSync(writer.path, "utf8");
+    assert.throws(
+      () =>
+        writer.append({
+          type: "agent_content",
+          actor: "planner",
+          phase,
+          payload: {
+            contentId: "content-1",
+            kind: "reasoning",
+            chunkIndex: 1,
+            chunkCount: 2,
+            text: "last",
+          },
+        }),
+      /agent content kind changed/,
+    );
+    assert.equal(readFileSync(writer.path, "utf8"), beforeInterleaving);
+    assert.throws(
+      () =>
+        writer.append({
+          type: "tool_started",
+          actor: "planner",
+          phase,
+          payload: { toolName: "read", toolCallId: "tool-1" },
+        }),
+      /interleaved with incomplete agent content/,
+    );
+    assert.equal(readFileSync(writer.path, "utf8"), beforeInterleaving);
+    writer.append({
+      type: "agent_content",
+      actor: "planner",
+      phase,
+      payload: {
+        contentId: "content-1",
+        kind: "assistant_message",
+        chunkIndex: 1,
+        chunkCount: 2,
+        text: "last",
+      },
+    });
+    writer.append({
+      type: "agent_content",
+      actor: "planner",
+      phase,
+      payload: {
+        contentId: "content-2",
+        kind: "assistant_message",
+        chunkIndex: 0,
+        chunkCount: 2,
+        text: "incomplete",
+      },
+    });
+    const beforeClosure = readFileSync(writer.path, "utf8");
+    assert.throws(
+      () =>
+        writer.append({
+          type: "phase_finished",
+          actor: "planner",
+          phase,
+          payload: { status: "failed" },
+        }),
+      /interleaved with incomplete agent content/,
+    );
+    assert.equal(readFileSync(writer.path, "utf8"), beforeClosure);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("telemetry writer enforces content indexes and phase byte budget without mutation", () => {
+  const root = mkdtempSync(join(tmpdir(), "maquila-telemetry-content-budget-"));
+  try {
+    const writer = createTelemetryWriter(root, runId);
+    const phase = { id: "planning:1", name: "planning" as const, attempt: 1 };
+    writer.append({ type: "phase_started", actor: "planner", phase, payload: {} });
+    writer.append({ type: "agent_started", actor: "planner", phase, payload: {} });
+    const beforeIndex = readFileSync(writer.path, "utf8");
+    assert.throws(
+      () =>
+        writer.append({
+          type: "agent_content",
+          actor: "planner",
+          phase,
+          payload: {
+            contentId: "bad-index",
+            kind: "user_prompt",
+            chunkIndex: 1,
+            chunkCount: 2,
+            text: "bad",
+          },
+        }),
+      /chunk index|first chunk/,
+    );
+    assert.equal(readFileSync(writer.path, "utf8"), beforeIndex);
+
+    for (const contentId of ["content-budget-1", "content-budget-2"])
+      for (let chunkIndex = 0; chunkIndex < 32; chunkIndex++)
+        writer.append({
+          type: "agent_content",
+          actor: "planner",
+          phase,
+          payload: {
+            contentId,
+            kind: "user_prompt",
+            chunkIndex,
+            chunkCount: 32,
+            text: "x".repeat(8 * 1024),
+          },
+        });
+    const beforeBudget = readFileSync(writer.path, "utf8");
+    assert.throws(
+      () =>
+        writer.append({
+          type: "agent_content",
+          actor: "planner",
+          phase,
+          payload: {
+            contentId: "content-budget-3",
+            kind: "user_prompt",
+            chunkIndex: 0,
+            chunkCount: 1,
+            text: "x",
+          },
+        }),
+      /content exceeds phase limit/,
+    );
+    assert.equal(readFileSync(writer.path, "utf8"), beforeBudget);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("telemetry writer persists contiguous content that replay accepts", () => {
+  const root = mkdtempSync(join(tmpdir(), "maquila-telemetry-content-parity-"));
+  try {
+    const writer = createTelemetryWriter(root, runId);
+    const phase = { id: "planning:1", name: "planning" as const, attempt: 1 };
+    writer.append({ type: "phase_started", actor: "planner", phase, payload: {} });
+    writer.append({ type: "agent_started", actor: "planner", phase, payload: {} });
+    for (const [chunkIndex, text] of ["first", "last"].entries())
+      writer.append({
+        type: "agent_content",
+        actor: "planner",
+        phase,
+        payload: {
+          contentId: "content-1",
+          kind: "assistant_message",
+          chunkIndex,
+          chunkCount: 2,
+          text,
+        },
+      });
+    writer.append({
+      type: "agent_finished",
+      actor: "planner",
+      phase,
+      payload: { status: "completed" },
+    });
+    writer.append({
+      type: "phase_finished",
+      actor: "planner",
+      phase,
+      payload: { status: "completed" },
+    });
+    assert.equal(readTelemetry(writer.path).length, 6);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -342,7 +662,15 @@ test("agent context and usage are strict, ordered, and prompt/cost free", () => 
       type: "agent_usage",
       actor: "planner",
       phase,
-      payload: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+      payload: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 2,
+        contextTokens: 50_000,
+        contextWindow: 200_000,
+      },
     });
     assert.throws(
       () => writer.append({ type: "agent_context", actor: "planner", phase, payload: context }),
@@ -372,6 +700,15 @@ test("agent context and usage are strict, ordered, and prompt/cost free", () => 
         ),
       /invalid telemetry/,
     );
+    for (const payload of [
+      { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2, contextTokens: 1 },
+      { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2, contextWindow: 10 },
+    ])
+      assert.throws(
+        () =>
+          parseTelemetryRecord(record({ type: "agent_usage", actor: "planner", phase, payload })),
+        /context usage/,
+      );
     assert.throws(
       () =>
         writer.append({
@@ -382,7 +719,9 @@ test("agent context and usage are strict, ordered, and prompt/cost free", () => 
         }),
       /after usage/,
     );
-    assert.equal(readTelemetry(writer.path).at(-1)?.type, "agent_usage");
+    const usage = readTelemetry(writer.path).at(-1);
+    assert.equal(usage?.type, "agent_usage");
+    assert.equal(usage?.type === "agent_usage" ? usage.payload.contextTokens : undefined, 50_000);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

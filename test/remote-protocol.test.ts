@@ -30,6 +30,53 @@ test("remote protocol parses arbitrary chunks and typed terminal result", () => 
   assert.equal(parser.finish().status, "completed");
 });
 
+test("remote protocol preserves bounded agent content and unavailable markers", () => {
+  const content = {
+    type: "agent_content",
+    actor: "planner",
+    phase: "planning",
+    stepId: "plan",
+    contentId: "prompt-1",
+    kind: "user_prompt",
+    chunkIndex: 0,
+    chunkCount: 1,
+    text: "issue prompt",
+    sourceAt: new Date(0).toISOString(),
+  } as const;
+  const unavailable = {
+    type: "agent_content_unavailable",
+    actor: "planner",
+    phase: "planning",
+    stepId: "plan",
+    contentId: "reasoning-1",
+    kind: "reasoning",
+    reason: "provider_redacted",
+    sourceAt: new Date(0).toISOString(),
+  } as const;
+  let output = "";
+  const writer = createRemoteProtocolWriter((line) => (output += line));
+  writer.event(content);
+  writer.event(unavailable);
+  writer.result({ status: "completed", runDir: "/tmp/run" });
+  const events: RemoteEvent[] = [];
+  const parser = new RemoteProtocolParser((value) => events.push(value));
+  parser.push(output);
+  assert.deepEqual(events, [content, unavailable]);
+  assert.equal(parser.finish().status, "completed");
+
+  for (const invalid of [
+    { ...content, chunkIndex: 1 },
+    { ...content, text: "x".repeat(8 * 1024 + 1) },
+  ])
+    assert.throws(
+      () =>
+        new RemoteProtocolParser(() => {}).push(
+          `${JSON.stringify({ protocol: 2, kind: "event", remoteSeq: 1, event: invalid })}\n`,
+        ),
+      /invalid remote protocol/,
+    );
+});
+
 test("remote protocol carries only fixed phase failure codes", () => {
   let output = "";
   const writer = createRemoteProtocolWriter((line) => (output += line));
@@ -136,7 +183,7 @@ test("remote protocol fails closed on malformed, out-of-order, and missing termi
   );
 });
 
-test("remote protocol accepts strict reported token totals and optional reported cost", () => {
+test("remote protocol accepts strict token, context, and cost usage", () => {
   const usage = {
     type: "agent_usage",
     actor: "planner",
@@ -147,12 +194,24 @@ test("remote protocol accepts strict reported token totals and optional reported
   } as const;
   let output = "";
   const writer = createRemoteProtocolWriter((line) => (output += line));
-  writer.event({ ...usage, reportedCostNanoUsd: 123 });
+  writer.event({
+    ...usage,
+    contextTokens: 50_000,
+    contextWindow: 200_000,
+    reportedCostNanoUsd: 123,
+  });
   writer.result({ status: "completed", runDir: "/tmp/run" });
   const seen: RemoteEvent[] = [];
   const parser = new RemoteProtocolParser((value) => seen.push(value));
   parser.push(output);
-  assert.deepEqual(seen, [{ ...usage, reportedCostNanoUsd: 123 }]);
+  assert.deepEqual(seen, [
+    {
+      ...usage,
+      contextTokens: 50_000,
+      contextWindow: 200_000,
+      reportedCostNanoUsd: 123,
+    },
+  ]);
   assert.equal(parser.finish().status, "completed");
   for (const tokens of [
     { ...usage.tokens, total: 9 },
@@ -173,6 +232,19 @@ test("remote protocol accepts strict reported token totals and optional reported
       /invalid remote protocol/,
     );
   }
+  for (const context of [{ contextTokens: 1 }, { contextWindow: 200_000 }])
+    assert.throws(
+      () =>
+        new RemoteProtocolParser(() => {}).push(
+          JSON.stringify({
+            protocol: 2,
+            kind: "event",
+            remoteSeq: 1,
+            event: { ...usage, ...context },
+          }) + "\n",
+        ),
+      /context usage/,
+    );
   for (const reportedCostNanoUsd of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1])
     assert.throws(
       () =>

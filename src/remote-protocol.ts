@@ -102,6 +102,46 @@ const RemoteEventSchema = Type.Union([
   ),
   Type.Object(
     {
+      type: Type.Literal("agent_content"),
+      actor: ActorSchema,
+      phase: PhaseSchema,
+      stepId: WorkflowStepIdSchema,
+      contentId: Type.String({ minLength: 1, maxLength: 200 }),
+      kind: Type.Union([
+        Type.Literal("user_prompt"),
+        Type.Literal("assistant_message"),
+        Type.Literal("reasoning"),
+      ]),
+      chunkIndex: Type.Integer({ minimum: 0 }),
+      chunkCount: Type.Integer({ minimum: 1, maximum: 32 }),
+      text: Type.String({ maxLength: 8192 }),
+      sourceAt: Type.String({ minLength: 1 }),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      type: Type.Literal("agent_content_unavailable"),
+      actor: ActorSchema,
+      phase: PhaseSchema,
+      stepId: WorkflowStepIdSchema,
+      contentId: Type.String({ minLength: 1, maxLength: 200 }),
+      kind: Type.Union([
+        Type.Literal("user_prompt"),
+        Type.Literal("assistant_message"),
+        Type.Literal("reasoning"),
+      ]),
+      reason: Type.Union([
+        Type.Literal("item_too_large"),
+        Type.Literal("phase_budget_exhausted"),
+        Type.Literal("provider_redacted"),
+      ]),
+      sourceAt: Type.String({ minLength: 1 }),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
       type: Type.Literal("tool_started"),
       actor: ActorSchema,
       phase: PhaseSchema,
@@ -142,6 +182,8 @@ const RemoteEventSchema = Type.Union([
       ]),
       stepId: WorkflowStepIdSchema,
       tokens: TokenSchema,
+      contextTokens: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+      contextWindow: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
       reportedCostNanoUsd: Type.Optional(
         Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
       ),
@@ -230,14 +272,23 @@ function parseFrame(line: string): RemoteFrame {
     throw new Error("invalid remote protocol timestamp");
   if (
     "event" in frame &&
-    frame.event.type === "agent_usage" &&
-    BigInt(frame.event.tokens.total) !==
+    frame.event.type === "agent_content" &&
+    (frame.event.chunkIndex >= frame.event.chunkCount ||
+      Buffer.byteLength(frame.event.text) > 8 * 1024)
+  )
+    throw new Error("invalid remote protocol content chunk");
+  if ("event" in frame && frame.event.type === "agent_usage") {
+    if (
+      BigInt(frame.event.tokens.total) !==
       BigInt(frame.event.tokens.input) +
         BigInt(frame.event.tokens.output) +
         BigInt(frame.event.tokens.cacheRead) +
         BigInt(frame.event.tokens.cacheWrite)
-  )
-    throw new Error("invalid remote protocol token total");
+    )
+      throw new Error("invalid remote protocol token total");
+    if ((frame.event.contextTokens === undefined) !== (frame.event.contextWindow === undefined))
+      throw new Error("invalid remote protocol context usage");
+  }
   return frame;
 }
 

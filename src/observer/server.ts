@@ -76,8 +76,14 @@ function events(root: string, runId: string, after: number, limit: number): Tele
   if (records.some((event) => event.runId !== runId)) throw new Error("invalid telemetry");
   return records.filter((event) => event.seq > after).slice(0, limit + 1);
 }
-export function archivedSystemPrompt(root: string, runId: string, actor: string): string {
-  if (!UUID.test(runId) || !MODEL_ACTORS.has(actor)) throw new Error("invalid prompt request");
+export function archivedSystemPrompt(
+  root: string,
+  runId: string,
+  actor: string,
+  phaseId: string,
+): string {
+  if (!UUID.test(runId) || !MODEL_ACTORS.has(actor) || !phaseId || phaseId.length > 200)
+    throw new Error("invalid prompt request");
   const runtimePath = resolve(root, ".maquila", "controllers", runId, "runtime.json");
   const runtime: unknown = JSON.parse(readFileSync(runtimePath, "utf8"));
   if (
@@ -98,7 +104,8 @@ export function archivedSystemPrompt(root: string, runId: string, actor: string)
   const { body } = parseFrontmatter(source);
   const prompt = body.trim();
   const context = readTelemetry(telemetryPath(root, runId)).find(
-    (event) => event.type === "agent_context" && event.actor === actor,
+    (event) =>
+      event.type === "agent_context" && event.actor === actor && event.phase?.id === phaseId,
   );
   if (
     !prompt ||
@@ -212,10 +219,11 @@ export async function createObserverServer(
       if (promptMatch) {
         const runId = promptMatch[1]!;
         const actor = promptMatch[2]!;
+        const phaseId = url.searchParams.get("phase") ?? "";
         sendJson(
           response,
           200,
-          { version: 1, actor, prompt: archivedSystemPrompt(root, runId, actor) },
+          { version: 1, actor, prompt: archivedSystemPrompt(root, runId, actor, phaseId) },
           head,
         );
         return;

@@ -681,6 +681,8 @@ class FakeExe implements ControllerExe {
   documenterFailure =
     "documenter blocked: missing approved path docs/native-architecture-assessment.md";
   toolLifecycleViolation?: "before-start" | "after-finish" | "finish-with-open-tool";
+  agentContent?: string;
+  interleaveAgentContent = false;
 
   constructor(
     private readonly failPlanner = false,
@@ -769,6 +771,36 @@ class FakeExe implements ControllerExe {
           stepId: "plan",
           sourceAt,
         });
+        if (this.agentContent) {
+          const split = Math.floor(this.agentContent.length / 2);
+          for (const [chunkIndex, text] of [
+            this.agentContent.slice(0, split),
+            this.agentContent.slice(split),
+          ].entries()) {
+            protocol.event({
+              type: "agent_content",
+              actor: "planner",
+              phase: "planning",
+              stepId: "plan",
+              contentId: "prompt-1",
+              kind: "user_prompt",
+              chunkIndex,
+              chunkCount: 2,
+              text,
+              sourceAt,
+            });
+            if (chunkIndex === 0 && this.interleaveAgentContent)
+              protocol.event({
+                type: "tool_started",
+                actor: "planner",
+                phase: "planning",
+                stepId: "plan",
+                toolName: "read",
+                toolCallId: "interleaved-tool",
+                sourceAt,
+              });
+          }
+        }
         protocol.event({
           type: "tool_started",
           actor: "planner",
@@ -815,6 +847,8 @@ class FakeExe implements ControllerExe {
           phase: "planning",
           stepId: "plan",
           tokens: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, total: 14 },
+          contextTokens: 50_000,
+          contextWindow: 200_000,
           sourceAt,
         });
       }
@@ -1527,6 +1561,37 @@ function contains(root: string, secret: string): boolean {
   });
 }
 
+test("controller rejects events interleaved with incomplete agent content", async () => {
+  const root = mkdtempSync(join(tmpdir(), "maquila-controller-content-order-"));
+  const exe = new FakeExe();
+  exe.agentContent = "prompt";
+  exe.interleaveAgentContent = true;
+  try {
+    const result = await runController(controllerOptions(root, exe));
+    assert.equal(result.status, "failed");
+    assert.match(result.error ?? "", /interleaved with incomplete agent content/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("controller rejects known credentials split across remote content chunks", async () => {
+  for (const key of ["linearToken", "githubToken", "openRouterKey"] as const) {
+    const root = mkdtempSync(join(tmpdir(), "maquila-controller-content-secret-"));
+    const exe = new FakeExe();
+    const options = controllerOptions(root, exe);
+    exe.agentContent = options[key];
+    try {
+      const result = await runController(options);
+      assert.equal(result.status, "failed");
+      assert.match(result.error ?? "", /secret detected in retained artifact/);
+      assert.equal(contains(root, options[key]), false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test("controller requests an assigned engineer decision without failing", async () => {
   const root = mkdtempSync(join(tmpdir(), "maquila-controller-"));
   try {
@@ -1919,6 +1984,17 @@ test("controller reaches ready only after remote evidence and VM cleanup", async
     assert.deepEqual(
       events.filter((event) => event.type === "agent_usage").map((event) => event.payload.total),
       [14, 2, 2, 5],
+    );
+    assert.deepEqual(
+      events
+        .filter((event) => event.type === "agent_usage")
+        .map((event) => [event.payload.contextTokens, event.payload.contextWindow]),
+      [
+        [50_000, 200_000],
+        [undefined, undefined],
+        [undefined, undefined],
+        [undefined, undefined],
+      ],
     );
     assert.deepEqual(
       events

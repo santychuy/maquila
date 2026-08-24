@@ -15,14 +15,108 @@ import { test } from "node:test";
 import type { AgentDefinition } from "../src/agents/index.js";
 import {
   agentFailureCode,
+  type AgentActivity,
   assistantFailureMessage,
+  assistantMessageText,
   cappedAgentOutputTokens,
+  chunkAgentContent,
+  createAgentContentEmitter,
   openControllerSession,
   runAgent,
   runArtifactNameErrors,
   tokenUsageActivity,
 } from "../src/run-agent.js";
 import { createRunArtifacts } from "../src/run-artifacts.js";
+
+test("agent content chunking preserves Unicode and refuses oversized items", () => {
+  const text = "🙂".repeat(3_000);
+  const chunks = chunkAgentContent("content-1", "user_prompt", text);
+  assert.equal(
+    chunks.map((chunk) => (chunk.type === "agent_content" ? chunk.text : "")).join(""),
+    text,
+  );
+  assert.ok(
+    chunks.every(
+      (chunk) => chunk.type !== "agent_content" || Buffer.byteLength(chunk.text) <= 8 * 1024,
+    ),
+  );
+  assert.equal(
+    chunkAgentContent("content-2", "assistant_message", "x".repeat(256 * 1024 + 1))[0]?.type,
+    "agent_content_unavailable",
+  );
+});
+
+test("agent content preserves ordered prompts, tools, and completed assistant messages", () => {
+  const timeline: Array<{ type: string; kind?: string; text?: string }> = [];
+  const emitContent = createAgentContentEmitter(
+    (activity) => timeline.push(activity),
+    () => "2026-01-01T00:00:00.000Z",
+  );
+
+  emitContent("user_prompt", "initial prompt");
+  timeline.push({ type: "tool_started" }, { type: "tool_finished" });
+  emitContent(
+    "assistant_message",
+    assistantMessageText({
+      role: "assistant",
+      content: [
+        { type: "text", text: "invalid envelope" },
+        { type: "thinking", text: "must not leak" },
+      ],
+    })!,
+  );
+  emitContent("user_prompt", "correction prompt");
+  emitContent(
+    "assistant_message",
+    assistantMessageText({ role: "assistant", content: [{ type: "text", text: "corrected" }] })!,
+  );
+
+  assert.deepEqual(
+    timeline.map(({ type, kind, text }) => [type, kind, text]),
+    [
+      ["agent_content", "user_prompt", "initial prompt"],
+      ["tool_started", undefined, undefined],
+      ["tool_finished", undefined, undefined],
+      ["agent_content", "assistant_message", "invalid envelope"],
+      ["agent_content", "user_prompt", "correction prompt"],
+      ["agent_content", "assistant_message", "corrected"],
+    ],
+  );
+  assert.equal(timeline.filter((activity) => activity.kind === "assistant_message").length, 2);
+});
+
+test("assistant message content preserves text bytes and excludes hidden thinking", () => {
+  assert.equal(
+    assistantMessageText({
+      role: "assistant",
+      content: [
+        { type: "text", text: "  first" },
+        { type: "thinking", text: "hidden" },
+        { type: "text", text: "" },
+        { type: "text", text: "last  " },
+      ],
+    }),
+    "  firstlast  ",
+  );
+  assert.equal(
+    assistantMessageText({ role: "assistant", content: [{ type: "text", text: "   " }] }),
+    "   ",
+  );
+  const empty = assistantMessageText({
+    role: "assistant",
+    content: [{ type: "text", text: "" }],
+  });
+  assert.equal(empty, "");
+  const emitted: AgentActivity[] = [];
+  const emit = createAgentContentEmitter((activity) => emitted.push(activity));
+  if (empty !== undefined) emit("assistant_message", empty);
+  assert.equal(emitted.length, 1);
+  assert.equal(emitted[0]?.type === "agent_content" ? emitted[0].text : undefined, "");
+  assert.equal(
+    assistantMessageText({ role: "assistant", content: [{ type: "thinking", text: "hidden" }] }),
+    undefined,
+  );
+});
 
 test("token usage activity copies finalized session token totals", () => {
   const tokens = { input: 2, output: 3, cacheRead: 5, cacheWrite: 7, total: 17 };
@@ -33,6 +127,27 @@ test("token usage activity copies finalized session token totals", () => {
     reportedCostNanoUsd: 1234,
   });
   assert.equal(tokenUsageActivity(tokens, undefined, Number.NaN).reportedCostNanoUsd, undefined);
+  assert.deepEqual(
+    tokenUsageActivity(tokens, "2026-01-01T00:00:00.000Z", 0, {
+      tokens: 50_000,
+      contextWindow: 200_000,
+    }),
+    {
+      type: "agent_usage",
+      at: "2026-01-01T00:00:00.000Z",
+      tokens,
+      contextTokens: 50_000,
+      contextWindow: 200_000,
+      reportedCostNanoUsd: 0,
+    },
+  );
+  assert.equal(
+    tokenUsageActivity(tokens, undefined, undefined, {
+      tokens: null,
+      contextWindow: 200_000,
+    }).contextTokens,
+    undefined,
+  );
 });
 
 test("agent output tokens are capped to a bounded maquila budget", () => {

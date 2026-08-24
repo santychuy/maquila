@@ -79,6 +79,12 @@ export function runArtifactNameErrors(names: string[], runDir: string): string[]
   return errors;
 }
 
+export const MAX_AGENT_CONTENT_CHUNK_BYTES = 8 * 1024;
+export const MAX_AGENT_CONTENT_ITEM_BYTES = 256 * 1024;
+export const MAX_AGENT_CONTENT_PHASE_BYTES = 512 * 1024;
+
+export type AgentContentKind = "user_prompt" | "assistant_message" | "reasoning";
+
 export type AgentActivity =
   | { type: "agent_started"; at: string }
   | { type: "agent_finished"; at: string; status: "completed" | "failed" | "timed_out" }
@@ -92,9 +98,27 @@ export type AgentActivity =
         cacheWrite: number;
         total: number;
       };
+      contextTokens?: number;
+      contextWindow?: number;
       reportedCostNanoUsd?: number;
     }
-  | { type: "tool_started"; at: string; toolCallId: string; toolName: string }
+  | {
+      type: "agent_content";
+      at: string;
+      contentId: string;
+      kind: AgentContentKind;
+      chunkIndex: number;
+      chunkCount: number;
+      text: string;
+    }
+  | {
+      type: "agent_content_unavailable";
+      at: string;
+      contentId: string;
+      kind: AgentContentKind;
+      reason: "item_too_large" | "phase_budget_exhausted" | "provider_redacted";
+    }
+  | { type: "tool_started"; at: string; toolCallId: string; toolName: string; detail?: string }
   | {
       type: "tool_finished";
       at: string;
@@ -103,16 +127,62 @@ export type AgentActivity =
       isError: boolean;
     };
 
+export function chunkAgentContent(
+  contentId: string,
+  kind: AgentContentKind,
+  text: string,
+  at = new Date().toISOString(),
+): AgentActivity[] {
+  if (Buffer.byteLength(text) > MAX_AGENT_CONTENT_ITEM_BYTES)
+    return [{ type: "agent_content_unavailable", at, contentId, kind, reason: "item_too_large" }];
+  const chunks: string[] = [];
+  let chunk = "";
+  let bytes = 0;
+  for (const character of text) {
+    const size = Buffer.byteLength(character);
+    if (bytes + size > MAX_AGENT_CONTENT_CHUNK_BYTES) {
+      chunks.push(chunk);
+      chunk = "";
+      bytes = 0;
+    }
+    chunk += character;
+    bytes += size;
+  }
+  if (chunk || !chunks.length) chunks.push(chunk);
+  return chunks.map((value, chunkIndex) => ({
+    type: "agent_content" as const,
+    at,
+    contentId,
+    kind,
+    chunkIndex,
+    chunkCount: chunks.length,
+    text: value,
+  }));
+}
+
 export function tokenUsageActivity(
   tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number },
   at = new Date().toISOString(),
   cost?: number,
+  contextUsage?: { tokens: number | null; contextWindow: number },
 ): Extract<AgentActivity, { type: "agent_usage" }> {
   const nanoUsd = cost === undefined ? undefined : cost * 1_000_000_000;
+  const contextTokens = contextUsage?.tokens;
+  const contextWindow = contextUsage?.contextWindow;
+  const context =
+    typeof contextTokens === "number" &&
+    Number.isSafeInteger(contextTokens) &&
+    contextTokens >= 0 &&
+    typeof contextWindow === "number" &&
+    Number.isSafeInteger(contextWindow) &&
+    contextWindow > 0
+      ? { contextTokens, contextWindow }
+      : {};
   return {
     type: "agent_usage",
     at,
     tokens: { ...tokens },
+    ...context,
     ...(Number.isFinite(nanoUsd) && nanoUsd! >= 0 && Number.isSafeInteger(Math.round(nanoUsd!))
       ? { reportedCostNanoUsd: Math.round(nanoUsd!) }
       : {}),
@@ -252,14 +322,44 @@ function eventRecord(event: AgentSessionEvent): object | undefined {
   }
 }
 
+export function assistantMessageText(message: {
+  role: string;
+  content: readonly { type: string; text?: string }[];
+}): string | undefined {
+  if (message.role !== "assistant") return undefined;
+  const parts = message.content.filter(
+    (part) => part.type === "text" && typeof part.text === "string",
+  );
+  return parts.length ? parts.map((part) => part.text!).join("") : undefined;
+}
+
 function finalAssistantText(session: AgentSession): string {
   const message = session.messages.toReversed().find((candidate) => candidate.role === "assistant");
-  if (!message || message.role !== "assistant") return "";
-  return message.content
-    .filter((part) => part.type === "text")
-    .map((part) => part.text)
-    .join("\n")
-    .trim();
+  return message?.role === "assistant" ? (assistantMessageText(message) ?? "") : "";
+}
+
+export function createAgentContentEmitter(
+  onActivity?: (activity: AgentActivity) => void,
+  now = () => new Date().toISOString(),
+): (kind: AgentContentKind, value: string) => void {
+  let contentSequence = 0;
+  let contentBytes = 0;
+  return (kind, value) => {
+    const contentId = `content-${++contentSequence}`;
+    const bytes = Buffer.byteLength(value);
+    if (contentBytes + bytes > MAX_AGENT_CONTENT_PHASE_BYTES) {
+      onActivity?.({
+        type: "agent_content_unavailable",
+        at: now(),
+        contentId,
+        kind,
+        reason: "phase_budget_exhausted",
+      });
+      return;
+    }
+    contentBytes += bytes;
+    for (const activity of chunkAgentContent(contentId, kind, value, now())) onActivity?.(activity);
+  };
 }
 
 export function assistantFailureMessage(
@@ -352,6 +452,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
     });
     session = created.session;
     receipt.sessionId = session.sessionId;
+    const emitContent = createAgentContentEmitter(options.onActivity);
 
     const unsubscribe = session.subscribe((event) => {
       const record = eventRecord(event);
@@ -372,9 +473,12 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           toolName: event.toolName,
           isError: event.isError,
         });
-      if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-        options.onTextDelta?.(event.assistantMessageEvent.delta);
+      if (event.type === "message_end" && event.message.role === "assistant") {
+        const text = assistantMessageText(event.message);
+        if (text !== undefined) emitContent("assistant_message", text);
       }
+      if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta")
+        options.onTextDelta?.(event.assistantMessageEvent.delta);
     });
 
     timer = setTimeout(() => {
@@ -399,6 +503,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
 
     options.onActivity?.({ type: "agent_started", at: new Date().toISOString() });
     try {
+      emitContent("user_prompt", options.prompt);
       await session.prompt(options.prompt);
       const initialFailure = lastAssistantFailure(session);
       if (initialFailure) throw new Error(initialFailure);
@@ -418,7 +523,9 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           );
           if (!submitTool) throw new Error("submit_envelope tool unavailable during correction");
           session.agent.state.tools = [submitTool];
-          await session.prompt(envelopeCorrectionPrompt(envelopeRole, parsed.errors));
+          const correctionPrompt = envelopeCorrectionPrompt(envelopeRole, parsed.errors);
+          emitContent("user_prompt", correctionPrompt);
+          await session.prompt(correctionPrompt);
           const correctionFailure = lastAssistantFailure(session);
           if (correctionFailure) throw new Error(correctionFailure);
           if (!timedOut) parsed = captureEnvelope();
@@ -516,7 +623,12 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       });
       if (receipt.status === "completed")
         options.onActivity?.(
-          tokenUsageActivity(receipt.stats.tokens, undefined, receipt.stats.cost),
+          tokenUsageActivity(
+            receipt.stats.tokens,
+            undefined,
+            receipt.stats.cost,
+            receipt.stats.contextUsage,
+          ),
         );
       session.dispose();
     }

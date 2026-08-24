@@ -16,6 +16,7 @@ import {
 } from "../src/observer/process.js";
 import { OBSERVER_CSS, OBSERVER_HTML, OBSERVER_JS } from "../src/observer/ui.js";
 import {
+  contextWindowUsage,
   formatDuration,
   formatRelativeTime,
   formatTimestamp,
@@ -192,8 +193,15 @@ test("archived prompt retrieval binds run, actor, Maquila SHA, and telemetry fin
         systemPromptSha256: createHash("sha256").update(planner.systemPrompt).digest("hex"),
       },
     });
-    assert.equal(archivedSystemPrompt(root, runId, "planner"), planner.systemPrompt);
-    assert.throws(() => archivedSystemPrompt(root, runId, "controller"), /invalid prompt request/);
+    assert.equal(archivedSystemPrompt(root, runId, "planner", "planning:1"), planner.systemPrompt);
+    assert.throws(
+      () => archivedSystemPrompt(root, runId, "controller", "planning:1"),
+      /invalid prompt request/,
+    );
+    assert.throws(
+      () => archivedSystemPrompt(root, runId, "planner", "planning:2"),
+      /prompt verification failed/,
+    );
     const runtimePath = resolve(root, ".maquila", "controllers", runId, "runtime.json");
     for (const runtime of [
       { maquilaSha: sha, extra: true },
@@ -202,7 +210,10 @@ test("archived prompt retrieval binds run, actor, Maquila SHA, and telemetry fin
       { maquilaSha: sha, sha256: "A".repeat(64) },
     ]) {
       writeFileSync(runtimePath, JSON.stringify(runtime));
-      assert.throws(() => archivedSystemPrompt(root, runId, "planner"), /invalid runtime data/);
+      assert.throws(
+        () => archivedSystemPrompt(root, runId, "planner", "planning:1"),
+        /invalid runtime data/,
+      );
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -316,11 +327,19 @@ test("observer ensure reuses healthy owner and starts after stale descriptor", a
 
 test("observer UI preserves accessible safe rendering intent", () => {
   assert.match(OBSERVER_HTML, /Phase sequence/);
-  assert.match(OBSERVER_HTML, /<details class="raw-events">/);
+  assert.doesNotMatch(OBSERVER_HTML, /raw-events|id="events"/);
   assert.match(OBSERVER_JS, /aria-expanded/);
   assert.match(observerAppSource, /aria-controls=\{selected \? ids\.detail : undefined\}/);
   assert.match(observerAppSource, /aria-current=\{status === "running" \? "step" : undefined\}/);
   assert.match(OBSERVER_JS, /System prompt/);
+  assert.match(observerAppSource, /Tool call summary/);
+  assert.match(observerAppSource, /Phase activity/);
+  assert.match(observerAppSource, /user_prompt/);
+  assert.match(observerAppSource, /Context window/);
+  assert.match(observerAppSource, /<progress max=\{100\}/);
+  assert.match(observerAppSource, /aria-label=\{progressLabel\}/);
+  assert.match(observerAppSource, /Context window full; estimated usage/);
+  assert.match(OBSERVER_CSS, /\.context-usage progress/);
   assert.doesNotMatch(OBSERVER_JS, /scrollIntoView/);
   assert.match(
     OBSERVER_HTML,
@@ -406,6 +425,29 @@ test("observer UI preserves focus and truthful partial telemetry state", () => {
   assert.doesNotMatch(OBSERVER_CSS, /overflow-x:auto/);
   assert.match(OBSERVER_CSS, /\.event-actor,\.event-detail\{grid-column:2/);
   assert.deepEqual([999, 1_000, 12_400, 1_000_000].map(formatTokens), ["999", "1K", "12.4K", "1M"]);
+  assert.deepEqual(contextWindowUsage(50_000, 200_000), {
+    tokens: 50_000,
+    contextWindow: 200_000,
+    percent: 25,
+    fillPercent: 25,
+    label: "25%",
+  });
+  assert.deepEqual(contextWindowUsage(0, 200_000), {
+    tokens: 0,
+    contextWindow: 200_000,
+    percent: 0,
+    fillPercent: 0,
+    label: "0%",
+  });
+  assert.equal(contextWindowUsage(undefined, 200_000), undefined);
+  assert.equal(contextWindowUsage(1, 0), undefined);
+  assert.deepEqual(contextWindowUsage(250_000, 200_000), {
+    tokens: 250_000,
+    contextWindow: 200_000,
+    percent: 125,
+    fillPercent: 100,
+    label: "125%",
+  });
   assert.deepEqual([null, 0, 46_999, 60_000, 106_000].map(formatDuration), [
     "—",
     "0s",

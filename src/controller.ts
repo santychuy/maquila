@@ -1536,6 +1536,7 @@ export async function runController(options: ControllerOptions): Promise<Control
         30_000,
       );
       let nextPublicToolId = 1;
+      let nextPublicContentId = 1;
       const remoteSequence = (expected: WorkflowStepDescriptor[], attempt = 1) => {
         let index = 0;
         let open: WorkflowStepDescriptor | undefined;
@@ -1544,7 +1545,19 @@ export async function runController(options: ControllerOptions): Promise<Control
         let pendingNegativeClosure: "failed" | "timed_out" | undefined;
         let gateSeen = false;
         let reviewSeen = false;
+        let phaseContentBytes = 0;
+        let incompleteContentId: string | undefined;
         const tools = new Map<string, { publicId: string; name: string }>();
+        const contents = new Map<
+          string,
+          {
+            publicId: string;
+            next: number;
+            count: number;
+            kind?: "user_prompt" | "assistant_message" | "reasoning";
+            chunks?: Array<{ text: string; sourceAt: string }>;
+          }
+        >();
         const allowedTools: Record<RemoteEvent["actor"], Set<string>> = {
           planner: new Set([...archivedRoles.planner.tools, "submit_envelope"]),
           worker: new Set([...archivedRoles.worker.tools, "submit_envelope"]),
@@ -1589,6 +1602,9 @@ export async function runController(options: ControllerOptions): Promise<Control
             )
               throw new Error("invalid remote phase sequence");
             open = next;
+            phaseContentBytes = 0;
+            incompleteContentId = undefined;
+            contents.clear();
             advance(runDir, event.phase, event.actor, sourceAt, attempt, event.stepId);
             if (event.actor !== "verifier") {
               const role = archivedRoles[event.actor];
@@ -1617,16 +1633,28 @@ export async function runController(options: ControllerOptions): Promise<Control
           )
             throw new Error("remote event outside active phase");
           if (
+            incompleteContentId &&
+            (event.type !== "agent_content" || event.contentId !== incompleteContentId)
+          )
+            throw new Error("remote event interleaved with incomplete agent content");
+          if (
             usageSeen.has(event.stepId) &&
-            ["agent_started", "agent_finished", "tool_started", "tool_finished"].includes(
-              event.type,
-            )
+            [
+              "agent_started",
+              "agent_finished",
+              "tool_started",
+              "tool_finished",
+              "agent_content",
+              "agent_content_unavailable",
+            ].includes(event.type)
           )
             throw new Error("remote agent activity after usage");
           const phase = telemetryPhase(event.stepId, attempt);
           switch (event.type) {
             case "phase_finished":
               if (tools.size) throw new Error("remote phase finished with active tool calls");
+              if ([...contents.values()].some((content) => content.count > content.next))
+                throw new Error("remote phase finished with incomplete agent content");
               if (
                 event.actor !== "verifier" &&
                 event.status === "completed" &&
@@ -1684,12 +1712,88 @@ export async function runController(options: ControllerOptions): Promise<Control
                 sourceAt,
                 payload: {
                   ...event.tokens,
+                  ...(event.contextTokens === undefined
+                    ? {}
+                    : {
+                        contextTokens: event.contextTokens,
+                        contextWindow: event.contextWindow!,
+                      }),
                   ...(event.reportedCostNanoUsd === undefined
                     ? {}
                     : { reportedCostNanoUsd: event.reportedCostNanoUsd }),
                 },
               });
               break;
+            case "agent_content": {
+              if (!agentStarted.has(event.stepId) || agentFinished.has(event.stepId))
+                throw new Error("invalid remote agent content");
+              phaseContentBytes += Buffer.byteLength(event.text);
+              if (phaseContentBytes > 512 * 1024)
+                throw new Error("remote agent content exceeds phase limit");
+              let content = contents.get(event.contentId);
+              if (!content) {
+                if (event.chunkIndex !== 0)
+                  throw new Error("invalid remote content chunk sequence");
+                content = {
+                  publicId: `content-${nextPublicContentId++}`,
+                  next: 0,
+                  count: event.chunkCount,
+                  kind: event.kind,
+                  chunks: [],
+                };
+                contents.set(event.contentId, content);
+                incompleteContentId = event.contentId;
+              }
+              if (
+                content.next !== event.chunkIndex ||
+                content.count !== event.chunkCount ||
+                content.kind !== event.kind ||
+                !content.chunks
+              )
+                throw new Error("invalid remote content chunk sequence");
+              content.next += 1;
+              content.chunks.push({ text: event.text, sourceAt });
+              if (content.next === content.count) {
+                incompleteContentId = undefined;
+                assertSecretAbsent(
+                  Buffer.from(content.chunks.map((chunk) => chunk.text).join("")),
+                  [options.openRouterKey, options.linearToken, options.githubToken],
+                );
+                for (const [chunkIndex, chunk] of content.chunks.entries())
+                  emit({
+                    type: "agent_content",
+                    actor: event.actor,
+                    phase,
+                    sourceAt: chunk.sourceAt,
+                    payload: {
+                      contentId: content.publicId,
+                      kind: event.kind,
+                      chunkIndex,
+                      chunkCount: content.count,
+                      text: chunk.text,
+                    },
+                  });
+              }
+              break;
+            }
+            case "agent_content_unavailable": {
+              if (
+                !agentStarted.has(event.stepId) ||
+                agentFinished.has(event.stepId) ||
+                contents.has(event.contentId)
+              )
+                throw new Error("invalid remote agent content");
+              const publicId = `content-${nextPublicContentId++}`;
+              contents.set(event.contentId, { publicId, next: 0, count: 0 });
+              emit({
+                type: "agent_content_unavailable",
+                actor: event.actor,
+                phase,
+                sourceAt,
+                payload: { contentId: publicId, kind: event.kind, reason: event.reason },
+              });
+              break;
+            }
             case "tool_started": {
               if (
                 !agentStarted.has(event.stepId) ||
