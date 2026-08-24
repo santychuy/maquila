@@ -411,6 +411,7 @@ test("specialized agents load with explicit capability boundaries", () => {
   assert.equal(agents.planner?.access, "read-only");
   assert.deepEqual(agents.planner?.tools, ["read", "grep", "find", "ls"]);
   assert.match(agents.planner?.systemPrompt ?? "", /Search `docs\/` for concrete stale references/);
+  assert.match(agents.planner?.systemPrompt ?? "", /recommended option with a reason/);
   assert.equal(agents.reviewer?.access, "read-only");
   assert.deepEqual(agents.reviewer?.tools, ["read", "grep", "find", "ls"]);
   assert.equal(agents.worker?.access, "writer");
