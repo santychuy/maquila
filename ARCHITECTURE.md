@@ -2,7 +2,7 @@
 
 ## Contract
 
-A validated Linear feature issue triggers a local controller. Controller runs bounded Pi sessions inside one fresh exe.dev VM. Code opens a bot pull request only after deterministic checks and independent review pass. Human owns merge or rejection.
+A validated Linear feature issue triggers a local controller. Controller runs bounded Pi sessions inside fresh exe.dev VMs pinned to one base SHA. Code opens a bot pull request only after deterministic checks and independent review pass. Human owns merge or rejection.
 
 ## Authority boundaries
 
@@ -29,10 +29,11 @@ See [code-controlled workflows](docs/workflows.md) for contracts, artifacts, and
 ```text
 Linear Todo -> immutable intake -> fresh VM at pinned SHA -> plan
   -> implement? -> document -> verify -> review
+  -> transient model failure? preserve evidence -> fresh pinned VM -> retry lifecycle
   -> harvest and bind evidence -> destroy VM -> publish ready PR -> human decision
 ```
 
-Planner decisions may pause and resume same run before manifest generation. Fix pass remains a target, not current behavior.
+Planner decisions may pause and resume same run before manifest generation. After planning, a structured `model_request_failed` result may restart the complete lifecycle in a fresh pinned VM under the same run ID, with at most three total attempts and preserved prior-attempt evidence. Timeouts, generic agent failures, invalid envelopes, ownership violations, failed verification, and reviewer rejection remain fail-closed. Fix pass remains a target, not current behavior.
 
 ## Current controller state
 
@@ -58,7 +59,7 @@ Workflow cursor inside `executing` records current step and attempt. State v1 re
 
 ## Current slice
 
-Remote controller composition, local observation, GitHub publication, and OpenRouter-backed role execution are implemented. Each agent definition owns its pinned `openrouter/<provider>/<model>` identifier; current defaults are `openrouter/google/gemini-3.7-flash` for worker/documenter/reviewer and `openrouter/z-ai/glm-5.3` for planner. Runtime does not ship a complete model catalog; doctor and remote bootstrap validate pinned identifiers against OpenRouter's live catalog. VM is not a security sandbox. `maquila run` snapshots a Linear `Todo` issue and GitHub base SHA, holds a single-host lock, reconciles abandoned VMs, bootstraps pinned runtimes in a fresh exe.dev VM, streams safe telemetry through deterministic phase boundaries, runs planner, sequential worker/documenter, verification, and fresh-reviewer sessions, binds harvested evidence to the reviewed patch, and destroys the VM. The trusted controller then checks the pinned base, applies the patch in a temporary clone, creates a deterministic bot branch and commit, opens a ready-for-review pull request, and records publication metadata before completion.
+Remote controller composition, local observation, GitHub publication, and OpenRouter-backed role execution are implemented. Each agent definition owns its pinned `openrouter/<provider>/<model>` identifier; current defaults are `openrouter/google/gemini-3.7-flash` for worker/documenter/reviewer and `openrouter/z-ai/glm-5.3` for planner. Runtime does not ship a complete model catalog; doctor and remote bootstrap validate pinned identifiers against OpenRouter's live catalog. VM is not a security sandbox. `maquila run` snapshots a Linear `Todo` issue and GitHub base SHA, holds a single-host lock, reconciles abandoned VMs, bootstraps pinned runtimes in fresh exe.dev VMs, streams safe telemetry through deterministic phase boundaries, runs planner, sequential worker/documenter, verification, and fresh-reviewer sessions, binds harvested evidence to the reviewed patch, and destroys the final VM. A structured post-plan `model_request_failed` result triggers bounded controller recovery in a replacement VM while retaining the same run ID, pinned inputs, manifest, attempt telemetry, and prior-attempt evidence. The trusted controller then checks the pinned base, applies the patch in a temporary clone, creates a deterministic bot branch and commit, opens a ready-for-review pull request, and records publication metadata before completion.
 
 `maquila run start` returns accepted run identity before completion. Persistent on-demand observer binds loopback, replays canonical host JSONL, serves read-only run list/detail/event views, and links the completed pull request. Maquila-owned Pi skill routes start/status requests through these commands. Observer and skill hold no workflow authority.
 

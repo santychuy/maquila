@@ -313,7 +313,7 @@ function isWorkflowState(value: unknown): value is ControllerWorkflowState {
     (value.attempt === undefined ||
       (Number.isInteger(value.attempt) &&
         Number(value.attempt) >= 1 &&
-        Number(value.attempt) <= 4)) &&
+        Number(value.attempt) <= (value.currentStepId === "plan" ? 4 : 3))) &&
     ((value.currentStepId === undefined && value.attempt === undefined) ||
       (value.currentStepId !== undefined && value.attempt !== undefined))
   );
@@ -392,7 +392,7 @@ function isControllerStateV2Value(value: unknown): value is ControllerStateV2 {
   if (
     ["ready_for_publication", "publishing", "completed"].includes(String(value.state)) &&
     (value.workflow.currentStepId !== "review" ||
-      value.workflow.attempt !== 1 ||
+      value.workflow.attempt === undefined ||
       value.workflow.manifestSha256 === undefined)
   )
     return false;
@@ -569,18 +569,22 @@ export function recordControllerWorkflowStep(
     !WORKFLOW_STEP_IDS.includes(stepId) ||
     !Number.isInteger(attempt) ||
     attempt < 1 ||
-    attempt > 4
+    attempt > (stepId === "plan" ? 4 : 3)
   )
     throw new Error("invalid workflow cursor");
   const previous = current.workflow.currentStepId;
   const previousAttempt = current.workflow.attempt;
+  const isPostPlanStep = previous !== undefined && previous !== "plan";
   const valid =
     (previous === undefined && stepId === "plan" && attempt === 1) ||
     (previous === "plan" && stepId === "plan" && attempt === (previousAttempt ?? 0) + 1) ||
     (previous === "plan" && (stepId === "implement" || stepId === "document") && attempt === 1) ||
-    (previous === "implement" && stepId === "document" && attempt === 1) ||
-    (previous === "document" && stepId === "verify" && attempt === 1) ||
-    (previous === "verify" && stepId === "review" && attempt === 1);
+    (previous === "implement" && stepId === "document" && attempt === previousAttempt) ||
+    (previous === "document" && stepId === "verify" && attempt === previousAttempt) ||
+    (previous === "verify" && stepId === "review" && attempt === previousAttempt) ||
+    (isPostPlanStep &&
+      (stepId === "implement" || stepId === "document") &&
+      attempt === (previousAttempt ?? 0) + 1);
   if (!valid) throw new Error("invalid workflow cursor transition");
   const state: ControllerStateV2 = {
     ...current,
@@ -623,7 +627,7 @@ export function completeControllerWorkflow(
     !isControllerStateV2(current) ||
     current.state !== "executing" ||
     current.workflow.currentStepId !== "review" ||
-    current.workflow.attempt !== 1 ||
+    current.workflow.attempt === undefined ||
     current.workflow.manifestSha256 !== manifestSha256
   )
     throw new Error("workflow is not ready for publication");
@@ -669,6 +673,21 @@ export function replaceControllerDecisionVm(runDir: string, vm: ControllerVm): C
   )
     throw new Error("VM replacement requires a retained decision wait");
   const state: ControllerState = { ...current, vm, updatedAt: new Date().toISOString() };
+  writeControllerState(runDir, state);
+  return state;
+}
+
+export function replaceControllerExecutionVm(runDir: string, vm: ControllerVm): ControllerStateV2 {
+  if (!isVm(vm)) throw new Error("invalid controller VM");
+  const current = readControllerState(runDir);
+  if (
+    !isControllerStateV2(current) ||
+    current.state !== "executing" ||
+    !current.vm ||
+    current.cleanup !== "pending"
+  )
+    throw new Error("VM replacement requires an executing v2 state with pending cleanup");
+  const state: ControllerStateV2 = { ...current, vm, updatedAt: new Date().toISOString() };
   writeControllerState(runDir, state);
   return state;
 }

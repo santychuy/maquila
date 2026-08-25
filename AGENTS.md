@@ -28,7 +28,7 @@ Implemented now:
 - Deterministic verification: manifest-pinned argv commands plus exact Git diff gate (`src/verify.ts`).
 - Controller-side assigned Linear `Todo` issue and GitHub base-SHA snapshot primitives with credential-free hashes.
 - Planner decision handoff: blocked plans pause the same run as `awaiting_decision`; the controller retains the VM, checkpoints the completed planner session, removes transient model credentials, and polls a numbered Linear thread for a pinned-assignee `Decision:` reply before resuming the same session. Waits expire after 24 hours and allow at most three rounds.
-- Executable `maquila run`: single-host lock, restart cleanup, pinned Node/Bun bootstrap, remote planner/worker/documenter/verification/reviewer, evidence and patch harvest, VM destruction, then controller-side bot branch and ready-for-review pull-request publication.
+- Executable `maquila run`: single-host lock, restart cleanup, pinned Node/Bun bootstrap, remote planner/worker/documenter/verification/reviewer, evidence and patch harvest, VM destruction, then controller-side bot branch and ready-for-review pull-request publication. A structured `model_request_failed` result during the post-plan lifecycle gets up to three controller-owned attempts under the same run ID; each retry preserves prior evidence and rebuilds a fresh VM at the pinned base SHA.
 - Remote protocol v2 and host telemetry carry strict workflow step identity. New controller state v2 records recipe, manifest hash, step, and attempt; state v1 remains readable and resumable for retained decision waits. `run status` and observer expose current workflow checkpoint.
 - Accepted detached `run start` and read-only `run status`.
 - Detached serial `run batch` for 2–10 unique Linear issues, with preallocated independent run IDs, per-item controller authority, continue-after-result behavior, and read-only batch status.
@@ -40,7 +40,7 @@ Implemented now:
 
 Not implemented yet:
 
-- Fix pass and interrupted model-request resume.
+- Fix pass and interrupted model-request resume. Current transient recovery restarts the complete post-plan lifecycle in a fresh VM; it does not resume the interrupted model request or retry timeouts and deterministic failures.
 - General planning outcomes delivered only to controller-owned external surfaces; the implemented Linear handoff covers unresolved engineer decisions only, and successful publication still requires a non-empty repository diff.
 - Guaranteed hard termination when exe.dev cleanup itself is unavailable.
 - Runtime state is still stored under the Maquila checkout. Linear OAuth, native keychain storage, and credential profiles are not implemented.

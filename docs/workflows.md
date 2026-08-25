@@ -26,7 +26,9 @@ Only one recipe exists. `plan` runs first. Accepted plan produces manifest. Seri
 
 `verify` is a block with deterministic evidence, not an agent session. Its execution entry uses primary role run ID: worker run for mixed work, documenter run for docs-only work. No synthetic verifier run exists.
 
-Any failed or timed-out block stops later blocks. Reviewer `FAIL`, missing gate evidence, evidence mismatch, base drift, or patch hash mismatch blocks publication.
+A structured `model_request_failed` result during the post-plan lifecycle is the narrow exception to serial stop behavior. The controller preserves that attempt's remote evidence, destroys the VM, waits with bounded backoff, creates a replacement VM at the same pinned base SHA, restores the accepted planner evidence and manifest, and retries the complete post-plan lifecycle under the same controller run ID. It allows at most three total lifecycle attempts. Attempt number is persisted in controller state and telemetry.
+
+All other failed or timed-out blocks stop later blocks. Invalid envelopes, generic agent failures, ownership violations, reviewer `FAIL`, missing gate evidence, failed verification, evidence mismatch, base drift, or patch hash mismatch block publication. A timeout is not retried because abort is cooperative and the prior remote command may still be running.
 
 ## Source map
 
@@ -65,7 +67,7 @@ Controller run lives at `.maquila/controllers/<run-id>/`. Agent run evidence rem
 | Remote frames             |       protocol 2 | Gap-free sequence plus required step ID, actor, and phase identity                                                                                                      |
 | Host telemetry JSONL      | record version 1 | Gap-free host sequence; step-tagged phases validate matching step, actor, and phase                                                                                     |
 
-Primary run also holds `verification.json`, `review-diff.sha256`, `lifecycle.json`, and `workflow-execution.json`. During harvest, Run evidence code checks expected run set, receipts, envelopes, path ownership, verification, reviewer verdict, base SHA, and reviewed patch. `evidence-manifest.json` hashes harvested remote evidence files.
+Primary run also holds `verification.json`, `review-diff.sha256`, `lifecycle.json`, and `workflow-execution.json`. During harvest, Run evidence code checks expected run set, receipts, envelopes, path ownership, verification, reviewer verdict, base SHA, and reviewed patch. `evidence-manifest.json` hashes harvested remote evidence files. Before a transient retry destroys its VM, the controller stores `workflow-attempt-<n>-evidence.tar` after size, secret, path, and archive-member checks. Final acceptance still uses only the successful attempt's exact run set.
 
 Hashes prove internal consistency among captured values. VM evidence is not authentic against a compromised VM: VM processes have OS-level access and could forge internally consistent evidence. Use trusted, non-sensitive repositories.
 

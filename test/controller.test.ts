@@ -15,7 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { after, test } from "node:test";
 import {
   archiveMaquila,
@@ -31,6 +31,7 @@ import { ExeCommandError } from "../src/integrations/exe.js";
 import { createLinearDecisionComment } from "../src/integrations/linear.js";
 import {
   createControllerState,
+  isControllerStateV2,
   readControllerState,
   transitionControllerState,
 } from "../src/run-state.js";
@@ -683,6 +684,11 @@ class FakeExe implements ControllerExe {
   toolLifecycleViolation?: "before-start" | "after-finish" | "finish-with-open-tool";
   agentContent?: string;
   interleaveAgentContent = false;
+  workerModelFailuresRemaining = 0;
+  workerModelFailureStatus: "failed" | "timed_out" = "failed";
+  workerModelFailureResultPhase: "implementing" | "verifying" = "implementing";
+  incompleteRetryEvidence = false;
+  workerExecutions = 0;
 
   constructor(
     private readonly failPlanner = false,
@@ -828,7 +834,7 @@ class FakeExe implements ControllerExe {
           actor: "planner",
           phase: "planning",
           stepId: "plan",
-          status: "completed",
+          status: this.failPlanner ? "failed" : "completed",
           sourceAt,
         });
         if (this.toolLifecycleViolation === "after-finish")
@@ -841,23 +847,24 @@ class FakeExe implements ControllerExe {
             toolCallId: "late-tool",
             sourceAt,
           });
-        protocol.event({
-          type: "agent_usage",
-          actor: "planner",
-          phase: "planning",
-          stepId: "plan",
-          tokens: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, total: 14 },
-          contextTokens: 50_000,
-          contextWindow: 200_000,
-          sourceAt,
-        });
+        if (!this.failPlanner)
+          protocol.event({
+            type: "agent_usage",
+            actor: "planner",
+            phase: "planning",
+            stepId: "plan",
+            tokens: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, total: 14 },
+            contextTokens: 50_000,
+            contextWindow: 200_000,
+            sourceAt,
+          });
       }
       protocol.event({
         type: "phase_finished",
         actor: this.invalidSequence ? "worker" : "planner",
         phase: this.invalidSequence ? "implementing" : "planning",
         stepId: this.invalidSequence ? "implement" : "plan",
-        status: "completed",
+        status: this.failPlanner ? "failed" : "completed",
         sourceAt,
       });
       protocol.result({
@@ -882,6 +889,36 @@ class FakeExe implements ControllerExe {
         stepId: "implement",
         sourceAt,
       });
+      this.workerExecutions += 1;
+      if (this.workerModelFailuresRemaining > 0) {
+        this.workerModelFailuresRemaining -= 1;
+        protocol.event({
+          type: "agent_finished",
+          actor: "worker",
+          phase: "implementing",
+          stepId: "implement",
+          status: this.workerModelFailureStatus,
+          sourceAt,
+        });
+        protocol.event({
+          type: "phase_finished",
+          actor: "worker",
+          phase: "implementing",
+          stepId: "implement",
+          status: this.workerModelFailureStatus,
+          sourceAt,
+        });
+        protocol.result({
+          status: this.workerModelFailureStatus,
+          runDir: `/home/exedev/maquila/.maquila/runs/${ids[1]}`,
+          failure: {
+            phase: this.workerModelFailureResultPhase,
+            code: "model_request_failed",
+          },
+        });
+        onStdout(Buffer.from(output.join("")));
+        return { stderr: "" };
+      }
       protocol.event({
         type: "agent_finished",
         actor: "worker",
@@ -1153,6 +1190,18 @@ class FakeExe implements ControllerExe {
   async copyFrom(destination: string, remotePath: string, localPath: string) {
     this.calls.push({ operation: "copyFrom", value: { destination, remotePath, localPath } });
     if (this.failCopy) throw new Error("copy failed");
+    if (this.incompleteRetryEvidence && remotePath.endsWith("/retry-evidence.tar")) {
+      const source = mkdtempSync(join(tmpdir(), "maquila-incomplete-retry-evidence-"));
+      try {
+        mkdirSync(join(source, ".maquila", "runs"), { recursive: true });
+        const archive = join(source, "evidence.tar");
+        execFileSync("tar", ["-cf", archive, "-C", source, ".maquila/runs"]);
+        copyFileSync(archive, localPath);
+        return;
+      } finally {
+        rmSync(source, { recursive: true, force: true });
+      }
+    }
     const source = mkdtempSync(join(tmpdir(), "maquila-remote-evidence-"));
     try {
       copyFileSync(
@@ -2791,6 +2840,113 @@ test("normal failed gate and review streams close phases before failed terminal 
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  }
+});
+
+test("controller retries a transient worker model failure in a fresh pinned VM", async () => {
+  const root = mkdtempSync(join(tmpdir(), "maquila-controller-worker-retry-"));
+  const exe = new FakeExe();
+  exe.workerModelFailuresRemaining = 1;
+  try {
+    const result = await runController(controllerOptions(root, exe));
+    assert.equal(result.status, "completed");
+    assert.equal(exe.workerExecutions, 2);
+    assert.equal(exe.calls.filter((call) => call.operation === "create").length, 2);
+    assert.equal(exe.calls.filter((call) => call.operation === "destroy").length, 2);
+    assert.ok(existsSync(resolve(result.runDir, "workflow-attempt-1-evidence.tar")));
+    const state = readControllerState(result.runDir);
+    assert.ok(isControllerStateV2(state));
+    assert.equal(state.workflow.currentStepId, "review");
+    assert.equal(state.workflow.attempt, 2);
+    const implementing = readTelemetry(telemetryPath(root, state.runId)).filter(
+      (event) => event.type === "phase_finished" && event.phase?.stepId === "implement",
+    );
+    assert.deepEqual(
+      implementing.flatMap((event) =>
+        event.type === "phase_finished"
+          ? [[event.phase?.attempt, event.payload.status] as const]
+          : [],
+      ),
+      [
+        [1, "failed"],
+        [2, "completed"],
+      ],
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("controller stops after the bounded worker model failure budget", async () => {
+  const root = mkdtempSync(join(tmpdir(), "maquila-controller-worker-retry-budget-"));
+  const exe = new FakeExe();
+  exe.workerModelFailuresRemaining = 3;
+  try {
+    const result = await runController(controllerOptions(root, exe));
+    assert.equal(result.status, "failed");
+    assert.equal(result.error, "remote worker lifecycle failed");
+    assert.equal(exe.workerExecutions, 3);
+    assert.equal(exe.calls.filter((call) => call.operation === "create").length, 3);
+    assert.equal(exe.calls.filter((call) => call.operation === "destroy").length, 3);
+    assert.ok(existsSync(resolve(result.runDir, "workflow-attempt-1-evidence.tar")));
+    assert.ok(existsSync(resolve(result.runDir, "workflow-attempt-2-evidence.tar")));
+    const state = readControllerState(result.runDir);
+    assert.ok(isControllerStateV2(state));
+    assert.equal(state.state, "failed");
+    assert.equal(state.workflow.currentStepId, "implement");
+    assert.equal(state.workflow.attempt, 3);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("controller rejects inconsistent model failure status and phase without retrying", async () => {
+  const cases = [
+    {
+      configure(exe: FakeExe) {
+        exe.workerModelFailureStatus = "timed_out";
+      },
+      error: /model failure contradicts lifecycle evidence/,
+    },
+    {
+      configure(exe: FakeExe) {
+        exe.workerModelFailureResultPhase = "verifying";
+      },
+      error: /failure identity contradicts terminal phase/,
+    },
+  ];
+  for (const [index, item] of cases.entries()) {
+    const root = mkdtempSync(join(tmpdir(), `maquila-controller-worker-mismatch-${index}-`));
+    const exe = new FakeExe();
+    exe.workerModelFailuresRemaining = 1;
+    item.configure(exe);
+    try {
+      const result = await runController(controllerOptions(root, exe));
+      assert.equal(result.status, "failed");
+      assert.match(result.error ?? "", item.error);
+      assert.equal(exe.workerExecutions, 1);
+      assert.equal(exe.calls.filter((call) => call.operation === "create").length, 1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("controller requires failed run evidence before destroying a VM for retry", async () => {
+  const root = mkdtempSync(join(tmpdir(), "maquila-controller-worker-retry-evidence-"));
+  const exe = new FakeExe();
+  exe.workerModelFailuresRemaining = 1;
+  exe.incompleteRetryEvidence = true;
+  try {
+    const result = await runController(controllerOptions(root, exe));
+    assert.equal(result.status, "failed");
+    assert.match(result.error ?? "", /incomplete workflow retry evidence/);
+    assert.equal(exe.workerExecutions, 1);
+    assert.equal(exe.calls.filter((call) => call.operation === "create").length, 1);
+    assert.equal(exe.calls.filter((call) => call.operation === "destroy").length, 1);
+    assert.equal(existsSync(resolve(result.runDir, "workflow-attempt-1-evidence.tar")), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

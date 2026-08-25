@@ -24,6 +24,7 @@ import {
   recoverStaleControllerClaims,
   recordControllerVm,
   recordControllerWorkflowStep,
+  replaceControllerExecutionVm,
   scanRecoverableControllerStates,
   transitionControllerState,
   type ControllerStateInput,
@@ -309,6 +310,146 @@ test("v2 full cursor progression follows code-owned feature-pr blocks", () => {
     pinControllerWorkflowManifest(dir, "f".repeat(64));
     for (const step of FEATURE_PR_BLOCKS)
       assert.equal(recordControllerWorkflowStep(dir, step, 1).workflow.currentStepId, step);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("v2 post-plan lifecycle retries stay bounded and preserve their attempt", () => {
+  const root = mkdtempSync(join(tmpdir(), "maquila-state-retries-"));
+  const dir = runDir(root, "run-1");
+  try {
+    createControllerState(dir, input("run-1"));
+    for (const next of ["creating_vm", "bootstrapping", "executing"] as const)
+      transitionControllerState(dir, next);
+
+    for (const attempt of [1, 2, 3, 4]) recordControllerWorkflowStep(dir, "plan", attempt);
+    assert.throws(() => recordControllerWorkflowStep(dir, "plan", 5), /invalid workflow cursor/);
+    assert.throws(
+      () => recordControllerWorkflowStep(dir, "implement", 4),
+      /invalid workflow cursor/,
+    );
+
+    pinControllerWorkflowManifest(dir, "f".repeat(64));
+    assert.equal(recordControllerWorkflowStep(dir, "implement", 1).workflow.attempt, 1);
+    for (const step of ["document", "verify"] as const)
+      assert.equal(recordControllerWorkflowStep(dir, step, 1).workflow.attempt, 1);
+
+    assert.equal(recordControllerWorkflowStep(dir, "document", 2).workflow.attempt, 2);
+    assert.equal(recordControllerWorkflowStep(dir, "verify", 2).workflow.attempt, 2);
+    assert.equal(recordControllerWorkflowStep(dir, "review", 2).workflow.attempt, 2);
+
+    assert.equal(recordControllerWorkflowStep(dir, "implement", 3).workflow.attempt, 3);
+    for (const step of ["document", "verify", "review"] as const)
+      assert.equal(recordControllerWorkflowStep(dir, step, 3).workflow.attempt, 3);
+    assert.throws(
+      () => recordControllerWorkflowStep(dir, "implement", 4),
+      /invalid workflow cursor/,
+    );
+
+    const complete = completeControllerWorkflow(dir, "f".repeat(64));
+    assert.equal(complete.state, "ready_for_publication");
+    assert.equal(complete.workflow.attempt, 3);
+    const persisted = readControllerState(dir);
+    assert.equal(persisted.version, 2);
+    if (persisted.version !== 2) assert.fail("expected v2 controller state");
+    assert.equal(persisted.workflow.attempt, 3);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("execution VM replacement is limited to live v2 execution recovery", () => {
+  const root = mkdtempSync(join(tmpdir(), "maquila-state-execution-vm-"));
+  try {
+    const acceptedDir = runDir(root, "accepted");
+    createControllerState(acceptedDir, input("accepted", "1".repeat(64)));
+    transitionControllerState(acceptedDir, "creating_vm");
+    recordControllerVm(acceptedDir, {
+      name: "vm-old",
+      sshDest: "old.exe.xyz",
+      status: "running",
+    });
+    for (const next of ["bootstrapping", "executing"] as const)
+      transitionControllerState(acceptedDir, next);
+    const replaced = replaceControllerExecutionVm(acceptedDir, {
+      name: "vm-new",
+      sshDest: "new.exe.xyz",
+      status: "running",
+    });
+    assert.deepEqual(replaced.vm, {
+      name: "vm-new",
+      sshDest: "new.exe.xyz",
+      status: "running",
+    });
+    assert.equal(replaced.cleanup, "pending");
+    recordControllerCleanup(acceptedDir, "complete");
+    assert.throws(
+      () =>
+        replaceControllerExecutionVm(acceptedDir, {
+          name: "vm-late",
+          sshDest: "late.exe.xyz",
+          status: "running",
+        }),
+      /executing v2 state with pending cleanup/,
+    );
+
+    const noVmDir = runDir(root, "no-vm");
+    createControllerState(noVmDir, input("no-vm", "2".repeat(64)));
+    for (const next of ["creating_vm", "bootstrapping", "executing"] as const)
+      transitionControllerState(noVmDir, next);
+    assert.throws(
+      () =>
+        replaceControllerExecutionVm(noVmDir, {
+          name: "vm-new",
+          sshDest: "new.exe.xyz",
+          status: "running",
+        }),
+      /executing v2 state with pending cleanup/,
+    );
+
+    const bootstrappingDir = runDir(root, "bootstrapping");
+    createControllerState(bootstrappingDir, input("bootstrapping", "3".repeat(64)));
+    transitionControllerState(bootstrappingDir, "creating_vm");
+    recordControllerVm(bootstrappingDir, {
+      name: "vm-old",
+      sshDest: "old.exe.xyz",
+      status: "running",
+    });
+    transitionControllerState(bootstrappingDir, "bootstrapping");
+    assert.throws(
+      () =>
+        replaceControllerExecutionVm(bootstrappingDir, {
+          name: "vm-new",
+          sshDest: "new.exe.xyz",
+          status: "running",
+        }),
+      /executing v2 state with pending cleanup/,
+    );
+
+    const legacyDir = runDir(root, "legacy");
+    const created = createControllerState(legacyDir, input("legacy", "4".repeat(64)));
+    const { workflow: _workflow, ...common } = created;
+    writeFileSync(
+      join(legacyDir, "controller-state.json"),
+      `${JSON.stringify({
+        ...common,
+        version: 1,
+        state: "implementing",
+        cleanup: "pending",
+        vm: { name: "vm-old", sshDest: "old.exe.xyz", status: "running" },
+      })}
+`,
+    );
+    assert.throws(
+      () =>
+        replaceControllerExecutionVm(legacyDir, {
+          name: "vm-new",
+          sshDest: "new.exe.xyz",
+          status: "running",
+        }),
+      /executing v2 state with pending cleanup/,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

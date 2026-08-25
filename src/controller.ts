@@ -52,6 +52,7 @@ import {
   recordControllerVm,
   recordControllerWorkflowStep,
   replaceControllerDecisionVm,
+  replaceControllerExecutionVm,
   recoverStaleControllerClaims,
   scanRecoverableControllerStates,
   transitionControllerState,
@@ -91,6 +92,8 @@ const NODE_CHECKSUMS: Record<string, string> = {
 const MAX_PATCH = 1_000_000;
 const MAX_EVIDENCE_ARCHIVE = 50 * 1024 * 1024;
 const MAX_SESSION_CHECKPOINT = 8 * 1024 * 1024;
+const MAX_WORKFLOW_ATTEMPTS = 3;
+const WORKFLOW_RETRY_BACKOFF_MS = [5_000, 30_000] as const;
 const REMOTE_RUN = `${REMOTE_MAQUILA}/.maquila/runs/`;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 type RemotePhase = RemoteEvent["phase"];
@@ -224,6 +227,38 @@ function assertArtifactSafe(path: string, secrets: string[], label: string): voi
   }
   try {
     assertSecretAbsent(readFileSync(path), secrets);
+  } catch (error) {
+    rmSync(path, { force: true });
+    throw error;
+  }
+}
+
+function assertRetryEvidenceArchiveSafe(
+  path: string,
+  secrets: string[],
+  expectedRunId: string,
+): void {
+  assertArtifactSafe(path, secrets, "workflow retry evidence");
+  try {
+    if (!UUID.test(expectedRunId)) throw new Error("unsafe workflow retry run identity");
+    const names = execFileSync("tar", ["-tf", path], { encoding: "utf8" })
+      .split("\n")
+      .filter(Boolean);
+    const required = [
+      `.maquila/runs/${expectedRunId}/receipt.json`,
+      `.maquila/runs/${expectedRunId}/lifecycle.json`,
+    ];
+    if (
+      !names.length ||
+      names.some(
+        (name) => !name.startsWith(".maquila/runs/") || name.includes("..") || name.startsWith("/"),
+      ) ||
+      required.some((name) => !names.includes(name))
+    )
+      throw new Error("unsafe or incomplete workflow retry evidence");
+    const verbose = execFileSync("tar", ["-tvf", path], { encoding: "utf8" });
+    if (verbose.split("\n").some((line) => /^[lhbcps]/.test(line)))
+      throw new Error("unsafe workflow retry evidence member");
   } catch (error) {
     rmSync(path, { force: true });
     throw error;
@@ -397,6 +432,203 @@ async function streamed(
   const parser = new RemoteProtocolParser(onEvent);
   await exe.execStream(destination, argv, (chunk) => parser.push(chunk), timeout);
   return parser.finish();
+}
+
+async function waitForVm(
+  exe: ControllerExe,
+  destination: string,
+  sleep: (milliseconds: number) => Promise<void>,
+): Promise<void> {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    try {
+      await remote(exe, destination, ["true"], 30_000);
+      return;
+    } catch (error) {
+      if (attempt === 11) throw error;
+      await sleep(5_000);
+    }
+  }
+}
+
+async function bootstrapReplacementVm(input: {
+  exe: ControllerExe;
+  vm: { sshDest: string };
+  state: ControllerState;
+  privateRepository: boolean;
+  runtimeArchive: string;
+  models: string;
+  requiredModels: string[];
+  runDir: string;
+  attempt: number;
+  sleep: (milliseconds: number) => Promise<void>;
+  onStage: (message: string) => void;
+}): Promise<void> {
+  const { exe, vm, state } = input;
+  await waitForVm(exe, vm.sshDest, input.sleep);
+  input.onStage("repository clone failed during workflow recovery");
+  const cloneHost = input.privateRepository ? "github.int.exe.xyz" : "github.com";
+  await remote(
+    exe,
+    vm.sshDest,
+    ["git", "clone", `https://${cloneHost}/${state.repositoryFullName}.git`, REMOTE_WORK],
+    120_000,
+  );
+  input.onStage("repository checkout failed during workflow recovery");
+  await remote(
+    exe,
+    vm.sshDest,
+    ["git", "-C", REMOTE_WORK, "checkout", "--detach", state.baseSha],
+    30_000,
+  );
+  if (
+    (
+      await remote(exe, vm.sshDest, ["git", "-C", REMOTE_WORK, "rev-parse", "HEAD"], 30_000)
+    ).trim() !== state.baseSha
+  )
+    throw new Error("remote recovery checkout SHA mismatch");
+
+  input.onStage("bootstrap architecture detection failed during workflow recovery");
+  const machine = (await remote(exe, vm.sshDest, ["uname", "-m"], 30_000)).trim();
+  const nodeArch = machine === "x86_64" ? "x64" : machine === "aarch64" ? "arm64" : "";
+  const checksum = NODE_CHECKSUMS[nodeArch];
+  if (!checksum) throw new Error("unsupported exe.dev architecture");
+  const nodeArchive = `/home/exedev/node-v${NODE_VERSION}-linux-${nodeArch}.tar.xz`;
+  input.onStage("bootstrap directory initialization failed during workflow recovery");
+  await remote(
+    exe,
+    vm.sshDest,
+    [
+      "mkdir",
+      "-p",
+      REMOTE_MAQUILA,
+      "/home/exedev/.pi/agent",
+      "/home/exedev/.local/node",
+      "/home/exedev/.local/bun",
+    ],
+    30_000,
+  );
+  input.onStage("Node.js download failed during workflow recovery");
+  await remote(
+    exe,
+    vm.sshDest,
+    [
+      "curl",
+      "-fsSLo",
+      nodeArchive,
+      `https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${nodeArch}.tar.xz`,
+    ],
+    120_000,
+  );
+  input.onStage("Node.js verification failed during workflow recovery");
+  const actualChecksum = (await remote(exe, vm.sshDest, ["sha256sum", nodeArchive], 30_000))
+    .trim()
+    .split(/\s+/, 1)[0];
+  if (actualChecksum !== checksum) throw new Error("Node.js archive checksum mismatch");
+  input.onStage("Node.js installation failed during workflow recovery");
+  await remote(
+    exe,
+    vm.sshDest,
+    ["tar", "-xJf", nodeArchive, "-C", "/home/exedev/.local/node", "--strip-components=1"],
+    60_000,
+  );
+  input.onStage("Bun installation failed during workflow recovery");
+  await remote(
+    exe,
+    vm.sshDest,
+    [
+      "env",
+      `PATH=${REMOTE_PATH}`,
+      REMOTE_NPM,
+      "install",
+      "--global",
+      "--prefix",
+      "/home/exedev/.local/bun",
+      `bun@${BUN_VERSION}`,
+    ],
+    180_000,
+  );
+  input.onStage("Bun verification failed during workflow recovery");
+  const bunVersion = (await remote(exe, vm.sshDest, [REMOTE_BUN, "--version"], 30_000)).trim();
+  if (bunVersion !== BUN_VERSION) throw new Error("unexpected Bun version");
+  writeJson(resolve(input.runDir, `bootstrap-attempt-${input.attempt}.json`), {
+    nodeVersion: NODE_VERSION,
+    nodeArch,
+    nodeSha256: checksum,
+    bunVersion,
+  });
+  input.onStage("runtime upload failed during workflow recovery");
+  await exe.copyTo(vm.sshDest, input.runtimeArchive, "/home/exedev/runtime.tar");
+  await exe.copyTo(vm.sshDest, input.models, "/home/exedev/.pi/agent/models.json");
+  await remote(exe, vm.sshDest, ["chmod", "600", "/home/exedev/.pi/agent/models.json"], 30_000);
+  input.onStage("runtime installation failed during workflow recovery");
+  await remote(
+    exe,
+    vm.sshDest,
+    ["tar", "-xf", "/home/exedev/runtime.tar", "-C", REMOTE_MAQUILA],
+    60_000,
+  );
+  await remote(exe, vm.sshDest, [REMOTE_NODE, "--version"], 30_000);
+  input.onStage("Maquila dependency installation failed during workflow recovery");
+  await remote(
+    exe,
+    vm.sshDest,
+    [
+      "env",
+      "-C",
+      REMOTE_MAQUILA,
+      `PATH=${REMOTE_PATH}`,
+      REMOTE_BUN,
+      "install",
+      "--frozen-lockfile",
+      "--ignore-scripts",
+    ],
+    300_000,
+  );
+  input.onStage("Maquila build failed during workflow recovery");
+  await remote(
+    exe,
+    vm.sshDest,
+    ["env", "-C", REMOTE_MAQUILA, `PATH=${REMOTE_PATH}`, REMOTE_BUN, "run", "build"],
+    120_000,
+  );
+  input.onStage("target dependency installation failed during workflow recovery");
+  await remote(
+    exe,
+    vm.sshDest,
+    [
+      "env",
+      "-C",
+      REMOTE_WORK,
+      `PATH=${REMOTE_PATH}`,
+      "BUN_INSTALL=/home/exedev/.local/bun",
+      REMOTE_BUN,
+      "install",
+      "--frozen-lockfile",
+      "--ignore-scripts",
+    ],
+    600_000,
+  );
+  input.onStage("OpenRouter readiness check failed during workflow recovery");
+  const modelCatalog = "/home/exedev/openrouter-models.json";
+  await remote(
+    exe,
+    vm.sshDest,
+    ["curl", "-fsS", "-o", modelCatalog, "https://openrouter.ai/api/v1/models"],
+    30_000,
+  );
+  input.onStage("configured OpenRouter model unavailable during workflow recovery");
+  await remote(
+    exe,
+    vm.sshDest,
+    [
+      REMOTE_NODE,
+      "-e",
+      "const fs=require('node:fs');const ids=new Set(JSON.parse(fs.readFileSync(process.argv[1],'utf8')).data.map(x=>x.id));const missing=JSON.parse(process.argv[2]).filter(x=>!ids.has(x));if(missing.length){console.error(missing.join(','));process.exit(1)}",
+      modelCatalog,
+      JSON.stringify(input.requiredModels),
+    ],
+    30_000,
+  );
 }
 
 function acquireDecisionResumeLease(runDir: string): () => void {
@@ -1274,6 +1506,7 @@ export async function runController(options: ControllerOptions): Promise<Control
         let terminated = false;
         let negative = false;
         let pendingNegativeClosure: "failed" | "timed_out" | undefined;
+        let terminalNegative: { phase: RemotePhase; status: "failed" | "timed_out" } | undefined;
         let gateSeen = false;
         let reviewSeen = false;
         let phaseContentBytes = 0;
@@ -1404,6 +1637,7 @@ export async function runController(options: ControllerOptions): Promise<Control
               if (event.status !== "completed") {
                 negative = true;
                 terminated = true;
+                terminalNegative = { phase: event.phase, status: event.status };
               }
               pendingNegativeClosure = undefined;
               open = undefined;
@@ -1614,6 +1848,21 @@ export async function runController(options: ControllerOptions): Promise<Control
               throw new Error("remote completed result contradicts negative phase evidence");
             if (terminated && !["failed", "timed_out"].includes(result.status))
               throw new Error("remote terminal result contradicts failed phase");
+            if (
+              result.failure &&
+              (!terminalNegative ||
+                result.failure.phase !== terminalNegative.phase ||
+                result.status !== terminalNegative.status)
+            )
+              throw new Error("remote failure identity contradicts terminal phase");
+            if (
+              result.failure?.code === "model_request_failed" &&
+              (result.status !== "failed" ||
+                !["planning", "implementing", "documenting", "reviewing"].includes(
+                  result.failure.phase,
+                ))
+            )
+              throw new Error("remote model failure contradicts lifecycle evidence");
             if (
               result.status === "completed" &&
               (index !== expected.length ||
@@ -1916,53 +2165,123 @@ export async function runController(options: ControllerOptions): Promise<Control
         state = pinControllerWorkflowManifest(runDir, hash(localManifest));
       const remoteManifest = "/home/exedev/workflow-manifest.json";
       await exe.copyTo(vm.sshDest, localManifest, remoteManifest);
-      const workerSequence = remoteSequence(
-        featurePrRemoteStepsFromManifest(workflowManifest.steps),
-      );
+      const expectedWorkerSteps = featurePrRemoteStepsFromManifest(workflowManifest.steps);
+      const sleep =
+        options.sleep ??
+        ((milliseconds: number) => new Promise<void>((done) => setTimeout(done, milliseconds)));
       let workerResult: RemoteResultFrame;
-      try {
-        workerResult = await streamed(
-          exe,
-          vm.sshDest,
-          [
-            "env",
-            "-C",
-            REMOTE_MAQUILA,
-            `PATH=${REMOTE_PATH}`,
-            `${REMOTE_MAQUILA}/dist/maquila`,
-            "pi",
-            "worker",
-            "--repo",
-            REMOTE_WORK,
-            "--issue",
-            issue,
-            "--planner",
-            `${plannerRun}/envelope.json`,
-            "--base-sha",
-            state.baseSha,
-            "--timeout-seconds",
-            String(options.timeoutSeconds),
-            "--workflow-manifest",
-            remoteManifest,
-            "--machine",
-          ],
-          options.timeoutSeconds * 3000 + 120_000,
-          workerSequence.onEvent,
-        );
-        workerSequence.finish(workerResult);
-      } catch (error) {
-        workerSequence.closeOpen();
-        throw error;
-      }
-      const workerRun = outputPath(workerResult.runDir, "Run evidence");
-      if (workerResult.status !== "completed") {
+      let workerRun: string;
+      for (let workflowAttempt = 1; ; workflowAttempt += 1) {
+        const workerSequence = remoteSequence(expectedWorkerSteps, workflowAttempt);
+        try {
+          workerResult = await streamed(
+            exe,
+            vm.sshDest,
+            [
+              "env",
+              "-C",
+              REMOTE_MAQUILA,
+              `PATH=${REMOTE_PATH}`,
+              `${REMOTE_MAQUILA}/dist/maquila`,
+              "pi",
+              "worker",
+              "--repo",
+              REMOTE_WORK,
+              "--issue",
+              issue,
+              "--planner",
+              `${plannerRun}/envelope.json`,
+              "--base-sha",
+              state.baseSha,
+              "--timeout-seconds",
+              String(options.timeoutSeconds),
+              "--workflow-manifest",
+              remoteManifest,
+              "--machine",
+            ],
+            options.timeoutSeconds * 3000 + 120_000,
+            workerSequence.onEvent,
+          );
+          workerSequence.finish(workerResult);
+        } catch (error) {
+          workerSequence.closeOpen();
+          throw error;
+        }
+        workerRun = outputPath(workerResult.runDir, "Run evidence");
+        if (workerResult.status === "completed") break;
         try {
           await remote(exe, vm.sshDest, ["cat", `${workerRun}/lifecycle.json`], 30_000);
         } catch {
           // Failure evidence stays in the remote run directory for harvest/debug copies.
         }
         if (workerResult.failure) publicFailureMessage = remoteFailureMessage(workerResult.failure);
-        throw new Error("remote worker lifecycle failed");
+        const retryable =
+          workerResult.status === "failed" &&
+          workerResult.failure?.code === "model_request_failed" &&
+          ["implementing", "documenting", "reviewing"].includes(workerResult.failure.phase) &&
+          workflowAttempt < MAX_WORKFLOW_ATTEMPTS;
+        if (!retryable) throw new Error("remote worker lifecycle failed");
+
+        stage = "workflow_recovery";
+        publicFailureMessage = "workflow recovery failed";
+        const retryEvidenceName = `workflow-attempt-${workflowAttempt}-evidence.tar`;
+        const retryEvidence = resolve(runDir, retryEvidenceName);
+        await remote(
+          exe,
+          vm.sshDest,
+          ["tar", "-cf", "/home/exedev/retry-evidence.tar", "-C", REMOTE_MAQUILA, ".maquila/runs"],
+          60_000,
+        );
+        await exe.copyFrom(vm.sshDest, "/home/exedev/retry-evidence.tar", retryEvidence);
+        chmodSync(retryEvidence, 0o600);
+        assertRetryEvidenceArchiveSafe(retryEvidence, [options.openRouterKey], basename(workerRun));
+        emit({
+          type: "artifact_available",
+          actor: "controller",
+          payload: {
+            name: retryEvidenceName,
+            size: statSync(retryEvidence).size,
+            sha256: hash(retryEvidence),
+          },
+        });
+        try {
+          await remote(exe, vm.sshDest, ["rm", "-f", "/home/exedev/.pi/agent/models.json"], 30_000);
+        } catch {}
+        const cleaned = await exe.destroyVm(vm.vmName);
+        if (!cleaned.destroyed && !cleaned.notFound)
+          throw new Error("workflow recovery VM cleanup failed");
+        await sleep(WORKFLOW_RETRY_BACKOFF_MS[workflowAttempt - 1]!);
+        const replacement = await exe.createVm({ name: vmName(state.runId), tag: options.tag });
+        state = replaceControllerExecutionVm(runDir, {
+          name: replacement.vmName,
+          sshDest: replacement.sshDest,
+          status: replacement.status,
+        });
+        vm = replacement;
+        await bootstrapReplacementVm({
+          exe,
+          vm,
+          state,
+          privateRepository: intakeSnapshot.repository.private,
+          runtimeArchive: archive.path,
+          models,
+          requiredModels,
+          runDir,
+          attempt: workflowAttempt + 1,
+          sleep,
+          onStage(message) {
+            publicFailureMessage = message;
+          },
+        });
+        await exe.copyTo(vm.sshDest, retryEvidence, "/home/exedev/retry-evidence.tar");
+        await remote(
+          exe,
+          vm.sshDest,
+          ["tar", "-xf", "/home/exedev/retry-evidence.tar", "-C", REMOTE_MAQUILA],
+          60_000,
+        );
+        await exe.copyTo(vm.sshDest, localIssue, issue);
+        await exe.copyTo(vm.sshDest, localManifest, remoteManifest);
       }
       publicFailureMessage = "workflow execution retrieval failed";
       const remoteExecution = parseWorkflowExecution(
