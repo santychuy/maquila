@@ -74,9 +74,10 @@ Current execution is not a security sandbox. Read-only tools stop mutation but d
 - `src/verify.ts` — manifest-pinned command execution and exact Git gate.
 - `src/integrations/linear.ts`, `src/integrations/github.ts`, and `src/intake.ts` — immutable external input snapshots, assigned-engineer decision comments/replies, idempotency hash, and controller-side GitHub publication.
 - `src/run-state.ts` and `src/integrations/exe.ts` — atomic PoC state plus tested exe.dev SSH/SCP command boundaries.
-- `src/controller-lock.ts`, `src/controller.ts`, and `src/controller-chain.ts` — serial controller ownership, restart reconciliation, remote execution, retained same-run decision polling/resume, harvest, and cleanup.
+- `src/controller-lock.ts`, `src/controller.ts`, and `src/controller-chain.ts` — serial controller ownership, restart reconciliation, remote execution, retained same-run decision polling/resume, and cleanup.
+- `src/runs/evidence.ts` — Run evidence archive safety, harvest validation, and evidence manifest writing; `src/controller.ts` composes and re-exports it.
 - `src/telemetry.ts`, `src/remote-protocol.ts`, `src/run-launcher.ts`, and `src/run-status.ts` — bounded live event contract, detached accepted start, and safe status replay.
-- `src/run-batch.ts` — strict batch state, detached coordinator startup, and serial independent controller dispatch.
+- `src/runs/batch-state.ts` — strict batch coordination state, paths, validation, and atomic persistence; `src/run-batch.ts` re-exports that API and owns detached startup plus serial independent controller dispatch.
 - `src/observer/` (`shared.ts`, `server.ts`, `process.ts`, `ui.ts`, `app.tsx`, generated `bundle.generated.ts`) — loopback-only read API, managed server ownership, and Preact polling dashboard bundled by Bun.
 - `src/cli/index.ts` — `agents list`, setup/doctor, local Pi commands, remote run commands, human dashboard alias, observer machine commands, and exit-code handling.
 - `src/agents/*.md` — role metadata in YAML frontmatter and role system prompt in Markdown body.

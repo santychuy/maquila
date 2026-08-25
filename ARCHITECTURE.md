@@ -18,6 +18,8 @@ Workflow remains code-controlled. A trusted TypeScript **recipe** defines ordere
 
 Controller is general contractor. It selects current built-in recipe, pins inputs, controls state and credentials, checks remote sequence and harvested evidence, destroys VM, and publishes. Agents propose or perform bounded work; they do not select recipe, accept evidence, commit, push, or merge.
 
+Source placement follows system domain first, capability second, authority always. Run is central lifecycle noun, so evidence harvest lives in `src/runs/evidence.ts` and batch coordination state lives in `src/runs/batch-state.ts`; controller and batch coordinator compose those capabilities while retaining their authority. Stop decomposition if moving code would change validation order, failure behavior, artifact contracts, cleanup, or publication gates. Broader Run folder moves and shared-core abstractions remain deferred until a proven slice requires them.
+
 Current `feature-pr` recipe runs `plan`, then `implement` when non-documentation work exists, `document`, deterministic `verify`, and fresh `review`. A docs-only manifest records trusted implementation skip. Verification may point to primary writer run because it is a code gate, not a synthetic agent run. Publication starts only after manifest, execution record, verification, reviewer verdict, base SHA, and reviewed patch agree.
 
 See [code-controlled workflows](docs/workflows.md) for contracts, artifacts, and change guide.

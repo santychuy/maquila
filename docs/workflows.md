@@ -30,21 +30,28 @@ Any failed or timed-out block stops later blocks. Reviewer `FAIL`, missing gate 
 
 ## Source map
 
-| Change                                                           | Owning source                 |
-| ---------------------------------------------------------------- | ----------------------------- |
-| Shared step ID, actor, and phase identity                        | `src/workflow-step.ts`        |
-| Recipe ID/version, path split, block order                       | `src/workflows/feature-pr.ts` |
-| Manifest schema, generation, definition hash                     | `src/workflows/manifest.ts`   |
-| Execution schema, run links, manifest and patch hashes           | `src/workflows/execution.ts`  |
-| Serial block execution and local compatibility fallback          | `src/workflows/worker.ts`     |
-| Host orchestration, remote sequence checks, harvest, publication | `src/controller.ts`           |
-| Persisted workflow cursor and compatibility                      | `src/run-state.ts`            |
-| VM stream frames                                                 | `src/remote-protocol.ts`      |
-| Host event ledger                                                | `src/telemetry.ts`            |
-| Status folding and current checkpoint                            | `src/run-status.ts`           |
-| Local observer contracts, server, lifecycle, and UI              | `src/observer/`               |
+A Run is one accepted issue's lifecycle, from intake through cleanup and publication.
 
-Change concern in owner above. Keep IDs aligned through `workflowStep()` instead of copying actor/phase strings.
+| Capability                                              | Owning source                 |
+| ------------------------------------------------------- | ----------------------------- |
+| Shared step ID, actor, and phase identity               | `src/workflow-step.ts`        |
+| Recipe ID/version, path split, block order              | `src/workflows/feature-pr.ts` |
+| Manifest schema, generation, definition hash            | `src/workflows/manifest.ts`   |
+| Execution schema, run links, manifest and patch hashes  | `src/workflows/execution.ts`  |
+| Serial block execution and local compatibility fallback | `src/workflows/worker.ts`     |
+| Run evidence archive safety and harvest validation      | `src/runs/evidence.ts`        |
+| Batch coordination state and persistence                | `src/runs/batch-state.ts`     |
+| Batch serial dispatch and detached startup              | `src/run-batch.ts`            |
+| Host orchestration, remote sequence checks, publication | `src/controller.ts`           |
+| Persisted workflow cursor and compatibility             | `src/run-state.ts`            |
+| VM stream frames                                        | `src/remote-protocol.ts`      |
+| Host event ledger                                       | `src/telemetry.ts`            |
+| Status folding and current checkpoint                   | `src/run-status.ts`           |
+| Local observer contracts, server, lifecycle, and UI     | `src/observer/`               |
+
+`src/runs/evidence.ts` owns evidence archive safety and harvest validation. `src/runs/batch-state.ts` owns strict batch coordination state: paths, validation, and atomic persistence. `src/run-batch.ts` re-exports that API for compatibility and retains serial execution and detached launch. Controller still owns sequencing, credentials, VM lifecycle, cleanup, final acceptance, and publication.
+
+Keep IDs aligned through `workflowStep()` instead of copying actor/phase strings.
 
 ## Artifacts and bindings
 
@@ -58,7 +65,7 @@ Controller run lives at `.maquila/controllers/<run-id>/`. Agent run evidence rem
 | Remote frames             |       protocol 2 | Gap-free sequence plus required step ID, actor, and phase identity                                                                                                      |
 | Host telemetry JSONL      | record version 1 | Gap-free host sequence; step-tagged phases validate matching step, actor, and phase                                                                                     |
 
-Primary run also holds `verification.json`, `review-diff.sha256`, `lifecycle.json`, and `workflow-execution.json`. Controller harvest checks expected run set, receipts, envelopes, ownership, verification, reviewer verdict, base SHA, and reviewed patch. `evidence-manifest.json` hashes harvested remote evidence files.
+Primary run also holds `verification.json`, `review-diff.sha256`, `lifecycle.json`, and `workflow-execution.json`. During harvest, Run evidence code checks expected run set, receipts, envelopes, path ownership, verification, reviewer verdict, base SHA, and reviewed patch. `evidence-manifest.json` hashes harvested remote evidence files.
 
 Hashes prove internal consistency among captured values. VM evidence is not authentic against a compromised VM: VM processes have OS-level access and could forge internally consistent evidence. Use trusted, non-sensitive repositories.
 
