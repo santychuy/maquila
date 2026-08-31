@@ -7,6 +7,7 @@ import { listAgents } from "../agents/index.js";
 import { runPlan } from "../workflows/plan.js";
 import { runWorkerLifecycle } from "../workflows/worker.js";
 import { runControllerChain } from "../controller-chain.js";
+import { runBuiltInMaquila } from "./maquila-runtime.js";
 import { readPersistedDecisionRequest } from "../controller.js";
 import { createRemoteProtocolWriter } from "../remote-protocol.js";
 import { loadMaquilaConfig } from "../config.js";
@@ -348,23 +349,24 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         baseRef: options.baseRef,
         tag: options.tag,
       });
-      const result = await runControllerChain({
-        issue: options.issue,
-        owner: target.owner,
-        repo: target.repo,
-        baseRef: target.baseRef,
-        tag: target.tag,
-        timeoutSeconds: options.timeoutSeconds,
-        linearToken,
-        githubToken,
-        openRouterKey,
+      const result = await runBuiltInMaquila(
         root,
-        maquilaRoot: root,
-        runId: options.runId,
-        onAccepted: () => writeLaunchHandshake(root, options.runId, instanceId),
-        ...(identity ? { identity } : {}),
-      });
-      process.stdout.write(`Controller evidence: ${result.runDir}\n`);
+        { linearToken, githubToken, openRouterKey, ...(identity ? { identity } : {}) },
+        {
+          issue: options.issue,
+          owner: target.owner,
+          repo: target.repo,
+          baseRef: target.baseRef,
+          tag: target.tag,
+          timeoutSeconds: options.timeoutSeconds,
+        },
+        {
+          runId: options.runId,
+          maquilaRoot: root,
+          onAccepted: () => writeLaunchHandshake(root, options.runId, instanceId),
+        },
+      );
+      process.stdout.write(`Controller evidence: ${result.runDirectory}\n`);
       return result.status === "completed" ? 0 : 1;
     }
     if ("baseRef" in options) {
@@ -374,14 +376,18 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         identityFlag: options.identity,
         config: loadMaquilaConfig({ env: launchEnv }),
       });
-      const result = await runControllerChain({
-        ...options,
-        linearToken: credentials.linearToken,
-        githubToken: credentials.githubToken,
-        openRouterKey: credentials.openRouterKey,
-        ...(credentials.identity ? { identity: credentials.identity } : {}),
-      });
-      process.stdout.write(`\nController evidence: ${result.runDir}\n`);
+      const result = await runBuiltInMaquila(
+        root,
+        {
+          linearToken: credentials.linearToken,
+          githubToken: credentials.githubToken,
+          openRouterKey: credentials.openRouterKey,
+          ...(credentials.identity ? { identity: credentials.identity } : {}),
+        },
+        options,
+        { maquilaRoot: root },
+      );
+      process.stdout.write(`\nController evidence: ${result.runDirectory}\n`);
       return result.status === "completed" ? 0 : 1;
     }
     const protocol = options.machine

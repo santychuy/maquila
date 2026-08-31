@@ -16,13 +16,14 @@ import { tmpdir } from "node:os";
 import { basename, isAbsolute, resolve } from "node:path";
 import { parseAgentDefinition } from "./agents/index.js";
 import { harvest } from "./runs/evidence.js";
-import { createIntake } from "./intake.js";
+import { createIntake, createProviderIntake, providerIntakeFromLegacy } from "./intake.js";
 import {
   createLinearDecisionComment,
   LinearIssueValidationError,
   type LinearDecisionReply,
   type LinearDecisionRequest as LinearDecisionThreadRequest,
 } from "./integrations/linear.js";
+import type { ProviderIntake } from "./intake.js";
 import {
   createGitHubPublicationDryRun,
   publishGitHubPullRequest,
@@ -41,6 +42,15 @@ import { featurePrRemoteStepsFromManifest } from "./workflows/feature-pr.js";
 import { createFeaturePrManifest, featurePrDefinitionSha256 } from "./workflows/manifest.js";
 import { FEATURE_PR_WORKFLOW_ID, FEATURE_PR_WORKFLOW_VERSION } from "./workflows/feature-pr.js";
 import { ExeClient, ExeCommandError } from "./integrations/exe.js";
+import type {
+  DecisionReceipt,
+  EventSink,
+  ExecutionProvider,
+  SourceControlProvider,
+  WorkItemProvider,
+} from "./providers.js";
+import { createTelemetryWriterInStateDirectory } from "./telemetry.js";
+import { stateDirectory } from "./state-directory.js";
 import {
   beginControllerDecisionWait,
   completeControllerWorkflow,
@@ -59,7 +69,11 @@ import {
   type CleanupState,
   type ControllerState,
 } from "./run-state.js";
-import { acquireControllerLock, linuxProcessIdentity } from "./controller-lock.js";
+import {
+  acquireControllerLock,
+  acquireControllerLockInStateDirectory,
+  linuxProcessIdentity,
+} from "./controller-lock.js";
 import {
   RemoteProtocolParser,
   type RemoteEvent,
@@ -71,7 +85,7 @@ import {
   createTelemetryWriter,
   readTelemetry,
   sanitizeTelemetryText,
-  telemetryPath,
+  telemetryPathInStateDirectory,
   type TelemetryInput,
   type TelemetryWriter,
 } from "./telemetry.js";
@@ -105,12 +119,26 @@ function telemetryPhase(
   return { id: `${stepId}:${attempt}`, name: phase, stepId, attempt };
 }
 
+export interface ControllerInfrastructure {
+  workItems: WorkItemProvider;
+  workItemReference: unknown;
+  sourceControl: SourceControlProvider;
+  sourceControlReference: unknown;
+  execution: ExecutionProvider;
+  executionReference: unknown;
+  /** Exact host state directory. It is not a project root. */
+  stateDirectory: string;
+  eventSink?: EventSink;
+}
+
 export interface ControllerOptions {
   issue: string;
   owner: string;
   repo: string;
   baseRef: string;
   tag: string;
+  /** Internal provider/controller seam; CLI keeps using legacy fields. */
+  infrastructure?: ControllerInfrastructure;
   identity?: string;
   timeoutSeconds: number;
   linearToken: string;
@@ -148,6 +176,10 @@ export interface ControllerDecisionRequest extends LinearDecisionThreadRequest {
   repo: string;
   baseRef: string;
   tag: string;
+  /** Internal provider/controller seam; CLI keeps using legacy fields. */
+  infrastructure?: ControllerInfrastructure;
+  /** Durable generic-provider receipt; absent from legacy Linear artifacts. */
+  providerReceipt?: DecisionReceipt;
   timeoutSeconds: number;
 }
 export interface ControllerExe {
@@ -337,6 +369,47 @@ export interface PersistedDecisionRequest {
   expiresAt: string;
   assigneeId: string;
 }
+function parseDecisionReceipt(value: unknown): DecisionReceipt {
+  if (!isRecord(value) || Object.keys(value).length !== 10)
+    throw new Error("invalid provider decision receipt");
+  const fields = [
+    "provider",
+    "commentId",
+    "commentUrl",
+    "workItemId",
+    "principalId",
+    "questionSha256",
+    "requestedAt",
+    "marker",
+  ];
+  for (const field of fields)
+    if (!stringValue(value[field]).trim()) throw new Error("invalid provider decision receipt");
+  const generation = value.generation;
+  const questionCount = value.questionCount;
+  if (
+    typeof generation !== "number" ||
+    !Number.isInteger(generation) ||
+    generation < 1 ||
+    typeof questionCount !== "number" ||
+    !Number.isInteger(questionCount) ||
+    questionCount < 1 ||
+    !/^[0-9a-f]{64}$/.test(stringValue(value.questionSha256)) ||
+    !Number.isFinite(Date.parse(stringValue(value.requestedAt)))
+  )
+    throw new Error("invalid provider decision receipt");
+  return {
+    provider: stringValue(value.provider),
+    commentId: stringValue(value.commentId),
+    commentUrl: stringValue(value.commentUrl),
+    workItemId: stringValue(value.workItemId),
+    principalId: stringValue(value.principalId),
+    generation,
+    questionSha256: stringValue(value.questionSha256),
+    questionCount,
+    requestedAt: stringValue(value.requestedAt),
+    marker: stringValue(value.marker),
+  };
+}
 
 export function readPersistedDecisionRequest(runDir: string): PersistedDecisionRequest {
   const value: unknown = JSON.parse(readFileSync(resolve(runDir, "decision-request.json"), "utf8"));
@@ -359,14 +432,20 @@ export function readPersistedDecisionRequest(runDir: string): PersistedDecisionR
     baseRef: stringValue(value.baseRef),
     tag: stringValue(value.tag),
     timeoutSeconds: typeof value.timeoutSeconds === "number" ? value.timeoutSeconds : Number.NaN,
+    ...(value.providerReceipt === undefined
+      ? {}
+      : { providerReceipt: parseDecisionReceipt(value.providerReceipt) }),
   };
   if (
     !UUID.test(request.runId) ||
     request.continuationRunId !== request.runId ||
     !request.commentId ||
-    !request.commentUrl.startsWith("https://linear.app/") ||
-    !request.issueId ||
-    !request.assigneeId ||
+    (!request.providerReceipt && !request.commentUrl.startsWith("https://linear.app/")) ||
+    (!request.providerReceipt && (!request.issueId || !request.assigneeId)) ||
+    (request.providerReceipt &&
+      (request.providerReceipt.commentId !== request.commentId ||
+        request.providerReceipt.commentUrl !== request.commentUrl ||
+        request.providerReceipt.generation !== request.generation)) ||
     !Number.isInteger(request.generation) ||
     request.generation < 1 ||
     request.generation > 3 ||
@@ -702,8 +781,8 @@ function readAttemptRecovery(path: string): AttemptRecoveryRecord | undefined {
   return undefined;
 }
 /** Reconciles accepted children that died before strict intake state existed. */
-export function recoverAbandonedAttempts(root: string): void {
-  const attempts = resolve(root, ".maquila", "attempts");
+function recoverAbandonedAttemptsInStateDirectory(root: string): void {
+  const attempts = resolve(root, "attempts");
   if (!existsSync(attempts)) return;
   for (const entry of readdirSync(attempts, { withFileTypes: true })) {
     if (!entry.isDirectory() || !UUID.test(entry.name)) continue;
@@ -717,7 +796,7 @@ export function recoverAbandonedAttempts(root: string): void {
     } catch {}
     if (alive) continue;
     try {
-      const telemetry = createTelemetryWriter(root, attempt.runId);
+      const telemetry = createTelemetryWriterInStateDirectory(root, attempt.runId);
       const terminal = readTelemetry(telemetry.path).some((event) => event.type === "run_finished");
       if (!terminal) {
         telemetry.append({
@@ -738,9 +817,13 @@ export function recoverAbandonedAttempts(root: string): void {
   }
 }
 
+export function recoverAbandonedAttempts(root: string): void {
+  recoverAbandonedAttemptsInStateDirectory(stateDirectory(root));
+}
+
 async function recover(root: string, exe: ControllerExe): Promise<void> {
-  recoverAbandonedAttempts(root);
-  const controllers = resolve(root, ".maquila", "controllers");
+  recoverAbandonedAttemptsInStateDirectory(root);
+  const controllers = resolve(root, "controllers");
   if (!existsSync(controllers)) return;
   recoverStaleControllerClaims(controllers);
   for (const state of scanRecoverableControllerStates(controllers)) {
@@ -776,10 +859,10 @@ async function recover(root: string, exe: ControllerExe): Promise<void> {
     // Cleanup authority wins over observability: corrupt or unavailable telemetry
     // must never strand a VM during recovery.
     try {
-      const path = telemetryPath(root, state.runId);
+      const path = telemetryPathInStateDirectory(root, state.runId);
       if (!existsSync(path)) continue;
       const terminal = readTelemetry(path).some((event) => event.type === "run_finished");
-      const telemetry = createTelemetryWriter(root, state.runId);
+      const telemetry = createTelemetryWriterInStateDirectory(root, state.runId);
       if (terminal) {
         if (cleanup === "complete" && state.cleanup !== "complete")
           telemetry.append({
@@ -831,26 +914,79 @@ export async function runController(options: ControllerOptions): Promise<Control
     options.timeoutSeconds > 1800
   )
     throw new Error("timeoutSeconds must be an integer from 1 to 1800");
-  if (!options.linearToken.trim()) throw new Error("Linear token missing");
-  if (!options.githubToken.trim()) throw new Error("GitHub token missing");
+  if (!options.infrastructure && !options.linearToken.trim())
+    throw new Error("Linear token missing");
+  if (!options.infrastructure && !options.githubToken.trim())
+    throw new Error("GitHub token missing");
   if (!options.openRouterKey.trim()) throw new Error("OpenRouter key missing");
   if (options.publicationMode === "dry-run" && options.publish)
     throw new Error("dry-run publication cannot use a publisher");
   if (options.identity) requireAbsolute(options.identity);
   validateDecision(options.decision);
   safeRepo(options.owner, options.repo);
-  const root = resolve(options.root ?? process.cwd());
+  const infrastructure = options.infrastructure;
+  const root = infrastructure
+    ? resolve(infrastructure.stateDirectory)
+    : stateDirectory(resolve(options.root ?? process.cwd()));
   const maquilaRoot = resolve(options.maquilaRoot ?? process.cwd());
-  const exe = options.exe ?? new ExeClient(undefined, 30_000, options.identity);
-  let lock = acquireControllerLock(root);
+  const exe: ControllerExe = infrastructure
+    ? {
+        createVm: async (value) => {
+          const vm = await infrastructure.execution.createVm(
+            infrastructure.executionReference,
+            value,
+          );
+          return { vmName: vm.name, status: vm.status, sshDest: vm.destination };
+        },
+        destroyVm: (name) =>
+          infrastructure.execution.destroyVm(infrastructure.executionReference, name),
+        exec: (destination, argv, timeoutMs) =>
+          infrastructure.execution.exec(
+            infrastructure.executionReference,
+            destination,
+            argv,
+            timeoutMs,
+          ),
+        execStream: (destination, argv, onStdout, timeoutMs) =>
+          infrastructure.execution.execStream(
+            infrastructure.executionReference,
+            destination,
+            argv,
+            onStdout,
+            timeoutMs,
+          ),
+        copyTo: (destination, localPath, remotePath) =>
+          infrastructure.execution.copyTo(
+            infrastructure.executionReference,
+            destination,
+            localPath,
+            remotePath,
+          ),
+        copyFrom: (destination, remotePath, localPath) =>
+          infrastructure.execution.copyFrom(
+            infrastructure.executionReference,
+            destination,
+            remotePath,
+            localPath,
+          ),
+      }
+    : (options.exe ?? new ExeClient(undefined, 30_000, options.identity));
+  const acquireLock = (): ReturnType<typeof acquireControllerLock> =>
+    infrastructure
+      ? acquireControllerLockInStateDirectory(root)
+      : acquireControllerLock(resolve(root, ".."));
+  let lock = acquireLock();
   const runId = options.runId ?? randomUUID();
-  const provisional = resolve(root, ".maquila", "attempts", runId);
+  const provisional = resolve(root, "attempts", runId);
   const startedAt = new Date().toISOString();
   let telemetry: TelemetryWriter;
   let telemetryBroken = false;
   let failure: string | undefined;
   try {
-    telemetry = (options.telemetry ?? createTelemetryWriter)(root, runId);
+    telemetry = (
+      options.telemetry ??
+      (infrastructure ? createTelemetryWriterInStateDirectory : createTelemetryWriter)
+    )(infrastructure ? root : resolve(root, ".."), runId);
     if (!options.resumeExisting) {
       telemetry.append({
         type: "run_created",
@@ -887,7 +1023,7 @@ export async function runController(options: ControllerOptions): Promise<Control
   let evidenceDir = provisional;
   let state: ControllerState | undefined;
   let archive: ReturnType<typeof archiveMaquila> | undefined;
-  let intakeSnapshot: Awaited<ReturnType<typeof createIntake>> | undefined;
+  let intakeSnapshot: ProviderIntake | undefined;
   let decisionRequest: ControllerDecisionRequest | undefined;
   let reviewedPatchSha256: string | undefined;
   let cleanupFailed = false;
@@ -897,7 +1033,13 @@ export async function runController(options: ControllerOptions): Promise<Control
   const emit = (input: TelemetryInput): void => {
     if (telemetryBroken) throw new Error("telemetry unavailable");
     try {
-      telemetry.append(input);
+      const record = telemetry.append(input);
+      // Storage is authoritative. Observer mirrors cannot affect controller authority.
+      try {
+        const mirrored = infrastructure?.eventSink?.emit(record);
+        if (mirrored && typeof mirrored.then === "function")
+          void Promise.resolve(mirrored).catch(() => {});
+      } catch {}
     } catch (error) {
       telemetryBroken = true;
       throw new Error("telemetry append failed", { cause: error });
@@ -906,7 +1048,12 @@ export async function runController(options: ControllerOptions): Promise<Control
   const bestEffortEmit = (input: TelemetryInput): void => {
     if (telemetryBroken) return;
     try {
-      telemetry.append(input);
+      const record = telemetry.append(input);
+      try {
+        const mirrored = infrastructure?.eventSink?.emit(record);
+        if (mirrored && typeof mirrored.then === "function")
+          void Promise.resolve(mirrored).catch(() => {});
+      } catch {}
     } catch {
       telemetryBroken = true;
     }
@@ -1001,21 +1148,34 @@ export async function runController(options: ControllerOptions): Promise<Control
   try {
     await recover(root, exe);
     stage = "intake";
-    const runDir = resolve(root, ".maquila", "controllers", runId);
+    const runDir = resolve(root, "controllers", runId);
     let vm: { vmName: string; sshDest: string; status: string };
     let initialPlannerAttempt = 1;
     let initialResumeSession: { sessionId: string; sha256: string } | undefined;
     let replacementVm = false;
     const resuming = options.resumeExisting === true;
-    const intake = await (options.intake ?? createIntake)(
-      { token: options.linearToken, issue: options.issue },
-      {
-        token: options.githubToken,
-        owner: options.owner,
-        repo: options.repo,
-        baseRef: options.baseRef,
-      },
-    );
+    const providerIntake = infrastructure
+      ? await createProviderIntake({
+          workItemProvider: infrastructure.workItems,
+          workItemReference: infrastructure.workItemReference,
+          sourceControlProvider: infrastructure.sourceControl,
+          sourceControlReference: infrastructure.sourceControlReference,
+        })
+      : undefined;
+    const intake =
+      providerIntake ??
+      providerIntakeFromLegacy(
+        await (options.intake ?? createIntake)(
+          { token: options.linearToken, issue: options.issue },
+          {
+            token: options.githubToken,
+            owner: options.owner,
+            repo: options.repo,
+            baseRef: options.baseRef,
+          },
+        ),
+      );
+    const nativeIntake = intake.native;
     if (resuming) {
       state = readControllerState(runDir);
       let persisted: PersistedDecisionRequest;
@@ -1058,9 +1218,9 @@ export async function runController(options: ControllerOptions): Promise<Control
       }
       assertSecretAbsent(readFileSync(checkpoint), [options.openRouterKey]);
       if (
-        intake.issue.snapshotSha256 !== state.issueSnapshotSha256 ||
-        intake.repository.snapshotSha256 !== state.repositorySnapshotSha256 ||
-        intake.repository.baseSha !== state.baseSha
+        intake.workItem.snapshotSha256 !== state.issueSnapshotSha256 ||
+        intake.sourceControl.snapshotSha256 !== state.repositorySnapshotSha256 ||
+        intake.sourceControl.baseSha !== state.baseSha
       ) {
         state = transitionControllerState(runDir, "failed");
         throw new Error("decision wait input drifted");
@@ -1081,14 +1241,14 @@ export async function runController(options: ControllerOptions): Promise<Control
         decision = await options.inlineDecisionWaiter(persisted.request, wait.expiresAt);
       } catch (error) {
         releaseResumeLease();
-        lock = acquireControllerLock(root);
+        lock = acquireLock();
         state = transitionControllerState(
           runDir,
           Date.now() >= Date.parse(wait.expiresAt) ? "cancelled" : "failed",
         );
         throw error;
       }
-      lock = acquireControllerLock(root);
+      lock = acquireLock();
       releaseResumeLease();
       if (
         Date.now() >= Date.parse(wait.expiresAt) ||
@@ -1097,19 +1257,31 @@ export async function runController(options: ControllerOptions): Promise<Control
         state = transitionControllerState(runDir, "cancelled");
         throw new Error("decision wait expired");
       }
-      const refreshed = await (options.intake ?? createIntake)(
-        { token: options.linearToken, issue: options.issue },
-        {
-          token: options.githubToken,
-          owner: options.owner,
-          repo: options.repo,
-          baseRef: options.baseRef,
-        },
-      );
+      const refreshedProviderIntake = infrastructure
+        ? await createProviderIntake({
+            workItemProvider: infrastructure.workItems,
+            workItemReference: infrastructure.workItemReference,
+            sourceControlProvider: infrastructure.sourceControl,
+            sourceControlReference: infrastructure.sourceControlReference,
+          })
+        : undefined;
+      const refreshed =
+        refreshedProviderIntake ??
+        providerIntakeFromLegacy(
+          await (options.intake ?? createIntake)(
+            { token: options.linearToken, issue: options.issue },
+            {
+              token: options.githubToken,
+              owner: options.owner,
+              repo: options.repo,
+              baseRef: options.baseRef,
+            },
+          ),
+        );
       if (
-        refreshed.issue.snapshotSha256 !== state.issueSnapshotSha256 ||
-        refreshed.repository.snapshotSha256 !== state.repositorySnapshotSha256 ||
-        refreshed.repository.baseSha !== state.baseSha
+        refreshed.workItem.snapshotSha256 !== state.issueSnapshotSha256 ||
+        refreshed.sourceControl.snapshotSha256 !== state.repositorySnapshotSha256 ||
+        refreshed.sourceControl.baseSha !== state.baseSha
       ) {
         state = transitionControllerState(runDir, "failed");
         throw new Error("decision wait input drifted");
@@ -1219,12 +1391,12 @@ export async function runController(options: ControllerOptions): Promise<Control
         : "";
       writeFileSync(
         resolve(provisional, "issue.md"),
-        `${intake.issue.title}\n\n${intake.issue.description}${decisionContext}\n`,
+        `${intake.workItem.title}\n\n${intake.workItem.body}${decisionContext}\n`,
         { mode: 0o600 },
       );
       writeJson(resolve(provisional, "intake.json"), {
-        issue: intake.issue,
-        repository: intake.repository,
+        issue: nativeIntake?.issue ?? intake.workItem,
+        repository: nativeIntake?.repository ?? intake.sourceControl,
         idempotencyKey,
         ...(options.decision ? { decision: options.decision } : {}),
       });
@@ -1237,13 +1409,13 @@ export async function runController(options: ControllerOptions): Promise<Control
           definitionSha256: featurePrDefinitionSha256(),
         },
         idempotencyKey,
-        issueUuid: intake.issue.uuid,
-        issueSnapshotSha256: intake.issue.snapshotSha256,
-        repositoryId: intake.repository.repositoryId,
-        repositoryFullName: intake.repository.fullName,
-        repositorySnapshotSha256: intake.repository.snapshotSha256,
-        baseRef: intake.repository.baseRef,
-        baseSha: intake.repository.baseSha,
+        issueUuid: intake.workItem.id,
+        issueSnapshotSha256: intake.workItem.snapshotSha256,
+        repositoryId: intake.sourceControl.repositoryId,
+        repositoryFullName: intake.sourceControl.fullName,
+        repositorySnapshotSha256: intake.sourceControl.snapshotSha256,
+        baseRef: intake.sourceControl.baseRef,
+        baseSha: intake.sourceControl.baseSha,
       });
       for (const name of ["receipt.json", "issue.md", "intake.json"])
         renameSync(resolve(provisional, name), resolve(runDir, name));
@@ -1273,13 +1445,13 @@ export async function runController(options: ControllerOptions): Promise<Control
       advance(runDir, "bootstrapping");
       publicFailureMessage = "repository clone failed";
       if (!intakeSnapshot) throw new Error("repository intake snapshot missing");
-      const cloneHost = intakeSnapshot.repository.private ? "github.int.exe.xyz" : "github.com";
-      await remote(
-        exe,
-        vm.sshDest,
-        ["git", "clone", `https://${cloneHost}/${state.repositoryFullName}.git`, REMOTE_WORK],
-        120_000,
-      );
+      const cloneUrl = infrastructure
+        ? infrastructure.sourceControl.cloneUrl(
+            infrastructure.sourceControlReference,
+            providerIntake!.sourceControl,
+          )
+        : `https://${intakeSnapshot.sourceControl.private ? "github.int.exe.xyz" : "github.com"}/${state.repositoryFullName}.git`;
+      await remote(exe, vm.sshDest, ["git", "clone", cloneUrl, REMOTE_WORK], 120_000);
       publicFailureMessage = "repository checkout failed";
       await remote(
         exe,
@@ -1974,15 +2146,48 @@ export async function runController(options: ControllerOptions): Promise<Control
         await remote(exe, vm.sshDest, ["rm", "-f", "/home/exedev/.pi/agent/models.json"], 30_000);
         stage = "planning_decision_comment";
         publicFailureMessage = "Linear decision comment creation failed";
-        const comment = await (options.createDecisionComment ?? createLinearDecisionComment)({
-          token: options.linearToken,
-          issueId: intakeSnapshot.issue.uuid,
-          assigneeUrl: intakeSnapshot.issue.assignee.url,
-          assigneeId: intakeSnapshot.issue.assignee.id,
-          runId: state.runId,
-          generation: plannerAttempt,
-          decisions: parsedPlan.envelope.decisionsNeeded,
-        });
+        const providerComment = infrastructure
+          ? await infrastructure.workItems.requestDecision(infrastructure.workItemReference, {
+              workItem: providerIntake!.workItem,
+              principal:
+                providerIntake!.workItem.decisionPrincipal ??
+                (() => {
+                  throw new Error("decision provider lacks decision principal");
+                })(),
+              runId: state.runId,
+              generation: plannerAttempt,
+              decisions: parsedPlan.envelope.decisionsNeeded,
+            })
+          : undefined;
+        const comment = providerComment
+          ? {
+              commentId: providerComment.commentId,
+              commentUrl: providerComment.commentUrl,
+              issueId: providerComment.workItemId,
+              assigneeId: providerComment.principalId,
+              generation: providerComment.generation,
+              questionSha256: providerComment.questionSha256,
+              questionCount: providerComment.questionCount,
+              requestedAt: providerComment.requestedAt,
+              marker: providerComment.marker,
+            }
+          : await (options.createDecisionComment ?? createLinearDecisionComment)({
+              token: options.linearToken,
+              issueId: intakeSnapshot.workItem.id,
+              assigneeUrl:
+                intakeSnapshot.workItem.decisionPrincipal?.url ??
+                (() => {
+                  throw new Error("decision provider lacks decision principal");
+                })(),
+              assigneeId:
+                intakeSnapshot.workItem.decisionPrincipal?.id ??
+                (() => {
+                  throw new Error("decision provider lacks decision principal");
+                })(),
+              runId: state.runId,
+              generation: plannerAttempt,
+              decisions: parsedPlan.envelope.decisionsNeeded,
+            });
         const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
         state = beginControllerDecisionWait(runDir, {
           generation: plannerAttempt,
@@ -2001,6 +2206,7 @@ export async function runController(options: ControllerOptions): Promise<Control
           repo: options.repo,
           baseRef: options.baseRef,
           tag: options.tag,
+          ...(providerComment ? { providerReceipt: providerComment } : {}),
           timeoutSeconds: options.timeoutSeconds,
         };
         writeJson(resolve(runDir, "decision-request.json"), {
@@ -2008,7 +2214,11 @@ export async function runController(options: ControllerOptions): Promise<Control
           ...decisionRequest,
           generation: plannerAttempt,
           expiresAt,
-          assigneeId: intakeSnapshot.issue.assignee.id,
+          assigneeId:
+            intakeSnapshot.workItem.decisionPrincipal?.id ??
+            (() => {
+              throw new Error("decision provider lacks decision principal");
+            })(),
           count: parsedPlan.envelope.decisionsNeeded.length,
           decisions: parsedPlan.envelope.decisionsNeeded,
         });
@@ -2046,14 +2256,14 @@ export async function runController(options: ControllerOptions): Promise<Control
           decision = await options.inlineDecisionWaiter(decisionRequest, expiresAt);
         } catch (error) {
           releaseResumeLease();
-          lock = acquireControllerLock(root);
+          lock = acquireLock();
           state = transitionControllerState(
             runDir,
             Date.now() >= Date.parse(expiresAt) ? "cancelled" : "failed",
           );
           throw error;
         }
-        lock = acquireControllerLock(root);
+        lock = acquireLock();
         releaseResumeLease();
         const current = readControllerState(runDir);
         if (
@@ -2262,7 +2472,7 @@ export async function runController(options: ControllerOptions): Promise<Control
           exe,
           vm,
           state,
-          privateRepository: intakeSnapshot.repository.private,
+          privateRepository: intakeSnapshot.sourceControl.private,
           runtimeArchive: archive.path,
           models,
           requiredModels,
@@ -2399,13 +2609,10 @@ export async function runController(options: ControllerOptions): Promise<Control
     }
   }
   if (failure && state?.state === "awaiting_decision" && state.decisionWait) {
-    state = transitionControllerState(
-      resolve(root, ".maquila", "controllers", state.runId),
-      "failed",
-    );
+    state = transitionControllerState(resolve(root, "controllers", state.runId), "failed");
   }
   if (failure && state?.vm) {
-    const runDir = resolve(root, ".maquila", "controllers", state.runId);
+    const runDir = resolve(root, "controllers", state.runId);
     const target = resolve(runDir, "failure-evidence.tar");
     try {
       await remote(
@@ -2453,10 +2660,7 @@ export async function runController(options: ControllerOptions): Promise<Control
       const cleaned = await exe.destroyVm(state.vm?.name ?? vmName(state.runId));
       if (!cleaned.destroyed && !cleaned.notFound) throw new Error("VM cleanup failed");
       cleanupOutcome = "complete";
-      state = recordControllerCleanup(
-        resolve(root, ".maquila", "controllers", state.runId),
-        "complete",
-      );
+      state = recordControllerCleanup(resolve(root, "controllers", state.runId), "complete");
       try {
         emit({
           type: "cleanup_updated",
@@ -2473,10 +2677,7 @@ export async function runController(options: ControllerOptions): Promise<Control
     if (!failure) stage = "cleanup";
     if (state?.vm) {
       try {
-        state = recordControllerCleanup(
-          resolve(root, ".maquila", "controllers", state.runId),
-          "failed",
-        );
+        state = recordControllerCleanup(resolve(root, "controllers", state.runId), "failed");
         bestEffortEmit({
           type: "cleanup_updated",
           actor: "controller",
@@ -2495,7 +2696,7 @@ export async function runController(options: ControllerOptions): Promise<Control
 
   let result: ControllerResult;
   try {
-    const runDir = state ? resolve(root, ".maquila", "controllers", state.runId) : evidenceDir;
+    const runDir = state ? resolve(root, "controllers", state.runId) : evidenceDir;
     const failedResult = (message: string): ControllerResult => {
       stopHeartbeat();
       try {
@@ -2625,16 +2826,21 @@ export async function runController(options: ControllerOptions): Promise<Control
           baseSha: state.baseSha,
           runId: state.runId,
           idempotencyKey: state.idempotencyKey,
-          issueIdentifier: intakeSnapshot.issue.identifier,
-          issueTitle: intakeSnapshot.issue.title,
-          issueUrl: intakeSnapshot.issue.url,
+          issueIdentifier: intakeSnapshot.workItem.key,
+          issueTitle: intakeSnapshot.workItem.title,
+          issueUrl: intakeSnapshot.workItem.url,
           patchPath: resolve(runDir, "change.patch"),
           patchSha256: reviewedPatchSha256,
         };
         let pullRequest: GitHubPublication | undefined;
         let publicationDryRun: GitHubPublicationDryRun | undefined;
         if (options.publicationMode === "dry-run") {
-          publicationDryRun = createGitHubPublicationDryRun(publicationInput);
+          publicationDryRun = infrastructure
+            ? infrastructure.sourceControl.dryRunPublication(
+                infrastructure.sourceControlReference,
+                publicationInput,
+              )
+            : createGitHubPublicationDryRun(publicationInput);
           const publicationPath = resolve(runDir, "publication-dry-run.json");
           writeJson(publicationPath, publicationDryRun);
           emit({
@@ -2647,7 +2853,12 @@ export async function runController(options: ControllerOptions): Promise<Control
             },
           });
         } else {
-          pullRequest = await (options.publish ?? publishGitHubPullRequest)(publicationInput);
+          pullRequest = infrastructure
+            ? await infrastructure.sourceControl.publishReviewedPatch(
+                infrastructure.sourceControlReference,
+                publicationInput,
+              )
+            : await (options.publish ?? publishGitHubPullRequest)(publicationInput);
           const publicationPath = resolve(runDir, "publication.json");
           writeJson(publicationPath, pullRequest);
           emit({

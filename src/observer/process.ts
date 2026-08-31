@@ -12,6 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { resolve } from "node:path";
+import { stateDirectory, statePath } from "../state-directory.js";
 
 import { externalCommandEnvironment } from "../integrations/exe.js";
 import { linuxProcessIdentity } from "../controller-lock.js";
@@ -63,19 +64,30 @@ function live(pid: number): boolean {
     return record(error) && error.code !== "ESRCH";
   }
 }
+export function observerDescriptorPathInStateDirectory(stateDirectoryPath: string): string {
+  return statePath(stateDirectoryPath, "observer.json");
+}
+/** Compatibility wrapper for project-root callers. */
 export function observerDescriptorPath(root: string): string {
-  return resolve(root, ".maquila", "observer.json");
+  return observerDescriptorPathInStateDirectory(stateDirectory(root));
+}
+export function observerDirectoryInStateDirectory(stateDirectoryPath: string): string {
+  return statePath(stateDirectoryPath, "observer");
 }
 function observerDir(root: string): string {
-  return resolve(root, ".maquila", "observer");
+  return observerDirectoryInStateDirectory(stateDirectory(root));
 }
 function ensurePrivateDirectory(path: string): void {
   mkdirSync(path, { recursive: true, mode: 0o700 });
   chmodSync(path, 0o700);
 }
-export function readObserverDescriptor(root: string): ObserverDescriptor | undefined {
+export function readObserverDescriptorInStateDirectory(
+  stateDirectoryPath: string,
+): ObserverDescriptor | undefined {
   try {
-    const value: unknown = JSON.parse(readFileSync(observerDescriptorPath(root), "utf8"));
+    const value: unknown = JSON.parse(
+      readFileSync(observerDescriptorPathInStateDirectory(stateDirectoryPath), "utf8"),
+    );
     if (
       record(value) &&
       Object.keys(value).every((key) =>
@@ -108,8 +120,14 @@ export function readObserverDescriptor(root: string): ObserverDescriptor | undef
   } catch {}
   return undefined;
 }
+
+/** Compatibility wrapper for project-root callers. */
+export function readObserverDescriptor(root: string): ObserverDescriptor | undefined {
+  return readObserverDescriptorInStateDirectory(stateDirectory(root));
+}
+
 function writeObserverDescriptor(root: string, descriptor: ObserverDescriptor): void {
-  const maquila = resolve(root, ".maquila");
+  const maquila = stateDirectory(root);
   ensurePrivateDirectory(maquila);
   const target = observerDescriptorPath(root);
   const temporary = `${target}.${process.pid}.${descriptor.instanceId}.tmp`;

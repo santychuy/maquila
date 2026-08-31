@@ -119,3 +119,11 @@ Bounded remote lifecycle errors are redacted and copied into controller receipts
 ## Next
 
 Run one credentialed end-to-end publication smoke test and one assigned-engineer same-session continuation smoke test. Then define the broader planning-output/delivery contract. Fix pass, hosted decision delivery, and poller reboot recovery remain out of scope.
+
+## Phase 1 private SDK checkpoint
+
+The final working tree adds a private, repo-local package facade in `src/index.ts` and `src/maquila.ts`. `createMaquila(config).run(request)` is blocking and composes the same provider-backed controller core used by the normal CLI run. Public contracts export exactly four seams: work item, source control, execution, and optional best-effort event sink, plus supporting types. Built-in constructors cover Linear work items, GitHub source control/publication, and exe.dev execution; these are defaults, not core identity.
+
+The facade validates strict references and exact absolute `stateDirectory`, which is used directly without appending `.maquila`; CLI compatibility continues to pass `<Maquila checkout>/.maquila`. Credentials stay in instance configuration and are excluded from requests, results, state, and telemetry. Event sinks receive sanitized canonical telemetry only after durable append and cannot affect authority or results. Intake is canonical enough for non-Linear work items, while native Linear/GitHub evidence and historical idempotency/artifact compatibility remain.
+
+Direct evidence includes generic non-Linear provider controller coverage, SDK validation/blocking failure mapping/multiple references, CLI composition, state-directory compatibility, provider decision polling, and the full gate. The pre-documentation `bun run check` passed with 284 tests. Remaining work includes public distribution/licensing, custom recipes, broader adapters, SDK background/service APIs, fix pass, and other limits listed above; none should be inferred from this checkpoint.

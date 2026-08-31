@@ -4,13 +4,21 @@
 
 This repository is building a small, local maquila one proven slice at a time. Its intended contract is:
 
-1. Accept a validated Linear feature issue.
+1. Accept a validated work item (the built-in path is Linear/Git/PR oriented).
 2. Run bounded Pi agent sessions in a fresh exe.dev VM pinned to a repository SHA.
 3. Plan, implement, verify, and independently review the change.
 4. Publish a bot pull request only after deterministic gates pass.
 5. Leave merge or rejection to a human.
 
 Agent output is always a proposal or report. Deterministic controller code owns acceptance, workflow state, budgets, cancellation, VM lifecycle, and publication.
+
+### Private SDK boundary
+
+The package is private and repo-local. `src/index.ts` exports `createMaquila`, public request/result types, exactly four provider seams (`WorkItemProvider`, `SourceControlProvider`, `ExecutionProvider`, `EventSink`), their supporting contracts, and built-in Linear/GitHub/exe.dev constructors. `createMaquila(config).run(request)` is blocking. Do not expose internal `runMaquila` controls.
+
+The SDK uses the exact absolute `stateDirectory` supplied by the host and never appends `.maquila`; the CLI supplies `<Maquila checkout>/.maquila` for compatibility. Credentials belong only to instance configuration. They must not enter requests, results, state, or telemetry. EventSink receives only sanitized canonical telemetry after durable append and is best effort. Provider intake is canonical and can support non-Linear work items, but do not claim arbitrary SCM/workflow support or a GitHub Issues adapter.
+
+The private code-controlled `feature-pr` recipe, controller authority, deterministic verification/review/publication gates, VM cleanup, artifact/state versions, and human merge remain mandatory. No public/custom recipe API exists.
 
 ## Current Reality
 

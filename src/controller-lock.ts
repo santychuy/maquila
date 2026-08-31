@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { resolve } from "node:path";
+import { stateDirectory } from "./state-directory.js";
 import { randomUUID } from "node:crypto";
 
 interface Owner {
@@ -101,13 +102,13 @@ function defaultRuntime(): ControllerLockRuntime {
 export interface ControllerLock {
   release(): void;
 }
-export function acquireControllerLock(
-  root: string,
+export function acquireControllerLockInStateDirectory(
+  stateDirectoryPath: string,
   runtime: ControllerLockRuntime = defaultRuntime(),
 ): ControllerLock {
   if (!Number.isSafeInteger(runtime.pid) || runtime.pid < 1)
     throw new Error("invalid controller PID");
-  const maquilaDir = resolve(root, ".maquila");
+  const maquilaDir = resolve(stateDirectoryPath);
   const path = resolve(maquilaDir, "controller.lock");
   const guard = resolve(maquilaDir, "controller.lock.acquire");
   mkdirSync(maquilaDir, { recursive: true, mode: 0o700 });
@@ -155,7 +156,7 @@ export function acquireControllerLock(
         throw new Error("controller lock is held", { cause: error });
     }
     rmSync(guard, { recursive: true, force: true });
-    return acquireControllerLock(root, runtime);
+    return acquireControllerLockInStateDirectory(stateDirectoryPath, runtime);
   }
   if (!guardToken || parseOwner(resolve(guard, "owner.json"))?.token !== guardToken)
     throw new Error("controller lock guard ownership lost");
@@ -202,4 +203,12 @@ export function acquireControllerLock(
     if (parseOwner(resolve(guard, "owner.json"))?.token === guardToken)
       rmSync(guard, { recursive: true, force: true });
   }
+}
+
+/** Compatibility wrapper for project-root callers. */
+export function acquireControllerLock(
+  root: string,
+  runtime: ControllerLockRuntime = defaultRuntime(),
+): ControllerLock {
+  return acquireControllerLockInStateDirectory(stateDirectory(root), runtime);
 }

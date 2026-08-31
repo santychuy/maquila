@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 import {
   createGitHubPublicationDryRun,
   fetchGitHubSnapshot,
   publishGitHubPullRequest,
 } from "../src/integrations/github.js";
-import { createIntake } from "../src/intake.js";
+import { createIntake, createProviderIntake } from "../src/intake.js";
 import {
   createLinearDecisionComment,
   fetchLinearDecisionReply,
@@ -629,4 +630,114 @@ test("intake composition is deterministic and contains no credentials", async ()
   const serialized = JSON.stringify(first);
   assert.ok(!serialized.includes("linear-secret"));
   assert.ok(!serialized.includes("github-secret"));
+});
+
+test("provider intake preserves built-in evidence and uses canonical non-Linear facts", async () => {
+  const legacy = await createIntake(
+    { fetch: sequence([{ body: linearIssue() }]).fetch, token: "linear-secret", issue: "RIFF-39" },
+    {
+      fetch: sequence([{ body: repository }, { body: reference }]).fetch,
+      token: "github-secret",
+      owner: "santychuy",
+      repo: "bookbounce",
+      baseRef: "main",
+    },
+  );
+  const builtIn = await createProviderIntake({
+    workItemProvider: {
+      fetchWorkItem: async () => ({
+        provider: "linear",
+        id: legacy.issue.uuid,
+        key: legacy.issue.identifier,
+        title: legacy.issue.title,
+        body: legacy.issue.description,
+        url: legacy.issue.url,
+        snapshotSha256: legacy.issue.snapshotSha256,
+        decisionPrincipal: legacy.issue.assignee,
+        linear: legacy.issue,
+      }),
+      requestDecision: async () => {
+        throw new Error("unused");
+      },
+      waitForDecision: async () => undefined,
+    },
+    workItemReference: {},
+    sourceControlProvider: {
+      fetchSourceControl: async () => ({
+        provider: "github",
+        repositoryId: legacy.repository.repositoryId,
+        repository: legacy.repository.fullName,
+        fullName: legacy.repository.fullName,
+        baseRef: legacy.repository.baseRef,
+        baseSha: legacy.repository.baseSha,
+        private: legacy.repository.private,
+        defaultBranch: legacy.repository.defaultBranch,
+        snapshotSha256: legacy.repository.snapshotSha256,
+        github: legacy.repository,
+      }),
+      cloneUrl: () => "",
+      dryRunPublication: () => {
+        throw new Error("unused");
+      },
+      publishReviewedPatch: async () => {
+        throw new Error("unused");
+      },
+    },
+    sourceControlReference: {},
+  });
+  assert.deepEqual(builtIn.native, legacy);
+  assert.equal(builtIn.idempotencyKey, legacy.idempotencyKey);
+  const generic = await createProviderIntake({
+    workItemProvider: {
+      fetchWorkItem: async () => ({
+        provider: "tracker",
+        id: "WI-1",
+        key: "TASK-1",
+        title: "Title",
+        body: "Body",
+        url: "https://tracker.invalid/TASK-1",
+        snapshotSha256: "b".repeat(64),
+      }),
+      requestDecision: async () => {
+        throw new Error("unused");
+      },
+      waitForDecision: async () => undefined,
+    },
+    workItemReference: {},
+    sourceControlProvider: {
+      fetchSourceControl: async () => ({
+        provider: "git",
+        repositoryId: 42,
+        repository: "acme/repo",
+        fullName: "acme/repo",
+        baseRef: "main",
+        baseSha: "a".repeat(40),
+        private: true,
+        defaultBranch: "main",
+        snapshotSha256: "c".repeat(64),
+      }),
+      cloneUrl: () => "",
+      dryRunPublication: () => {
+        throw new Error("unused");
+      },
+      publishReviewedPatch: async () => {
+        throw new Error("unused");
+      },
+    },
+    sourceControlReference: {},
+  });
+  assert.equal(generic.native, undefined);
+  assert.equal(
+    generic.idempotencyKey,
+    createHash("sha256")
+      .update(
+        JSON.stringify({
+          workItemId: "WI-1",
+          repositoryId: 42,
+          baseRef: "main",
+          baseSha: "a".repeat(40),
+        }),
+      )
+      .digest("hex"),
+  );
 });

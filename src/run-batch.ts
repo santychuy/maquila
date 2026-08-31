@@ -18,10 +18,14 @@ import { sanitizeTelemetryText } from "./telemetry.js";
 
 export {
   batchDirectory,
+  batchDirectoryInStateDirectory,
   batchStatePath,
+  batchStatePathInStateDirectory,
   createBatch,
   isBatchState,
   readBatchState,
+  readBatchStateInStateDirectory,
+  writeBatchStateInStateDirectory,
   type BatchItem,
   type BatchItemStatus,
   type BatchState,

@@ -1602,6 +1602,83 @@ function controllerOptions(root: string, exe: ControllerExe) {
   };
 }
 
+test("provider-backed generic work item writes canonical intake and state before execution failure", async () => {
+  const root = mkdtempSync(join(tmpdir(), "maquila-provider-intake-"));
+  const stateDirectory = join(root, "arbitrary-state-directory");
+  try {
+    const options = { ...controllerOptions(root, new FakeExe()), runId: ids[0]! };
+    const result = await runController({
+      ...options,
+      infrastructure: {
+        stateDirectory,
+        workItemReference: {},
+        sourceControlReference: {},
+        executionReference: {},
+        workItems: {
+          fetchWorkItem: async () => ({
+            provider: "tracker",
+            id: "work-uuid",
+            key: "TASK-7",
+            title: "Generic title",
+            body: "Generic body",
+            url: "https://tracker.invalid/TASK-7",
+            snapshotSha256: "b".repeat(64),
+          }),
+          requestDecision: async () => {
+            throw new Error("unused");
+          },
+          waitForDecision: async () => undefined,
+        },
+        sourceControl: {
+          fetchSourceControl: async () => ({
+            provider: "git",
+            repositoryId: 77,
+            repository: "acme/repo",
+            fullName: "acme/repo",
+            baseRef: "main",
+            baseSha: BASE_SHA,
+            private: true,
+            defaultBranch: "main",
+            snapshotSha256: "c".repeat(64),
+          }),
+          cloneUrl: () => "https://example.invalid/acme/repo.git",
+          dryRunPublication: () => {
+            throw new Error("unused");
+          },
+          publishReviewedPatch: async () => {
+            throw new Error("unused");
+          },
+        },
+        execution: {
+          createVm: async () => {
+            throw new Error("injected execution failure");
+          },
+          destroyVm: async () => ({ destroyed: false, notFound: true }),
+          exec: async () => ({ stdout: "", stderr: "" }),
+          execStream: async () => ({ stderr: "" }),
+          copyTo: async () => ({ stdout: "", stderr: "" }),
+          copyFrom: async () => ({ stdout: "", stderr: "" }),
+        },
+      },
+    });
+    assert.equal(result.status, "failed");
+    assert.doesNotMatch(result.error ?? "", /compatibility evidence/);
+    assert.match(result.error ?? "", /injected execution failure/);
+    const runDir = join(stateDirectory, "controllers", ids[0]!);
+    const evidence = JSON.parse(readFileSync(join(runDir, "intake.json"), "utf8")) as {
+      issue: { id: string };
+      repository: { repositoryId: number };
+    };
+    assert.equal(evidence.issue.id, "work-uuid");
+    assert.equal(evidence.repository.repositoryId, 77);
+    const state = readControllerState(runDir);
+    assert.equal(state.issueUuid, "work-uuid");
+    assert.equal(state.repositoryId, 77);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function contains(root: string, secret: string): boolean {
   return readdirSync(root, { withFileTypes: true }).some((entry) => {
     const path = join(root, entry.name);

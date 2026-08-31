@@ -1,6 +1,40 @@
 # Maquila
 
-Maquila takes a Linear issue, works on it inside a fresh exe.dev VM, verifies the change, runs an independent review, and opens a ready-for-review GitHub pull request. It never merges. A human owns that decision.
+Maquila takes a work item, works on it inside a fresh exe.dev VM, verifies the change, runs an independent review, and opens a ready-for-review GitHub pull request. The built-in CLI remains Linear/GitHub oriented. It never merges. A human owns that decision.
+
+> The package is private and repo-local. Public distribution and licensing are later work.
+
+## Private SDK (Phase 1)
+
+The package root also exports a blocking programmatic facade. Configure the four provider seams and run one request:
+
+```ts
+import {
+  createExeExecutionProvider,
+  createGitHubSourceControlProvider,
+  createLinearWorkItemProvider,
+  createMaquila,
+} from "maquila";
+
+const maquila = createMaquila({
+  workItemProvider: createLinearWorkItemProvider({
+    token: process.env.LINEAR_API_TOKEN!,
+  }),
+  sourceControlProvider: createGitHubSourceControlProvider({
+    token: process.env.GITHUB_TOKEN!,
+  }),
+  executionProvider: createExeExecutionProvider(),
+  stateDirectory: "/var/lib/maquila",
+  openRouterApiKey: process.env.OPENROUTER_API_KEY!,
+});
+const result = await maquila.run({
+  workItem: { provider: "linear", id: "RIFF-52" },
+  sourceControl: { provider: "github", repository: "acme/app", baseRef: "main" },
+  execution: { provider: "exe.dev", tag: "default" },
+});
+```
+
+`run()` blocks until completed, failed, or cancelled. Requests carry strict work-item, source-control, and execution references. `stateDirectory` is the exact absolute host directory; the SDK never appends `.maquila`. Credentials are instance configuration only and never appear in requests, results, state, or telemetry. An optional EventSink receives sanitized records after durable append and cannot affect authority or results. The SDK has no start/status/resume/batch/daemon API; use the CLI for detached execution and compatibility commands. Phase 1 remains Git/PR-oriented, uses the private code-controlled `feature-pr` recipe, and does not yet offer custom recipes, arbitrary SCM/workflow support, or public npm distribution.
 
 ## What you need
 

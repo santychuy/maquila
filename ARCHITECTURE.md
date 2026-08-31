@@ -2,7 +2,15 @@
 
 ## Contract
 
-A validated Linear feature issue triggers a local controller. Controller runs bounded Pi sessions inside fresh exe.dev VMs pinned to one base SHA. Code opens a bot pull request only after deterministic checks and independent review pass. Human owns merge or rejection.
+A validated work item triggers a local controller. The current built-in intake and publication path remains Git/PR-oriented. Controller runs bounded Pi sessions inside fresh exe.dev VMs pinned to one base SHA. Code opens a bot pull request only after deterministic checks and independent review pass. Human owns merge or rejection.
+
+## Private SDK and provider seams
+
+The package facade and provider adapters sit outside controller authority. Exactly four infrastructure seams are public: `WorkItemProvider`, `SourceControlProvider`, `ExecutionProvider`, and optional best-effort `EventSink`; supporting contract types are exported for adapter authors. Providers supply facts and actions. They cannot select recipes, accept work, or change deterministic gates. Canonical provider intake supports non-Linear work items, while built-in Linear/GitHub integrations retain native evidence and historical idempotency/artifact compatibility. There is no GitHub Issues adapter claim.
+
+`createMaquila(config).run(request)` is blocking. The host owns queues and background lifetime; detached start/status/resume/batch remain CLI surfaces, not SDK methods. `stateDirectory` is an exact absolute directory and SDK persistence uses it directly. The CLI passes `<Maquila checkout>/.maquila`, preserving existing paths. Persistence is filesystem-only.
+
+Credentials are instance configuration, never request/result/state/telemetry data. EventSink receives only the exact sanitized canonical `TelemetryRecord`, after durable append, and sink failures are ignored.
 
 ## Authority boundaries
 
@@ -68,5 +76,7 @@ Assigned Linear issues also support a controller-owned decision path. A planner 
 RIFF-39 proved pre-publication remote composition live. Publication and observer paths have deterministic local coverage; a credentialed end-to-end publication smoke proof remains pending. Completed planner-session continuation now has deterministic local coverage. Fix pass, poller reboot recovery, and general controller-owned external-only delivery remain absent.
 
 ## Non-goals for v1
+
+The private `feature-pr` recipe remains code-controlled; custom recipes and broader provider-neutral workflow support are later phases.
 
 No YAML or generic workflow DSL, user-defined workflows, plugins, inheritance, DAG, parallel writers, dynamic recipe registry or selector, report-only result, automatic merge, deployment, Temporal, dynamic swarm, or self-hosted sandbox fleet.

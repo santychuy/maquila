@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
+import { stateDirectory, statePath } from "../state-directory.js";
 import { validateResolvedTarget } from "../target.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -137,28 +138,48 @@ export function isBatchState(value: unknown): value is BatchState {
   return value.status === "running" || (!running && value.items.some((item) => item.error));
 }
 
-export function batchDirectory(root: string, batchId: string): string {
+export function batchDirectoryInStateDirectory(
+  stateDirectoryPath: string,
+  batchId: string,
+): string {
   if (!UUID.test(batchId)) throw new Error("invalid batch ID");
-  return resolve(root, ".maquila", "batches", batchId);
+  return statePath(stateDirectoryPath, "batches", batchId);
+}
+/** Compatibility wrapper for project-root callers. */
+export function batchDirectory(root: string, batchId: string): string {
+  return batchDirectoryInStateDirectory(stateDirectory(root), batchId);
 }
 
+export function batchStatePathInStateDirectory(
+  stateDirectoryPath: string,
+  batchId: string,
+): string {
+  return resolve(batchDirectoryInStateDirectory(stateDirectoryPath, batchId), "batch.json");
+}
+/** Compatibility wrapper for project-root callers. */
 export function batchStatePath(root: string, batchId: string): string {
-  return resolve(batchDirectory(root, batchId), "batch.json");
+  return batchStatePathInStateDirectory(stateDirectory(root), batchId);
 }
 
-export function writeBatchState(root: string, state: BatchState): void {
+export function writeBatchStateInStateDirectory(
+  stateDirectoryPath: string,
+  state: BatchState,
+): void {
   if (!isBatchState(state)) throw new Error("invalid batch state");
-  const directory = batchDirectory(root, state.batchId);
+  const directory = batchDirectoryInStateDirectory(stateDirectoryPath, state.batchId);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   chmodSync(directory, 0o700);
-  const path = batchStatePath(root, state.batchId);
+  const path = batchStatePathInStateDirectory(stateDirectoryPath, state.batchId);
   const temporary = `${path}.${process.pid}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
   renameSync(temporary, path);
 }
 
-export function readBatchState(root: string, batchId: string): BatchState {
-  const path = batchStatePath(root, batchId);
+export function readBatchStateInStateDirectory(
+  stateDirectoryPath: string,
+  batchId: string,
+): BatchState {
+  const path = batchStatePathInStateDirectory(stateDirectoryPath, batchId);
   const value: unknown = JSON.parse(readFileSync(path, "utf8"));
   if (
     !isBatchState(value) ||
@@ -167,6 +188,15 @@ export function readBatchState(root: string, batchId: string): BatchState {
   )
     throw new Error("invalid batch state");
   return value;
+}
+
+/** Compatibility wrapper for project-root callers. */
+export function writeBatchState(root: string, state: BatchState): void {
+  writeBatchStateInStateDirectory(stateDirectory(root), state);
+}
+/** Compatibility wrapper for project-root callers. */
+export function readBatchState(root: string, batchId: string): BatchState {
+  return readBatchStateInStateDirectory(stateDirectory(root), batchId);
 }
 
 export function createBatch(options: CreateBatchOptions): BatchState {

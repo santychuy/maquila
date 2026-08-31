@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { resolve } from "node:path";
+import { stateDirectory, statePath } from "./state-directory.js";
 import { spawn } from "node:child_process";
 import { controllerChildEnvironment, resolveControllerCredentials } from "./credentials.js";
 import { telemetryPath } from "./telemetry.js";
@@ -78,18 +79,34 @@ export interface StartDetachedRunOptions {
   sleep?: (milliseconds: number) => Promise<void>;
 }
 
+export function launchDirectoryInStateDirectory(stateDirectoryPath: string, runId: string): string {
+  if (!UUID.test(runId)) throw new Error("invalid run ID");
+  return statePath(stateDirectoryPath, "launches", runId);
+}
 function launchDir(root: string, runId: string): string {
-  return resolve(root, ".maquila", "launches", runId);
+  return launchDirectoryInStateDirectory(stateDirectory(root), runId);
 }
 
+export function handshakePathInStateDirectory(stateDirectoryPath: string, runId: string): string {
+  return resolve(launchDirectoryInStateDirectory(stateDirectoryPath, runId), "accepted.json");
+}
+/** Compatibility wrapper for project-root callers. */
 export function handshakePath(root: string, runId: string): string {
-  if (!UUID.test(runId)) throw new Error("invalid run ID");
-  return resolve(launchDir(root, runId), "accepted.json");
+  return handshakePathInStateDirectory(stateDirectory(root), runId);
 }
 
+export function terminationUnconfirmedPathInStateDirectory(
+  stateDirectoryPath: string,
+  runId: string,
+): string {
+  return resolve(
+    launchDirectoryInStateDirectory(stateDirectoryPath, runId),
+    "termination-unconfirmed.json",
+  );
+}
+/** Compatibility wrapper for project-root callers. */
 export function terminationUnconfirmedPath(root: string, runId: string): string {
-  if (!UUID.test(runId)) throw new Error("invalid run ID");
-  return resolve(launchDir(root, runId), "termination-unconfirmed.json");
+  return terminationUnconfirmedPathInStateDirectory(stateDirectory(root), runId);
 }
 
 function recordTerminationUnconfirmed(

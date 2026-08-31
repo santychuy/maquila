@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { resolve } from "node:path";
+import { stateDirectory, statePath } from "../state-directory.js";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
 import { linuxProcessIdentity } from "../controller-lock.js";
@@ -57,7 +58,7 @@ function queryInteger(
   return value;
 }
 function listRunIds(root: string): string[] {
-  const dir = resolve(root, ".maquila", "telemetry");
+  const dir = statePath(stateDirectory(root), "telemetry");
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter((name) => name.endsWith(".jsonl") && UUID.test(name.slice(0, -6)))
@@ -68,7 +69,7 @@ function summary(root: string, runId: string): RunStatusSummary {
     root,
     runId,
     controllerExists: (id) =>
-      existsSync(resolve(root, ".maquila", "controllers", id, "controller-state.json")),
+      existsSync(statePath(stateDirectory(root), "controllers", id, "controller-state.json")),
   });
 }
 function events(root: string, runId: string, after: number, limit: number): TelemetryRecord[] {
@@ -84,7 +85,7 @@ export function archivedSystemPrompt(
 ): string {
   if (!UUID.test(runId) || !MODEL_ACTORS.has(actor) || !phaseId || phaseId.length > 200)
     throw new Error("invalid prompt request");
-  const runtimePath = resolve(root, ".maquila", "controllers", runId, "runtime.json");
+  const runtimePath = statePath(stateDirectory(root), "controllers", runId, "runtime.json");
   const runtime: unknown = JSON.parse(readFileSync(runtimePath, "utf8"));
   if (
     !record(runtime) ||

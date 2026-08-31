@@ -10,6 +10,7 @@ import {
   truncateSync,
 } from "node:fs";
 import { basename, resolve } from "node:path";
+import { stateDirectory, statePath } from "./state-directory.js";
 import { Type, type Static, type TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { estimateReferenceNanoUsd } from "./model-reference.js";
@@ -489,9 +490,14 @@ export function parseTelemetryRecord(value: unknown): TelemetryRecord {
   return record;
 }
 
-export function telemetryPath(root: string, runId: string): string {
+export function telemetryPathInStateDirectory(stateDirectoryPath: string, runId: string): string {
   if (!new RegExp(RUN_ID).test(runId)) throw new Error("invalid telemetry runId");
-  return resolve(root, ".maquila", "telemetry", `${runId}.jsonl`);
+  return statePath(stateDirectoryPath, "telemetry", `${runId}.jsonl`);
+}
+
+/** Compatibility wrapper for project-root callers. */
+export function telemetryPath(root: string, runId: string): string {
+  return telemetryPathInStateDirectory(stateDirectory(root), runId);
 }
 
 export function readTelemetry(path: string): TelemetryRecord[] {
@@ -743,8 +749,11 @@ export interface TelemetryWriter {
   append(input: TelemetryInput): TelemetryRecord;
 }
 
-export function createTelemetryWriter(root: string, runId: string): TelemetryWriter {
-  const path = telemetryPath(root, runId);
+export function createTelemetryWriterInStateDirectory(
+  stateDirectoryPath: string,
+  runId: string,
+): TelemetryWriter {
+  const path = telemetryPathInStateDirectory(stateDirectoryPath, runId);
   mkdirSync(resolve(path, ".."), { recursive: true, mode: 0o700 });
   chmodSync(resolve(path, ".."), 0o700);
   if (!existsSync(path)) {
@@ -940,6 +949,11 @@ export function createTelemetryWriter(root: string, runId: string): TelemetryWri
       return record;
     },
   };
+}
+
+/** Compatibility wrapper for project-root callers. */
+export function createTelemetryWriter(root: string, runId: string): TelemetryWriter {
+  return createTelemetryWriterInStateDirectory(stateDirectory(root), runId);
 }
 
 export function sanitizeTelemetryText(value: string, secrets: string[]): string {

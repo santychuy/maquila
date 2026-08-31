@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import { readTelemetry, telemetryPath, type TelemetryActor } from "./telemetry.js";
+import { readTelemetry, telemetryPathInStateDirectory, type TelemetryActor } from "./telemetry.js";
+import { stateDirectory } from "./state-directory.js";
 import type { WorkflowStepId } from "./workflow-step.js";
 
 export type RunStatusName =
@@ -65,10 +66,16 @@ function base(runId: string, status: RunStatusName): RunStatusSummary {
   };
 }
 
-export function foldRunStatus(options: FoldRunStatusOptions): RunStatusSummary {
+export interface FoldRunStatusInStateDirectoryOptions extends Omit<FoldRunStatusOptions, "root"> {
+  stateDirectory: string;
+}
+
+export function foldRunStatusInStateDirectory(
+  options: FoldRunStatusInStateDirectoryOptions,
+): RunStatusSummary {
   let path: string;
   try {
-    path = telemetryPath(options.root, options.runId);
+    path = telemetryPathInStateDirectory(options.stateDirectory, options.runId);
   } catch {
     return {
       ...base(options.runId, "invalid"),
@@ -177,4 +184,10 @@ export function foldRunStatus(options: FoldRunStatusOptions): RunStatusSummary {
     }
   }
   return summary;
+}
+
+/** Compatibility wrapper for project-root callers. */
+export function foldRunStatus(options: FoldRunStatusOptions): RunStatusSummary {
+  const { root, ...rest } = options;
+  return foldRunStatusInStateDirectory({ ...rest, stateDirectory: stateDirectory(root) });
 }
