@@ -56,6 +56,8 @@ interface SpawnedChild {
 
 export interface StartDetachedRunOptions {
   maquilaRoot: string;
+  /** Host home for state; omitted legacy callers use maquilaRoot. */
+  root?: string;
   target: string;
   issue: string;
   owner?: string;
@@ -216,7 +218,7 @@ export async function startDetachedRun(options: StartDetachedRunOptions): Promis
     options.timeoutSeconds > 1800
   )
     throw new Error("--timeout-seconds must be an integer from 1 to 1800");
-  const root = resolve(options.maquilaRoot);
+  const root = resolve(options.root ?? options.maquilaRoot);
   const target = (options.resolveTarget ?? resolveTargetRepository)({
     target: options.target,
     ...(options.owner ? { owner: options.owner } : {}),
@@ -224,7 +226,10 @@ export async function startDetachedRun(options: StartDetachedRunOptions): Promis
     ...(options.baseRef ? { baseRef: options.baseRef } : {}),
     ...(options.tag ? { tag: options.tag } : {}),
   });
-  const env = await controllerEnvironment(options.env ?? process.env, options.identity);
+  const env = await controllerEnvironment(
+    { ...(options.env ?? process.env), MAQUILA_HOME: root },
+    options.identity,
+  );
   const runId = options.runId ?? randomUUID();
   const instanceId = options.instanceId ?? randomUUID();
   if (!UUID.test(runId) || !UUID.test(instanceId)) throw new Error("invalid launch identity");

@@ -1,13 +1,22 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, mkdirSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  mkdirSync,
+} from "node:fs";
 import { request } from "node:http";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { test } from "node:test";
 import { archivedSystemPrompt, createObserverServer } from "../src/observer/server.js";
+import { archiveMaquila, runtimeArchiveSha256 } from "../src/runtime-archive.js";
 import {
   ensureObserver,
   observerDescriptorPath,
@@ -203,6 +212,26 @@ test("archived prompt retrieval binds run, actor, Maquila SHA, and telemetry fin
       /prompt verification failed/,
     );
     const runtimePath = resolve(root, ".maquila", "controllers", runId, "runtime.json");
+    const archive = archiveMaquila(process.cwd());
+    try {
+      const retained = resolve(root, ".maquila", "controllers", runId, "runtime.tar");
+      copyFileSync(archive.path, retained);
+      writeFileSync(
+        runtimePath,
+        JSON.stringify({ maquilaSha: archive.sha, sha256: runtimeArchiveSha256(archive) }),
+      );
+      assert.equal(
+        archivedSystemPrompt(root, runId, "planner", "planning:1"),
+        planner.systemPrompt,
+      );
+      writeFileSync(retained, "tampered retained archive");
+      assert.throws(
+        () => archivedSystemPrompt(root, runId, "planner", "planning:1"),
+        /runtime archive hash mismatch/,
+      );
+    } finally {
+      archive.cleanup();
+    }
     for (const runtime of [
       { maquilaSha: sha, extra: true },
       { maquilaSha: sha },
@@ -306,6 +335,7 @@ test("observer ensure reuses healthy owner and starts after stale descriptor", a
         });
         writeDescriptor(root, value);
         assert.equal(options.detached, true);
+        assert.equal(options.env?.MAQUILA_HOME, root);
         return {
           pid: 4321,
           exitCode: null,

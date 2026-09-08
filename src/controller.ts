@@ -2,7 +2,10 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
+  constants,
+  copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -14,7 +17,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, resolve } from "node:path";
-import { parseAgentDefinition } from "./agents/index.js";
+import { runtimeArchive, readArchivedRole } from "./runtime-archive.js";
+export { runtimeArchive as archiveMaquila } from "./runtime-archive.js";
 import { harvest } from "./runs/evidence.js";
 import { createIntake, createProviderIntake, providerIntakeFromLegacy } from "./intake.js";
 import {
@@ -297,29 +301,6 @@ function assertRetryEvidenceArchiveSafe(
   }
 }
 export { harvest, type HarvestExpectations } from "./runs/evidence.js";
-
-export function archiveMaquila(maquilaRoot: string): {
-  path: string;
-  sha: string;
-  cleanup(): void;
-} {
-  const directory = mkdtempSync(resolve(tmpdir(), "maquila-runtime-"));
-  const path = resolve(directory, "runtime.tar");
-  try {
-    const sha = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: maquilaRoot,
-      encoding: "utf8",
-    }).trim();
-    execFileSync("git", ["archive", "--format=tar", `--output=${path}`, "HEAD"], {
-      cwd: maquilaRoot,
-    });
-    chmodSync(path, 0o600);
-    return { path, sha, cleanup: () => rmSync(directory, { recursive: true, force: true }) };
-  } catch (error) {
-    rmSync(directory, { recursive: true, force: true });
-    throw error;
-  }
-}
 
 class PlannerDecisionRequired extends Error {
   constructor(readonly request: ControllerDecisionRequest) {
@@ -1022,7 +1003,7 @@ export async function runController(options: ControllerOptions): Promise<Control
   }
   let evidenceDir = provisional;
   let state: ControllerState | undefined;
-  let archive: ReturnType<typeof archiveMaquila> | undefined;
+  let archive: ReturnType<typeof runtimeArchive> | undefined;
   let intakeSnapshot: ProviderIntake | undefined;
   let decisionRequest: ControllerDecisionRequest | undefined;
   let reviewedPatchSha256: string | undefined;
@@ -1467,7 +1448,7 @@ export async function runController(options: ControllerOptions): Promise<Control
         throw new Error("remote checkout SHA mismatch");
     }
     publicFailureMessage = "runtime archive creation failed";
-    archive = archiveMaquila(maquilaRoot);
+    archive = runtimeArchive(maquilaRoot);
     const runtimePath = resolve(runDir, "runtime.json");
     if (resuming) {
       const runtime: unknown = JSON.parse(readFileSync(runtimePath, "utf8"));
@@ -1480,14 +1461,17 @@ export async function runController(options: ControllerOptions): Promise<Control
     } else {
       writeJson(runtimePath, { maquilaSha: archive.sha, sha256: hash(archive.path) });
     }
-    const archivedRole = (role: "planner" | "worker" | "documenter" | "reviewer") => {
-      const filePath = `src/agents/${role}.md`;
-      const source = execFileSync("git", ["show", `${archive!.sha}:${filePath}`], {
-        cwd: maquilaRoot,
-        encoding: "utf8",
-      });
-      return parseAgentDefinition(source, filePath);
-    };
+    // Retain the exact source archive so prompt verification survives package upgrades.
+    const retainedRuntime = resolve(runDir, "runtime.tar");
+    if (existsSync(retainedRuntime)) {
+      if (!lstatSync(retainedRuntime).isFile() || hash(retainedRuntime) !== hash(archive.path))
+        throw new Error("retained controller runtime changed");
+    } else {
+      copyFileSync(archive.path, retainedRuntime, constants.COPYFILE_EXCL);
+      chmodSync(retainedRuntime, 0o600);
+    }
+    const archivedRole = (role: "planner" | "worker" | "documenter" | "reviewer") =>
+      readArchivedRole(archive!, role);
     const archivedRoles = {
       planner: archivedRole("planner"),
       worker: archivedRole("worker"),

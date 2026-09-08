@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { test } from "node:test";
@@ -439,5 +439,46 @@ test("held controller lock rejects detached launch without fake telemetry", asyn
   } finally {
     lock.release();
     rmSync(maquilaRoot, { recursive: true, force: true });
+  }
+});
+
+test("installed launch pins host home and never reserves state in package or target", async () => {
+  const codeRoot = root(),
+    hostRoot = root(),
+    targetRoot = root();
+  try {
+    const result = await startDetachedRun({
+      maquilaRoot: codeRoot,
+      root: hostRoot,
+      target: targetRoot,
+      issue: "RIFF-52",
+      timeoutSeconds: 60,
+      runId,
+      instanceId,
+      env: { ...environment(), MAQUILA_HOME: "/wrong/inherited/home" },
+      cliPath: "/installed/dist/src/cli/index.js",
+      resolveTarget: () => ({ ...target, path: targetRoot }),
+      spawnChild: (_command, _args, options) => {
+        assert.equal(options.cwd, hostRoot);
+        assert.equal(options.env?.MAQUILA_HOME, hostRoot);
+        writeLaunchHandshake(hostRoot, runId, instanceId, 4321);
+        return {
+          pid: 4321,
+          exitCode: null,
+          signalCode: null,
+          kill: () => true,
+          unref: () => {},
+          once: () => undefined,
+        };
+      },
+      sleep: async () => {},
+    });
+    assert.equal(result.accepted, true);
+    assert.equal(existsSync(telemetryPath(hostRoot, runId)), true);
+    assert.equal(existsSync(resolve(codeRoot, ".maquila")), false);
+    assert.equal(existsSync(resolve(targetRoot, ".maquila")), false);
+  } finally {
+    for (const directory of [codeRoot, hostRoot, targetRoot])
+      rmSync(directory, { recursive: true, force: true });
   }
 });

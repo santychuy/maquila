@@ -6,7 +6,11 @@ Maquila turns one accepted plan into a fixed, reviewable work order. Workflow be
 
 The four provider seams supply external facts and bounded actions: work-item intake/decisions, Git/PR source control and publication, VM execution, and best-effort telemetry. Providers do not select recipes, accept work, or bypass controller gates. Canonical intake can normalize non-Linear work items; built-in integrations retain native Linear/GitHub evidence and historical compatibility. Phase 1 does not promise arbitrary SCM/workflow support.
 
-The private SDK calls the same core through a blocking `run(request)`. The host owns queues and background lifetime. Detached execution, status, resume, and batch are CLI compatibility surfaces only. There is no public custom recipe API: `feature-pr` remains trusted TypeScript and code-controlled.
+The SDK calls the same core through a blocking `run(request)`. The host owns queues and background lifetime. Detached execution, status, resume, and batch are CLI compatibility surfaces only. There is no public custom recipe API: `feature-pr` remains trusted TypeScript and code-controlled.
+
+## Read-only issue preflight
+
+`doctor --issue ID --require-label LABEL` can check strict assigned-Todo Linear intake and an exact label before an agent submits a run. The skill stops on failed preflight and uses the same explicit target for start. This check does not reserve work or enforce a controller trigger policy; ordinary manual starts retain their current intake contract. Automatic discovery, durable queue ownership, and accept-time `maquila-ready` enforcement for the planned Bookbounce pilot are not implemented. Recipe, manifest, verification, review, and publication gates are unchanged.
 
 ## Mental model
 

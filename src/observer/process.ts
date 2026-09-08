@@ -227,6 +227,7 @@ export async function ensureObserver(options: EnsureObserverOptions): Promise<Ob
     stdio: ["ignore", stdout, stderr],
     env: {
       ...externalCommandEnvironment(options.env ?? process.env),
+      MAQUILA_HOME: root,
       MAQUILA_OBSERVER_INSTANCE_ID: instanceId,
     },
   });

@@ -12,11 +12,11 @@ This repository is building a small, local maquila one proven slice at a time. I
 
 Agent output is always a proposal or report. Deterministic controller code owns acceptance, workflow state, budgets, cancellation, VM lifecycle, and publication.
 
-### Private SDK boundary
+### SDK boundary
 
-The package is private and repo-local. `src/index.ts` exports `createMaquila`, public request/result types, exactly four provider seams (`WorkItemProvider`, `SourceControlProvider`, `ExecutionProvider`, `EventSink`), their supporting contracts, and built-in Linear/GitHub/exe.dev constructors. `createMaquila(config).run(request)` is blocking. Do not expose internal `runMaquila` controls.
+The package is prepared for public distribution as `@santychuy/maquila` under Apache-2.0. Registry publication must be verified separately. `src/index.ts` exports `createMaquila`, public request/result types, exactly four provider seams (`WorkItemProvider`, `SourceControlProvider`, `ExecutionProvider`, `EventSink`), their supporting contracts, and built-in Linear/GitHub/exe.dev constructors. `createMaquila(config).run(request)` is blocking. Do not expose internal `runMaquila` controls.
 
-The SDK uses the exact absolute `stateDirectory` supplied by the host and never appends `.maquila`; the CLI supplies `<Maquila checkout>/.maquila` for compatibility. Credentials belong only to instance configuration. They must not enter requests, results, state, or telemetry. EventSink receives only sanitized canonical telemetry after durable append and is best effort. Provider intake is canonical and can support non-Linear work items, but do not claim arbitrary SCM/workflow support or a GitHub Issues adapter.
+The SDK uses the exact absolute `stateDirectory` supplied by the host and never appends `.maquila`. The CLI uses `<Maquila checkout>/.maquila` for source compatibility, or `<host home>/.maquila` for installed packages. `MAQUILA_HOME` overrides the host home; otherwise installed packages use `$XDG_STATE_HOME/maquila` or `~/.local/state/maquila`. Detached controllers, status, batch, and observer must use the same home, never the target repository or package installation directory. Credentials belong only to instance configuration. They must not enter requests, results, state, or telemetry. EventSink receives only sanitized canonical telemetry after durable append and is best effort. Provider intake is canonical and can support non-Linear work items, but do not claim arbitrary SCM/workflow support or a GitHub Issues adapter.
 
 The private code-controlled `feature-pr` recipe, controller authority, deterministic verification/review/publication gates, VM cleanup, artifact/state versions, and human merge remain mandatory. No public/custom recipe API exists.
 
@@ -41,8 +41,8 @@ Implemented now:
 - Accepted detached `run start` and read-only `run status`.
 - Detached serial `run batch` for 2–10 unique Linear issues, with preallocated independent run IDs, per-item controller authority, continue-after-result behavior, and read-only batch status.
 - Managed loopback observer server/UI with replay/cursor polling, human `maquila dashboard` startup alias, and maquila-owned `.pi/skills/maquila` command routing.
-- Global `maquila` executable through a Bun-compiled binary and `bun link`, with cwd target inference, `--target` override, human output, and explicit `--json` mode.
-- `maquila setup` and `maquila doctor` for strict XDG config, optional Linear and OpenRouter `op://` references, optional user-scope Pi skill, credential checks, and remediation.
+- Global `maquila` executable through the package JavaScript entrypoint, with cwd target inference, `--target` override, human output, and explicit `--json` mode. Bun-compiled binaries remain development/VM artifacts, not the public npm payload. Packaged runtime archives preserve source commit and SHA-256 bindings; retained archives allow observer prompt checks without the original checkout.
+- `maquila setup` and `maquila doctor` for strict XDG config, optional Linear and OpenRouter `op://` references, optional user-scope Pi skill, credential checks, and remediation. Opt-in `doctor --issue ID --require-label LABEL` validates assigned Todo intake and an exact label without starting work. Managed skill copies are repeatable when byte-identical; legacy managed links remain supported. This preflight is not a reservation or automatic trigger gate.
 - OpenRouter execution for all four roles. Each `src/agents/*.md` definition must declare an authoritative pinned `openrouter/<provider>/<model>` identifier; current defaults are `openrouter/google/gemini-3.7-flash` for worker/documenter/reviewer and `openrouter/z-ai/glm-5.3` for planner. No complete model catalog is bundled; doctor and remote bootstrap validate against OpenRouter's live catalog. Agent requests cap maximum output at 16,384 tokens.
 - Controller-side credential precedence for GitHub (`GITHUB_TOKEN`, `GH_TOKEN`, `gh auth token`) and Linear (`LINEAR_API_TOKEN`, then `op read`); optional exe.dev identity with OpenSSH config/agent support and no agent forwarding.
 
@@ -51,7 +51,7 @@ Not implemented yet:
 - Fix pass and interrupted model-request resume. Current transient recovery restarts the complete post-plan lifecycle in a fresh VM; it does not resume the interrupted model request or retry timeouts and deterministic failures.
 - General planning outcomes delivered only to controller-owned external surfaces; the implemented Linear handoff covers unresolved engineer decisions only, and successful publication still requires a non-empty repository diff.
 - Guaranteed hard termination when exe.dev cleanup itself is unavailable.
-- Runtime state is still stored under the Maquila checkout. Linear OAuth, native keychain storage, and credential profiles are not implemented.
+- Registry publication and cross-platform release acceptance remain separate gates. Source-checkout controller state retains its old path; installed controller state uses a stable host home. Linear OAuth, native keychain storage, and credential profiles are not implemented.
 
 See `ARCHITECTURE.md` for design boundaries, `docs/foundation-checkpoint.md` for verified current state, and `docs/workflows.md` before changing workflow behavior.
 

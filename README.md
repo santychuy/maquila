@@ -1,321 +1,123 @@
 # Maquila
 
-Maquila takes a work item, works on it inside a fresh exe.dev VM, verifies the change, runs an independent review, and opens a ready-for-review GitHub pull request. The built-in CLI remains Linear/GitHub oriented. It never merges. A human owns that decision.
+Maquila takes an assigned Linear issue, works on it in a fresh exe.dev VM, verifies the change, runs an independent review, and opens a GitHub pull request. **It never merges. A human makes that decision.**
 
-> The package is private and repo-local. Public distribution and licensing are later work.
+The package is **`@santychuy/maquila`**. The command is **`maquila`**. License: [Apache 2.0](LICENSE).
 
-## Private SDK (Phase 1)
+> Release preparation is in progress. The package has a checkout-independent install path, but the first npm publication is not yet confirmed. Do not install the unrelated unscoped `maquila` package.
 
-The package root also exports a blocking programmatic facade. Configure the four provider seams and run one request:
+## Install
 
-```ts
-import {
-  createExeExecutionProvider,
-  createGitHubSourceControlProvider,
-  createLinearWorkItemProvider,
-  createMaquila,
-} from "maquila";
+The installed CLI runs on **Node.js >=22.19.0**. You also need Git, OpenSSH, access to the target GitHub repository, Linear, exe.dev, and a dedicated capped OpenRouter key. GitHub CLI (`gh`) is convenient but optional when `GITHUB_TOKEN` is supplied. Bun is needed to build Maquila from source, not to run the installed JavaScript CLI.
 
-const maquila = createMaquila({
-  workItemProvider: createLinearWorkItemProvider({
-    token: process.env.LINEAR_API_TOKEN!,
-  }),
-  sourceControlProvider: createGitHubSourceControlProvider({
-    token: process.env.GITHUB_TOKEN!,
-  }),
-  executionProvider: createExeExecutionProvider(),
-  stateDirectory: "/var/lib/maquila",
-  openRouterApiKey: process.env.OPENROUTER_API_KEY!,
-});
-const result = await maquila.run({
-  workItem: { provider: "linear", id: "RIFF-52" },
-  sourceControl: { provider: "github", repository: "acme/app", baseRef: "main" },
-  execution: { provider: "exe.dev", tag: "default" },
-});
-```
-
-`run()` blocks until completed, failed, or cancelled. Requests carry strict work-item, source-control, and execution references. `stateDirectory` is the exact absolute host directory; the SDK never appends `.maquila`. Credentials are instance configuration only and never appear in requests, results, state, or telemetry. An optional EventSink receives sanitized records after durable append and cannot affect authority or results. The SDK has no start/status/resume/batch/daemon API; use the CLI for detached execution and compatibility commands. Phase 1 remains Git/PR-oriented, uses the private code-controlled `feature-pr` recipe, and does not yet offer custom recipes, arbitrary SCM/workflow support, or public npm distribution.
-
-## What you need
-
-- Bun `1.3.14`
-- Node.js `>=22.19.0` for source tests and remote target compatibility
-- An exe.dev account
-- GitHub CLI (`gh`) authenticated to the target repository
-- A Linear personal API key or 1Password secret reference
-- A dedicated, capped OpenRouter API key (or an `op://` reference)
-
-## Install once
+Before the first registry release, install a maintainer-built tarball:
 
 ```bash
-git clone git@github.com:santychuy/maquila.git
-cd maquila
-
-# Install, build the current platform binary, and expose it globally.
-bun install --frozen-lockfile
-bun run build
-bun link
-```
-
-Confirm binary exists and inspect CLI without starting a Maquila workflow:
-
-```bash
-test -x ./dist/maquila
+bun add --global /absolute/path/to/santychuy-maquila-0.1.0.tgz
 maquila --help
 ```
 
-`bun run build:binary` rebuilds only the standalone executable for the current OS and CPU. `bun link` keeps the global command linked to this checkout because Maquila still needs its agent definitions, Pi skill, and source archive at runtime.
-
-## Guided setup
-
-Run setup from repository Maquila will change, or pass its path explicitly:
+After the package is published:
 
 ```bash
-cd /path/to/your-project
-maquila setup
-
-# Equivalent from another directory:
-maquila setup --target /path/to/your-project
+bun add --global @santychuy/maquila
 ```
 
-Setup detects existing credentials, prints direct official links for anything missing, optionally accepts only 1Password `op://` references, and runs read-only readiness checks. It never accepts raw keys, opens browsers, changes SSH state, or creates a VM. Exit code is `0` when required checks pass and `1` when setup remains blocked.
+The SDK can be added to a host project with `bun add @santychuy/maquila` after publication, or with the tarball path before publication. The public artifact ships JavaScript, declarations, agent/skill assets, and a source runtime archive. It does not ship a platform-specific executable. The standalone binary remains a source-development convenience.
 
-After setup passes:
+## Set up one project
+
+Run these from your terminal or have an operating agent use the JSON forms:
 
 ```bash
-maquila run start --issue RIFF-52
+maquila setup --target /absolute/path/to/project --install-skill
+maquila doctor --target /absolute/path/to/project --json
 ```
 
-## Credential details
+Setup detects credentials and explains missing access. It stores only optional 1Password `op://` references, never raw keys. It does not create a VM or start work. See [setup and credentials](docs/setup.md) for vendor access, readiness limits, state paths, and upgrades.
 
-Use these options when guided setup reports missing access.
+## Run one issue
 
-### GitHub
-
-Use browser login:
+The Linear issue must be assigned and in `Todo`. For the planned Bookbounce pilot, also require the exact `maquila-ready` label:
 
 ```bash
-gh auth login --web --hostname github.com
+maquila doctor --target /absolute/path/to/bookbounce \
+  --issue "<ISSUE-ID>" --require-label maquila-ready --json
 ```
 
-Or create a fine-grained token at https://github.com/settings/personal-access-tokens/new and set `GITHUB_TOKEN`. For CI, `GH_TOKEN` also works.
-
-### OpenRouter
-
-Remote planner, worker, documenter, and reviewer sessions use the model pinned in each agent definition. Planner uses `openrouter/z-ai/glm-5.3`; worker, documenter, and reviewer use `openrouter/google/gemini-3.7-flash`. Agent definitions are authoritative, not a run-time `--model` override. The runtime does not bundle an OpenRouter model catalog; `maquila doctor` and remote bootstrap validate pinned identifiers against OpenRouter's live catalog. Agent requests cap maximum output at 16,384 tokens so provider credit checks remain bounded.
-
-Create keys at https://openrouter.ai/settings/keys. Export a key for local commands:
+**Stop if preflight fails.** When it passes and you intend to spend VM/model credits and create a PR:
 
 ```bash
-export OPENROUTER_API_KEY=...
-```
-
-Or store only a 1Password reference in Maquila config:
-
-```bash
-maquila setup --openrouter-token-reference op://Vault/OpenRouter/api-key
-```
-
-Use a dedicated key with a spend/request cap. During `maquila run`, controller writes this key to a mode-`0600` Pi provider file in the VM, best-effort removes that file before VM destruction, then destroys VM. If cleanup fails, revoke dedicated key. This is deliberate transient exception to host-only credential handling; VM is not a security sandbox.
-
-### Linear
-
-Create keys at https://linear.app/settings/api. Choose one option.
-
-### Shell or CI
-
-```bash
-export LINEAR_API_TOKEN=...
-```
-
-### 1Password
-
-```bash
-maquila setup --linear-token-reference op://Vault/Linear/token
-```
-
-Maquila stores only the `op://` reference, never the Linear key. Config lives at `$XDG_CONFIG_HOME/maquila/config.json` or `~/.config/maquila/config.json` with mode `0600`.
-
-### exe.dev
-
-Maquila uses SSH. If this works, you are ready:
-
-```bash
-ssh exe.dev whoami
-```
-
-Otherwise, create a dedicated key:
-
-```bash
-ssh-keygen \
-  -t ed25519 \
-  -C "maquila" \
-  -f ~/.ssh/id_ed25519_exe
-```
-
-Add it to `~/.ssh/config`:
-
-```sshconfig
-Host exe.dev *.exe.xyz
-  IdentitiesOnly yes
-  IdentityFile ~/.ssh/id_ed25519_exe
-```
-
-Then connect and follow exe.dev registration:
-
-```bash
-ssh exe.dev
-```
-
-On first connection, verify the official exe.dev fingerprint before accepting it:
-
-```text
-SHA256:JJOP/lwiBGOMilfONPWZCXUrfK154cnJFXcqlsi6lPo
-```
-
-If a different fingerprint appears, stop.
-
-Existing exe.dev users can add the new public key from an authenticated session:
-
-```bash
-cat ~/.ssh/id_ed25519_exe.pub | ssh exe.dev ssh-key add
-```
-
-If the key has a passphrase, load it into your SSH agent:
-
-```bash
-ssh-add ~/.ssh/id_ed25519_exe
-```
-
-Alternative: skip SSH config and provide an absolute key path:
-
-```bash
-export MAQUILA_EXE_IDENTITY="$HOME/.ssh/id_ed25519_exe"
-```
-
-Maquila keeps the SSH key and agent on your host. It never copies them into the VM and explicitly disables agent forwarding.
-
-See exe.dev's official SSH key setup: https://exe.dev/docs/cli-ssh-key
-
-## Repeat readiness checks
-
-Run `maquila doctor --target /path/to/your-project` later to repeat setup's read-only checks. It checks GitHub target/base access, credential resolution, anonymous model catalog, and exe.dev VM listing; it does not create a VM. Optional Pi skill install and 1Password CLI setup: https://developer.1password.com/docs/cli/get-started/.
-
-## Start your first run
-
-From the target repository:
-
-```bash
-# Start or reuse the local read-only web dashboard.
 maquila dashboard
-
-# Start work for this Linear issue.
-maquila run start --issue RIFF-52
+maquila run start --target /absolute/path/to/bookbounce --issue "<ISSUE-ID>" --json
+maquila run status --run-id "<RUN-ID>" --json
 ```
 
-Expected output:
+Start returns an accepted run ID, not a completed result. The read-only dashboard shows progress, evidence, cleanup, and the PR URL. You can close the initiating terminal after detached startup, but the local host must stay running.
+
+If planning needs a decision, Maquila pauses and posts a numbered Linear thread for the issue's pinned assignee. That assignee replies with the `Decision:` template. The controller can resume the same planner session. Waits expire after 24 hours; there is no reboot-time service that automatically restarts polling.
+
+## Use through an agent
+
+The installed Pi skill routes through the same public commands:
 
 ```text
-Run: <run-id>
-Status: running
-Observer: http://127.0.0.1:4600/runs/<run-id>
+/skill:maquila Run <ISSUE-ID> against /absolute/path/to/bookbounce
 ```
 
-Open that URL to watch progress.
+Other agents can use `setup --json`, `doctor --json`, `run start --json`, and `run status --json`. Keep credentials in the controller's environment, not in model prompts. The operating agent starts and observes work; it cannot replace deterministic acceptance gates.
 
-Maquila requires the Linear issue to be `Todo` and assigned. It will:
+**Automatic intake is not enabled.** The planned first pilot is local, limited to `santychuy/bookbounce`, with only the exact `maquila-ready` label triggering selection. A durable queue, duplicate prevention across polling/restarts, and accept-time trigger enforcement are still required. Manual `run start` does not enforce this label; preflight alone is not an authorization lock. Always-on hosting comes later.
 
-1. Read the Linear issue and assignee.
-2. Create a fresh exe.dev VM.
-3. Plan and implement the change.
-4. Run deterministic verification.
-5. Run an independent review.
-6. Destroy the VM.
-7. Open a ready-for-review GitHub pull request.
+## Use the SDK
 
-If planning needs a human decision, Maquila pauses the same run, retains its VM, checkpoints the completed planner session on the controller, removes the VM-local OpenRouter configuration, and comments on the issue mentioning the request-time assignee. Reply in that thread with the numbered `Decision:` template. The detached controller polls every 30 seconds without holding the controller lock, accepts only a pinned-assignee reply for that request, rechecks the Linear and GitHub snapshots, restores the transient model configuration, and resumes the same planner session and VM. Each wait expires after 24 hours, and one run may request at most three decision rounds. Keep the detached controller process running while waiting; hosted webhooks and reboot-time polling recovery are not implemented.
+```ts
+import {
+  createMaquila,
+  createLinearWorkItemProvider,
+  createGitHubSourceControlProvider,
+  createExeExecutionProvider,
+} from "@santychuy/maquila";
 
-The dashboard is read-only. It shows progress, verification, review, cleanup, failures, and pull-request status. It cannot start, cancel, approve, or merge work.
+const maquila = createMaquila({
+  workItemProvider: createLinearWorkItemProvider({ token: process.env.LINEAR_API_TOKEN! }),
+  sourceControlProvider: createGitHubSourceControlProvider({ token: process.env.GITHUB_TOKEN! }),
+  executionProvider: createExeExecutionProvider(),
+  stateDirectory: "/absolute/path/to/maquila-state",
+  openRouterApiKey: process.env.OPENROUTER_API_KEY!,
+});
 
-## Daily use
+const result = await maquila.run({
+  workItem: { provider: "linear", id: "<ISSUE-ID>" },
+  sourceControl: { provider: "github", repository: "owner/repository", baseRef: "main" },
+  execution: { provider: "exe.dev", tag: "repository-tag" },
+});
+```
+
+`run()` blocks until completed, failed, or cancelled. The host owns queues and process lifetime. Credentials belong to instance configuration only. `stateDirectory` is used exactly as supplied; the SDK never appends `.maquila`.
+
+There are four provider seams: `WorkItemProvider`, `SourceControlProvider`, `ExecutionProvider`, and optional best-effort `EventSink`. The SDK does not expose detached start/status/resume/batch methods or controller controls. It remains Git/PR-oriented with one code-controlled `feature-pr` recipe—not a general workflow engine or GitHub Issues adapter.
+
+## Safety and current limits
+
+- Controller code owns intake, budgets, verification, review gates, cleanup, and PR publication.
+- Linear and GitHub write credentials stay outside the execution VM. The dedicated capped OpenRouter key is a deliberate transient exception. Revoke it if VM cleanup fails.
+- The VM is **not a security sandbox**. Use trusted, non-sensitive repositories.
+- Failed verification or review does not publish a PR. Fix passes, general interrupted-request resume, automatic merge, and deployment are not implemented.
+- Local deterministic and packed-install tests are not proof of a real Linear-to-PR run. See the [verified checkpoint](docs/foundation-checkpoint.md).
+
+## Development and release checks
+
+Source development requires Bun **1.3.14** and Node.js **>=22.19.0**:
 
 ```bash
-cd /path/to/your-project
-maquila dashboard
-maquila run start --issue RIFF-52
+bun install --frozen-lockfile
+bun run check
+bun run check:package
 ```
 
-Run against another repository without changing directory:
+`check:package` builds a committed temporary source snapshot, installs its tarball in a fresh consumer, checks CLI/SDK/setup/state, and rebuilds the shipped runtime without Git metadata. It uses package-registry downloads but no Linear calls, VM creation, model requests, or PR publication.
 
-```bash
-maquila run start \
-  --target /path/to/another-project \
-  --issue RIFF-52
-```
+See [releasing](docs/releasing.md) for clean-source packaging, public-exposure checks, supported-platform evidence, and registry publication. The npm artifact excludes the standalone binary, source maps, compiled tests, dependencies, and local runtime state. Browser-bundle licenses are in [third-party notices](THIRD_PARTY_NOTICES.md); separately installed dependencies retain their own licenses.
 
-Check a run without the dashboard:
-
-```bash
-maquila run status --run-id <run-id>
-```
-
-## Use through Pi
-
-After `maquila setup --install-skill`, open Pi from the target repository and run:
-
-```text
-/skill:maquila Run RIFF-52 in this repository
-```
-
-The skill calls the same deterministic Maquila CLI. It does not have a separate workflow or credential store.
-
-## Automation
-
-Human commands use short readable output. Scripts and the Pi skill use JSON:
-
-```bash
-maquila observer ensure --json
-maquila run start --issue RIFF-52 --json
-maquila run status --run-id <run-id> --json
-```
-
-`maquila observer ensure --json` is the machine-compatible form of `maquila dashboard`: start the local dashboard if absent, otherwise reuse the healthy process.
-
-## Troubleshooting
-
-Start here:
-
-```bash
-maquila doctor
-```
-
-Useful checks:
-
-```bash
-gh auth status
-ssh exe.dev whoami
-maquila observer status --json
-```
-
-Stop the dashboard process:
-
-```bash
-maquila observer stop --json
-```
-
-## Security and evidence
-
-Linear and GitHub credentials stay in the host controller. OpenRouter uses a dedicated capped key as deliberate transient exception: controller passes it into VM-local Pi configuration for agent calls, best-effort removes it before VM destruction, then destroys VM. If cleanup fails, revoke dedicated key. VM is not a security sandbox. Runtime evidence remains under the Maquila checkout:
-
-- `.maquila/telemetry/<run-id>.jsonl` — safe live event ledger
-- `.maquila/controllers/<run-id>/` — controller state, patch, and harvested evidence
-- `.maquila/runs/<run-id>/` — role receipts and transcripts
-- `.maquila/observer.json` — private dashboard ownership descriptor
-
-Generated `.maquila/` content is ignored by Git. The dashboard binds only to `127.0.0.1` and accepts read requests only. It exposes a prompt body only when requested through the loopback observer, after the pinned Maquila commit and telemetry SHA-256 fingerprint match. Transcripts, tool arguments/results, credentials, and repository content remain excluded.
-
-## Current limits
-
-Fix passes, in-flight resume, automatic merge, deployment, credential profiles, Linear OAuth/native keychain storage, and guaranteed cleanup while exe.dev deletion is unavailable are not implemented.
-
-For implementation details, see [docs/observer.md](docs/observer.md), [ARCHITECTURE.md](ARCHITECTURE.md), [docs/envelopes.md](docs/envelopes.md), and [docs/foundation-checkpoint.md](docs/foundation-checkpoint.md).
+More detail: [setup](docs/setup.md) · [architecture](ARCHITECTURE.md) · [workflows](docs/workflows.md) · [observer](docs/observer.md).

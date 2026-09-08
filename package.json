@@ -1,10 +1,31 @@
 {
-  "name": "maquila",
+  "name": "@santychuy/maquila",
   "version": "0.1.0",
-  "private": true,
-  "bin": {
-    "maquila": "./dist/maquila"
+  "description": "A local, guarded Linear-to-pull-request software factory.",
+  "homepage": "https://github.com/santychuy/maquila#readme",
+  "bugs": {
+    "url": "https://github.com/santychuy/maquila/issues"
   },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/santychuy/maquila.git"
+  },
+  "bin": {
+    "maquila": "./dist/src/cli/index.js"
+  },
+  "files": [
+    "dist/src/**/*.js",
+    "dist/src/**/*.d.ts",
+    "dist/runtime/",
+    "src/agents/*.md",
+    ".pi/skills/maquila/SKILL.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "README.md",
+    "ARCHITECTURE.md",
+    "docs/"
+  ],
   "type": "module",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
@@ -14,9 +35,16 @@
       "import": "./dist/src/index.js"
     }
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "bun run build:observer && bun run build:js && bun run build:binary",
     "build:js": "tsc",
+    "build:runtime": "bun scripts/build-runtime.ts",
+    "build:package": "bun run build:observer && bun run build:js && bun run build:runtime",
+    "prepack": "bun run build:package",
+    "check:package": "bun scripts/check-package.ts",
     "build:binary": "bun build ./src/cli/index.ts --compile --outfile ./dist/maquila",
     "lint": "oxlint --type-aware --deny-warnings .",
     "lint:fix": "oxlint --type-aware --fix .",
@@ -46,7 +74,6 @@
     "typescript": "5.9.3"
   },
   "engines": {
-    "bun": ">=1.3.14",
     "node": ">=22.19.0"
   },
   "packageManager": "bun@1.3.14",

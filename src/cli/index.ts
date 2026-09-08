@@ -23,7 +23,7 @@ import {
   type BatchState,
 } from "../run-batch.js";
 import { foldRunStatus, type RunStatusSummary } from "../run-status.js";
-import { maquilaRoot, isMain } from "../runtime.js";
+import { maquilaRoot, hostStateRoot, isMain } from "../runtime.js";
 import { resolveTargetRepository, validateResolvedTarget } from "../target.js";
 import {
   ensureObserver,
@@ -151,7 +151,8 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       return 0;
     }
 
-    const root = maquilaRoot(import.meta.dirname);
+    const codeRoot = maquilaRoot(import.meta.dirname);
+    const root = hostStateRoot(codeRoot);
 
     if ("command" in options) {
       if (options.command === "setup") {
@@ -162,7 +163,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
           installSkill: options.installSkill,
           target: options.target,
           identity: options.identity,
-          maquilaRoot: root,
+          maquilaRoot: codeRoot,
         });
         return result.ok ? 0 : 1;
       }
@@ -173,7 +174,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
           identity: options.identity,
           issue: options.issue,
           requireLabel: options.requireLabel,
-          maquilaRoot: root,
+          maquilaRoot: codeRoot,
         });
         return result.ok ? 0 : 1;
       }
@@ -213,7 +214,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         return 0;
       }
       if (options.command === "run-batch") {
-        const launchEnv = { ...process.env };
+        const launchEnv = { ...process.env, MAQUILA_HOME: root };
         const credentials = await resolveControllerCredentials({
           env: launchEnv,
           identityFlag: options.identity,
@@ -260,7 +261,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         return 0;
       }
       if (options.command === "run-start") {
-        const launchEnv = { ...process.env };
+        const launchEnv = { ...process.env, MAQUILA_HOME: root };
         const credentials = await resolveControllerCredentials({
           env: launchEnv,
           identityFlag: options.identity,
@@ -268,7 +269,8 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         });
         const result = await startDetachedRun({
           ...options,
-          maquilaRoot: root,
+          root,
+          maquilaRoot: codeRoot,
           cliPath: process.argv[1],
           env: {
             ...launchEnv,
@@ -300,7 +302,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
           ...persisted.request,
           runId: options.runId,
           root,
-          maquilaRoot: root,
+          maquilaRoot: codeRoot,
           linearToken: credentials.linearToken,
           githubToken: credentials.githubToken,
           openRouterKey: credentials.openRouterKey,
@@ -329,7 +331,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
           throw new Error("batch coordinator environment is incomplete");
         const result = await runBatch({
           root,
-          maquilaRoot: root,
+          maquilaRoot: codeRoot,
           batchId: options.batchId,
           linearToken,
           githubToken,
@@ -364,7 +366,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         },
         {
           runId: options.runId,
-          maquilaRoot: root,
+          maquilaRoot: codeRoot,
           onAccepted: () => writeLaunchHandshake(root, options.runId, instanceId),
         },
       );
@@ -372,7 +374,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       return result.status === "completed" ? 0 : 1;
     }
     if ("baseRef" in options) {
-      const launchEnv = { ...process.env };
+      const launchEnv = { ...process.env, MAQUILA_HOME: root };
       const credentials = await resolveControllerCredentials({
         env: launchEnv,
         identityFlag: options.identity,
@@ -387,7 +389,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
           ...(credentials.identity ? { identity: credentials.identity } : {}),
         },
         options,
-        { maquilaRoot: root },
+        { maquilaRoot: codeRoot },
       );
       process.stdout.write(`\nController evidence: ${result.runDirectory}\n`);
       return result.status === "completed" ? 0 : 1;

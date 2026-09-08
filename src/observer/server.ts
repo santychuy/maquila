@@ -9,6 +9,11 @@ import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { linuxProcessIdentity } from "../controller-lock.js";
 import { foldRunStatus, type RunStatusSummary } from "../run-status.js";
 import { maquilaRoot } from "../runtime.js";
+import {
+  verifiedRuntimeArchive,
+  readArchivedRoleSource,
+  isRuntimeRole,
+} from "../runtime-archive.js";
 import { readTelemetry, telemetryPath, type TelemetryRecord } from "../telemetry.js";
 import { OBSERVER_CSS, OBSERVER_HTML, OBSERVER_JS } from "./ui.js";
 import { OBSERVER_VERSION, record, UUID, validPort, type ObserverDescriptor } from "./shared.js";
@@ -16,7 +21,6 @@ import { OBSERVER_VERSION, record, UUID, validPort, type ObserverDescriptor } fr
 const MAX_RUNS = 100;
 const MAX_EVENTS = 500;
 const MAX_PROMPT_BYTES = 256 * 1024;
-const MODEL_ACTORS = new Set(["planner", "worker", "documenter", "reviewer"]);
 
 function securityHeaders(contentType: string): Record<string, string> {
   return {
@@ -83,7 +87,7 @@ export function archivedSystemPrompt(
   actor: string,
   phaseId: string,
 ): string {
-  if (!UUID.test(runId) || !MODEL_ACTORS.has(actor) || !phaseId || phaseId.length > 200)
+  if (!UUID.test(runId) || !isRuntimeRole(actor) || !phaseId || phaseId.length > 200)
     throw new Error("invalid prompt request");
   const runtimePath = statePath(stateDirectory(root), "controllers", runId, "runtime.json");
   const runtime: unknown = JSON.parse(readFileSync(runtimePath, "utf8"));
@@ -96,11 +100,23 @@ export function archivedSystemPrompt(
     !/^[0-9a-f]{64}$/.test(runtime.sha256)
   )
     throw new Error("invalid runtime data");
-  const source = execFileSync("git", ["show", `${runtime.maquilaSha}:src/agents/${actor}.md`], {
-    cwd: maquilaRoot(resolve(import.meta.dirname, "..")),
-    encoding: "utf8",
-    maxBuffer: MAX_PROMPT_BYTES,
-  });
+  const retained = statePath(stateDirectory(root), "controllers", runId, "runtime.tar");
+  let source: string;
+  if (existsSync(retained)) {
+    const archive = verifiedRuntimeArchive(retained, { version: 1, ...runtime });
+    try {
+      source = readArchivedRoleSource(archive, actor);
+    } finally {
+      archive.cleanup();
+    }
+  } else {
+    // Compatibility for historical runs that predate retained runtime archives.
+    source = execFileSync("git", ["show", `${runtime.maquilaSha}:src/agents/${actor}.md`], {
+      cwd: maquilaRoot(resolve(import.meta.dirname, "..")),
+      encoding: "utf8",
+      maxBuffer: MAX_PROMPT_BYTES,
+    });
+  }
   if (Buffer.byteLength(source) > MAX_PROMPT_BYTES) throw new Error("prompt too large");
   const { body } = parseFrontmatter(source);
   const prompt = body.trim();

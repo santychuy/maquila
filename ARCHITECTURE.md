@@ -4,11 +4,11 @@
 
 A validated work item triggers a local controller. The current built-in intake and publication path remains Git/PR-oriented. Controller runs bounded Pi sessions inside fresh exe.dev VMs pinned to one base SHA. Code opens a bot pull request only after deterministic checks and independent review pass. Human owns merge or rejection.
 
-## Private SDK and provider seams
+## SDK and provider seams
 
 The package facade and provider adapters sit outside controller authority. Exactly four infrastructure seams are public: `WorkItemProvider`, `SourceControlProvider`, `ExecutionProvider`, and optional best-effort `EventSink`; supporting contract types are exported for adapter authors. Providers supply facts and actions. They cannot select recipes, accept work, or change deterministic gates. Canonical provider intake supports non-Linear work items, while built-in Linear/GitHub integrations retain native evidence and historical idempotency/artifact compatibility. There is no GitHub Issues adapter claim.
 
-`createMaquila(config).run(request)` is blocking. The host owns queues and background lifetime; detached start/status/resume/batch remain CLI surfaces, not SDK methods. `stateDirectory` is an exact absolute directory and SDK persistence uses it directly. The CLI passes `<Maquila checkout>/.maquila`, preserving existing paths. Persistence is filesystem-only.
+`createMaquila(config).run(request)` is blocking. The host owns queues and background lifetime; detached start/status/resume/batch remain CLI surfaces, not SDK methods. `stateDirectory` is an exact absolute directory and SDK persistence uses it directly. Source-checkout CLI usage retains `<Maquila checkout>/.maquila`. Installed CLI usage passes `<host home>/.maquila`; `MAQUILA_HOME` overrides that home, otherwise it is `$XDG_STATE_HOME/maquila` or `~/.local/state/maquila`. Code/assets and writable host state are separate. Detached controllers and observer pin the same home. Persistence is filesystem-only.
 
 Credentials are instance configuration, never request/result/state/telemetry data. EventSink receives only the exact sanitized canonical `TelemetryRecord`, after durable append, and sink failures are ignored.
 
@@ -80,3 +80,13 @@ RIFF-39 proved pre-publication remote composition live. Publication and observer
 The private `feature-pr` recipe remains code-controlled; custom recipes and broader provider-neutral workflow support are later phases.
 
 No YAML or generic workflow DSL, user-defined workflows, plugins, inheritance, DAG, parallel writers, dynamic recipe registry or selector, report-only result, automatic merge, deployment, Temporal, dynamic swarm, or self-hosted sandbox fleet.
+
+## Package runtime distribution
+
+The public package target is `@santychuy/maquila` under Apache-2.0. It ships a Node.js CLI/SDK, declarations, role/skill assets, and a source runtime archive; native Bun executables are built for development and inside the VM, not shipped in the npm artifact.
+
+A release runtime is built from a clean committed source tree. Its version-1 package manifest binds an authentic 40-character source commit identity to the archive SHA-256. Installed execution validates the manifest, regular-file bounds, private archive snapshot, archive member safety, and embedded Git archive identity. It never archives an ancestor consumer repository. Development retains exact-checkout `git archive` behavior.
+
+Controller `runtime.json` remains unchanged. New runs retain `runtime.tar` with the same binding, so the observer can verify archived role prompts after a package upgrade without a local Git checkout. Legacy runs retain the historical Git lookup fallback. Telemetry prompt hashes remain mandatory. These are consistency checks, not signatures against a compromised host or package source.
+
+Public exposure, registry publication, platform validation, and live Linear-to-PR acceptance are separate from local build/packed-install evidence. See `docs/releasing.md`.

@@ -45,6 +45,8 @@ const SAFE_ENV_KEYS = [
   "TMPDIR",
   "TEMP",
   "TMP",
+  "MAQUILA_HOME",
+  "XDG_STATE_HOME",
 ] as const;
 
 export function externalCommandEnvironment(

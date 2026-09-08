@@ -138,6 +138,8 @@ export function controllerChildEnvironment(
     OPENROUTER_API_KEY: credentials.openRouterKey,
   };
   if (credentials.identity) child.MAQUILA_EXE_IDENTITY = credentials.identity;
+  if (env.MAQUILA_HOME !== undefined) child.MAQUILA_HOME = env.MAQUILA_HOME;
+  if (env.XDG_STATE_HOME !== undefined) child.XDG_STATE_HOME = env.XDG_STATE_HOME;
   const sock = env.SSH_AUTH_SOCK;
   if (sock !== undefined) {
     if (sock.includes("\0") || !sock.trim()) throw new Error("SSH_AUTH_SOCK is invalid");
