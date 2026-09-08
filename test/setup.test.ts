@@ -1,5 +1,14 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { test } from "node:test";
@@ -142,6 +151,80 @@ test("setup redacts an existing non-symlink skill destination", () => {
         error.message === "maquila skill destination already exists" &&
         !error.message.includes(root),
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function managedSkill(root: string): string {
+  const source = resolve(root, ".pi/skills/maquila");
+  mkdirSync(source, { recursive: true });
+  writeFileSync(resolve(source, "SKILL.md"), "managed skill bytes\n");
+  return source;
+}
+
+test("skill setup copies once and accepts only identical managed contents on repeat", () => {
+  const root = mkdtempSync(resolve(tmpdir(), "maquila-skill-repeat-"));
+  try {
+    const source = managedSkill(root);
+    const destination = resolve(root, ".pi/agent/skills/maquila");
+    assert.equal(installMaquilaSkill(root, destination), true);
+    assert.equal(lstatSync(destination).isSymbolicLink(), false);
+    assert.equal(installMaquilaSkill(root, destination), false);
+    assert.equal(
+      readFileSync(resolve(destination, "SKILL.md"), "utf8"),
+      readFileSync(resolve(source, "SKILL.md"), "utf8"),
+    );
+    assert.equal(lstatSync(resolve(destination, "SKILL.md")).mode & 0o777, 0o600);
+    writeFileSync(resolve(destination, "SKILL.md"), "user content");
+    assert.throws(() => installMaquilaSkill(root, destination), /destination differs/);
+    assert.equal(readFileSync(resolve(destination, "SKILL.md"), "utf8"), "user content");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("skill setup preserves its legacy link but rejects unrelated links without writing", () => {
+  const root = mkdtempSync(resolve(tmpdir(), "maquila-skill-links-"));
+  try {
+    const source = managedSkill(root);
+    const legacy = resolve(root, "legacy");
+    symlinkSync(source, legacy, "dir");
+    assert.equal(installMaquilaSkill(root, legacy), false);
+    assert.equal(lstatSync(legacy).isSymbolicLink(), true);
+    const other = resolve(root, "other");
+    mkdirSync(other);
+    const unrelated = resolve(root, "unrelated");
+    symlinkSync(other, unrelated, "dir");
+    assert.throws(() => installMaquilaSkill(root, unrelated), /destination already exists/);
+    assert.equal(existsSync(resolve(other, "SKILL.md")), false);
+    const dangling = resolve(root, "dangling");
+    symlinkSync(resolve(root, "absent"), dangling, "dir");
+    assert.throws(() => installMaquilaSkill(root, dangling), /destination already exists/);
+    assert.equal(existsSync(resolve(root, "absent")), false);
+    const fileLink = resolve(root, "file-link");
+    mkdirSync(fileLink);
+    symlinkSync(resolve(source, "SKILL.md"), resolve(fileLink, "SKILL.md"));
+    assert.throws(() => installMaquilaSkill(root, fileLink), /destination already exists/);
+    assert.equal(readFileSync(resolve(source, "SKILL.md"), "utf8"), "managed skill bytes\n");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("skill setup rejects unrelated directories and missing source without overwriting", () => {
+  const root = mkdtempSync(resolve(tmpdir(), "maquila-skill-unmanaged-"));
+  try {
+    const destination = resolve(root, "destination");
+    assert.throws(() => installMaquilaSkill(root, destination), /source is unavailable/);
+    assert.equal(existsSync(destination), false);
+    managedSkill(root);
+    mkdirSync(destination);
+    assert.throws(() => installMaquilaSkill(root, destination), /destination already exists/);
+    writeFileSync(resolve(destination, "notes.md"), "unrelated");
+    assert.throws(() => installMaquilaSkill(root, destination), /destination already exists/);
+    assert.equal(existsSync(resolve(destination, "SKILL.md")), false);
+    assert.equal(readFileSync(resolve(destination, "notes.md"), "utf8"), "unrelated");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

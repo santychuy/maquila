@@ -1,4 +1,11 @@
-import { existsSync, lstatSync, mkdirSync, readlinkSync, symlinkSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -37,26 +44,42 @@ export interface SetupResult {
 function skillDestination(home: string): string {
   return resolve(home, ".pi", "agent", "skills", "maquila");
 }
-function lstatExists(path: string): boolean {
+function lstatIfExists(path: string): ReturnType<typeof lstatSync> | undefined {
   try {
-    lstatSync(path);
-    return true;
-  } catch {
-    return false;
+    return lstatSync(path);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT")
+      return undefined;
+    throw new Error("maquila skill path could not be inspected", { cause: error });
   }
 }
 export function installMaquilaSkill(maquilaRoot: string, destination: string): boolean {
-  const source = resolve(maquilaRoot, ".pi", "skills", "maquila");
-  mkdirSync(resolve(destination, ".."), { recursive: true, mode: 0o700 });
-  if (existsSync(destination) || lstatExists(destination)) {
-    try {
-      if (resolve(readlinkSync(destination)) === source) return false;
-    } catch {}
+  const sourceDirectory = resolve(maquilaRoot, ".pi", "skills", "maquila");
+  const source = resolve(sourceDirectory, "SKILL.md");
+  const target = resolve(destination, "SKILL.md");
+  const existing = lstatIfExists(destination);
+  const legacyLink =
+    existing?.isSymbolicLink() === true &&
+    resolve(destination, "..", readlinkSync(destination)) === sourceDirectory;
+  if (existing && !existing.isDirectory() && !legacyLink)
     throw new Error("maquila skill destination already exists");
+  if (!lstatIfExists(source)?.isFile()) throw new Error("maquila skill source is unavailable");
+  const content = readFileSync(source);
+  // An existing link created by older setup versions is already managed. Never write through it.
+  if (legacyLink) return false;
+  if (existing) {
+    const entries = readdirSync(destination);
+    if (entries.length !== 1 || entries[0] !== "SKILL.md" || !lstatIfExists(target)?.isFile())
+      throw new Error("maquila skill destination already exists");
+    if (!content.equals(readFileSync(target))) throw new Error("maquila skill destination differs");
+    return false;
   }
-  symlinkSync(source, destination);
+  mkdirSync(resolve(destination, ".."), { recursive: true, mode: 0o700 });
+  mkdirSync(destination, { mode: 0o700 });
+  writeFileSync(target, content, { mode: 0o600, flag: "wx" });
   return true;
 }
+
 async function defaultPrompt(message: string): Promise<string> {
   const rl = createInterface({ input, output });
   const interrupted = new Promise<never>((_resolve, reject) => {
@@ -137,7 +160,11 @@ export async function runSetup(options: SetupOptions): Promise<SetupResult> {
     try {
       installMaquilaSkill(options.maquilaRoot, skillDestination(home));
     } catch (error) {
-      if (error instanceof Error && error.message === "maquila skill destination already exists")
+      if (
+        error instanceof Error &&
+        (error.message === "maquila skill destination already exists" ||
+          error.message === "maquila skill destination differs")
+      )
         throw error;
       throw new Error("maquila skill could not be installed", { cause: error });
     }
