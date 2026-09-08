@@ -1,4 +1,5 @@
 import { isAbsolute } from "node:path";
+import { validateDoctorIssueOptions } from "../../doctor.js";
 import { rejectOptions } from "../helpers.js";
 import type { SetupCommand, DoctorCommand } from "../types.js";
 
@@ -34,12 +35,23 @@ export function parseSetupCommand(values: Record<string, unknown>): SetupCommand
   };
 }
 export function parseDoctorCommand(values: Record<string, unknown>): DoctorCommand {
-  rejectOptions(values, ["json", "target", "identity"]);
+  rejectOptions(values, ["json", "target", "identity", "issue", "require-label"]);
   const parsedIdentity = identity(values.identity);
+  const issues = values.issue;
+  if (issues !== undefined && (!Array.isArray(issues) || issues.length !== 1))
+    throw new Error("doctor requires exactly one --issue");
+  const issue: unknown = Array.isArray(issues) ? issues[0] : undefined;
+  const requireLabel = values["require-label"];
+  if (issue !== undefined && typeof issue !== "string") throw new Error("--issue must be a string");
+  if (requireLabel !== undefined && typeof requireLabel !== "string")
+    throw new Error("--require-label must be a string");
+  validateDoctorIssueOptions({ issue, requireLabel });
   return {
     command: "doctor",
     target: typeof values.target === "string" ? values.target : process.cwd(),
     ...(values.json ? { json: true } : {}),
     ...(parsedIdentity ? { identity: parsedIdentity } : {}),
+    ...(issue !== undefined ? { issue } : {}),
+    ...(requireLabel !== undefined ? { requireLabel } : {}),
   };
 }

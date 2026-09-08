@@ -21,6 +21,36 @@ test("setup and doctor accept target and absolute identity", () => {
   assert.throws(() => parseCli(["doctor", "--identity", "relative"]), /absolute path/);
 });
 
+test("setup and doctor parse exact readiness label only with one issue", () => {
+  assert.deepEqual(
+    parseCli([
+      "doctor",
+      "--target",
+      "/tmp/repo",
+      "--issue",
+      "RIFF-1",
+      "--require-label",
+      "maquila-ready",
+    ]),
+    { command: "doctor", target: "/tmp/repo", issue: "RIFF-1", requireLabel: "maquila-ready" },
+  );
+  assert.throws(() => parseCli(["setup", "--issue", "RIFF-1"]), /unsupported/);
+  assert.throws(() => parseCli(["doctor", "--require-label", "maquila-ready"]), /requires --issue/);
+  assert.throws(
+    () => parseCli(["doctor", "--issue", "RIFF-1", "--issue", "RIFF-2"]),
+    /exactly one/,
+  );
+  assert.throws(() => parseCli(["doctor", "--issue", " RIFF-1"]), /blank|whitespace|invalid/);
+  assert.throws(
+    () => parseCli(["doctor", "--issue", "RIFF-1", "--require-label", " bad label "]),
+    /whitespace|invalid|label/,
+  );
+  assert.throws(
+    () => parseCli(["run", "start", "--issue", "RIFF-1", "--require-label", "maquila-ready"]),
+    /unsupported/,
+  );
+});
+
 test("planner command accepts required inputs and safe timeout", () => {
   assert.deepEqual(
     parseCli([
@@ -487,4 +517,15 @@ test("agent definitions fail closed on schema and access violations", () => {
   } finally {
     rmSync(directory, { recursive: true });
   }
+});
+
+test("doctor rejects blank, oversized, and control-containing preflight options", () => {
+  for (const value of ["", " ", "RIFF-1\n", "RIFF-1\0", "a".repeat(129)]) {
+    assert.throws(() => parseCli(["doctor", "--issue", value]), /--issue/);
+    assert.throws(
+      () => parseCli(["doctor", "--issue", "RIFF-1", "--require-label", value]),
+      /--require-label/,
+    );
+  }
+  assert.throws(() => parseCli(["setup", "--require-label", "maquila-ready"]), /unsupported/);
 });

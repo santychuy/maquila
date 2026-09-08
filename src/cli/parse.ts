@@ -35,6 +35,7 @@ export function parseCli(args: string[]): ParsedCli {
       "linear-token-reference": { type: "string" },
       "openrouter-token-reference": { type: "string" },
       "install-skill": { type: "boolean" },
+      "require-label": { type: "string" },
     },
   });
 

@@ -10,12 +10,15 @@ Route user intent through checked-in deterministic commands. Controller owns wor
 
 ## Start a run
 
-Require an assigned Linear issue identifier, such as `RIFF-52`. Infer the target from the current working directory. If the issue is missing, ask for it.
+Require an assigned Linear issue identifier, such as `RIFF-52`, and an explicit repository target. This skill does not provide automatic intake. If either is missing, ask for it. Run the read-only eligibility preflight before starting.
 
 ```bash
+maquila doctor --target "/absolute/path/to/repository" --issue "<issue-id>" --require-label "maquila-ready" --json
 maquila observer ensure --json
-maquila run start --issue "<issue-id>" --json
+maquila run start --issue "<issue-id>" --target "/absolute/path/to/repository" --json
 ```
+
+Run these commands sequentially. Continue past doctor only when it exits zero and its JSON has `ok: true`. Otherwise report the failed checks and stop; do not start a run or silently add the label. Use the same explicit target for preflight and start. The preflight does not reserve an issue or enforce a controller-side trigger policy; automatic discovery and trigger enforcement are not implemented.
 
 Read command JSON only. Return accepted run ID and observer URL:
 
@@ -42,7 +45,7 @@ Report status, phase, current safe tool name, last activity, cleanup, decision r
 Explain only actionable public errors:
 
 - unassigned Linear issue: assign a responsible engineer before starting the run
-- missing Linear, GitHub, or OpenRouter credentials: run `maquila doctor` and configure `LINEAR_API_TOKEN`, `GITHUB_TOKEN`, or `OPENROUTER_API_KEY` (or setup an `op://` reference)
+- missing Linear, GitHub, or OpenRouter credentials: run `maquila doctor --target "/absolute/path/to/repository" --json` and configure `LINEAR_API_TOKEN`, `GITHUB_TOKEN`, or `OPENROUTER_API_KEY` (or setup an `op://` reference)
 - GitHub publication `403`: use a fine-grained token for the target repository with Contents and Pull requests write permissions
 - invalid `MAQUILA_EXE_IDENTITY`: configure an absolute exe.dev identity path only when OpenSSH defaults are insufficient
 - target ambiguity: provide supported GitHub origin and resolvable remote default branch, or explicit safe overrides

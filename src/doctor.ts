@@ -11,6 +11,7 @@ import {
 } from "./credentials.js";
 import { ExeClient } from "./integrations/exe.js";
 import { fetchGitHubSnapshot } from "./integrations/github.js";
+import { fetchLinearIssue, type LinearSnapshot } from "./integrations/linear.js";
 import { resolveTargetRepository, type TargetRepository } from "./target.js";
 
 export type CheckStatus = "pass" | "fail" | "warn";
@@ -29,6 +30,8 @@ export interface DoctorOptions {
   json?: boolean;
   target?: string;
   identity?: string;
+  issue?: string;
+  requireLabel?: string;
   env?: NodeJS.ProcessEnv;
   maquilaRoot: string;
   homedir?: typeof defaultHomedir;
@@ -46,6 +49,7 @@ export interface DoctorOptions {
   ) => Promise<string>;
   resolveModelIds?: () => Promise<Set<string>>;
   loadConfig?: typeof loadMaquilaConfig;
+  fetchLinearIssue?: (options: { token: string; issue: string }) => Promise<LinearSnapshot>;
   fetchGithubSnapshot?: (options: {
     token: string;
     owner: string;
@@ -93,7 +97,34 @@ async function resolveOpenRouterModelIds(): Promise<Set<string>> {
     ),
   );
 }
+export function validateDoctorIssueOptions(
+  options: Pick<DoctorOptions, "issue" | "requireLabel">,
+): void {
+  if (options.requireLabel !== undefined && options.issue === undefined)
+    throw new Error("--require-label requires --issue");
+  for (const [name, value] of [
+    ["issue", options.issue],
+    ["require-label", options.requireLabel],
+  ] as const) {
+    if (
+      value !== undefined &&
+      (typeof value !== "string" ||
+        !value.length ||
+        value.length > 128 ||
+        value !== value.trim() ||
+        Array.from(value).some((character) => {
+          const code = character.charCodeAt(0);
+          return code < 32 || code === 127;
+        }))
+    )
+      throw new Error(
+        `--${name} must be a non-blank, trimmed string of at most 128 characters without controls`,
+      );
+  }
+}
+
 export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
+  validateDoctorIssueOptions(options);
   const env = options.env ?? process.env,
     write = options.write ?? ((text) => process.stdout.write(text));
   const resolveTarget = options.resolveTarget ?? resolveTargetRepository,
@@ -162,11 +193,47 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
     check(
       "linear",
       linear?.status === "fulfilled",
-      "Linear credential resolves; no API access probe run",
+      options.issue === undefined
+        ? "Linear credential resolves; no API access probe run"
+        : "Linear credential resolves; issue access is checked separately",
       "Linear credential unavailable",
       `export LINEAR_API_TOKEN or maquila setup --linear-token-reference op://Vault/Item/field\n${LINEAR_URL}\nhttps://developer.1password.com/docs/cli/get-started/`,
     ),
   );
+  if (options.issue !== undefined) {
+    try {
+      if (linear.status !== "fulfilled" || !linear.value.trim())
+        throw new Error("Linear credential unavailable");
+      const snapshot = await (options.fetchLinearIssue ?? fetchLinearIssue)({
+        token: linear.value,
+        issue: options.issue,
+      });
+      const eligible =
+        options.requireLabel === undefined ||
+        snapshot.labels.some((label) => label.name === options.requireLabel);
+      checks.push(
+        check(
+          "issue",
+          eligible,
+          options.requireLabel === undefined
+            ? "Linear issue is assigned Todo; no work was started"
+            : "Linear issue is assigned Todo and has the required label; no work was started",
+          "Linear issue lacks the required label",
+          "add the exact required label to the intended issue, then repeat doctor",
+        ),
+      );
+    } catch {
+      checks.push(
+        check(
+          "issue",
+          false,
+          "",
+          "Linear issue access or assigned Todo eligibility could not be verified",
+          "check Linear credentials, issue ID, assignee, and Todo state; then repeat doctor",
+        ),
+      );
+    }
+  }
   checks.push(
     check(
       "openrouter",
@@ -233,9 +300,10 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
   checks.push(
     check(
       "cli",
-      existsSync(resolve(options.maquilaRoot, "dist/maquila")),
+      existsSync(resolve(options.maquilaRoot, "dist/src/cli/index.js")) ||
+        existsSync(resolve(options.maquilaRoot, "dist/maquila")),
       "maquila CLI build present",
-      "dist/maquila missing",
+      "maquila CLI build missing",
       "bun run build",
     ),
   );

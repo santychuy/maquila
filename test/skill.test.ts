@@ -16,6 +16,13 @@ test("maquila skill is valid, thin, and routes only through public commands", ()
   assert.ok(body.split("\n").length < 500);
   assert.match(body, /observer ensure --json/);
   assert.match(body, /maquila run start --issue/);
+  assert.match(
+    body,
+    /maquila doctor --target .* --issue .* --require-label "maquila-ready" --json/,
+  );
+  assert.match(body, /Continue past doctor only when it exits zero/);
+  assert.match(body, /same explicit target for preflight and start/);
+  assert.match(body, /automatic discovery and trigger enforcement are not implemented/);
   assert.match(body, /run status --run-id/);
   assert.doesNotMatch(body, /bun run maquila/);
   assert.doesNotMatch(body, /absolute target Git repository path/);

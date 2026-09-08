@@ -171,6 +171,8 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
           json: options.json,
           target: options.target,
           identity: options.identity,
+          issue: options.issue,
+          requireLabel: options.requireLabel,
           maquilaRoot: root,
         });
         return result.ok ? 0 : 1;

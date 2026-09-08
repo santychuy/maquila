@@ -5,7 +5,7 @@ import type { ControllerOptions } from "../controller.js";
 export const HELP = `Usage:
   maquila agents list
   maquila setup [--target PATH] [--identity ABS] [--linear-token-reference op://Vault/Item/field] [--openrouter-token-reference op://Vault/Item/field] [--install-skill] [--json]
-  maquila doctor [--target PATH] [--identity ABS] [--json]
+  maquila doctor [--target PATH] [--identity ABS] [--issue ID] [--require-label LABEL] [--json]
   maquila pi plan --repo PATH --issue PATH [--timeout-seconds 300]
   maquila pi worker --repo PATH --issue PATH --planner PATH --base-sha SHA [--timeout-seconds 300]
   maquila run --issue ID --owner OWNER --repo REPO --base-ref REF --tag TAG [--identity ABS] [--timeout-seconds 900]
@@ -116,6 +116,8 @@ export interface DoctorCommand {
   json?: boolean;
   target: string;
   identity?: string;
+  issue?: string;
+  requireLabel?: string;
 }
 
 export type WorkerCliOptions = WorkerLifecycleOptions & { machine?: boolean };
