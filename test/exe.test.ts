@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  classifyExeCreateRejection,
   ExeClient,
   ExeCommandError,
   externalCommandEnvironment,
@@ -32,7 +33,10 @@ function runner(replies: Array<ExecResult | Error | Record<string, unknown>>): {
       if (
         !(reply instanceof Error) &&
         typeof reply.stdout === "string" &&
-        typeof reply.stderr === "string"
+        typeof reply.stderr === "string" &&
+        typeof (reply as Record<string, unknown>).code !== "number" &&
+        typeof (reply as Record<string, unknown>).status !== "number" &&
+        (reply as Record<string, unknown>).killed !== true
       ) {
         return { stdout: reply.stdout, stderr: reply.stderr };
       }
@@ -211,6 +215,106 @@ test("command failures are structured and redact runner details", async () => {
   );
 });
 
+test("create VM failure carries allowlisted reason without raw provider output", async () => {
+  const secret = "linear-secret-value";
+  const fake = runner([{ code: 1, stderr: `invalid tag rejected plus ${secret}` }]);
+  const client = new ExeClient(fake.run);
+  await assert.rejects(
+    () => client.createVm({ name: "vm-1", tag: "tag-1" }),
+    (error) => {
+      assert.ok(error instanceof ExeCommandError);
+      assert.equal(error.reason, "invalid-tag");
+      assert.equal(error.exitCode, 1);
+      assert.ok(!error.message.includes(secret));
+      assert.ok(!error.message.includes("invalid tag"));
+      return true;
+    },
+  );
+  assert.equal(classifyExeCreateRejection("unknown image name"), "unknown-image");
+  assert.equal(classifyExeCreateRejection("VM already exists"), "name-taken");
+  assert.equal(classifyExeCreateRejection("quota exceeded"), "quota-exceeded");
+  assert.equal(classifyExeCreateRejection("pool required"), "team-pool-required");
+  assert.equal(classifyExeCreateRejection("missing integration"), "integration-required");
+  assert.equal(
+    classifyExeCreateRejection("some opaque provider text"),
+    "unclassified-create-rejection",
+  );
+  assert.equal(classifyExeCreateRejection(undefined), "unclassified-create-rejection");
+});
+
+test("create VM detail preserves bounded provider text without leaking secrets", async () => {
+  const secret = `known-secret-${Date.now()}`;
+  const fake = runner([
+    { code: 1, stderr: `image rejected\n\u001b[31mboom\u001b[0m plus ${secret}` },
+  ]);
+  const client = new ExeClient(fake.run);
+  const error = await client.createVm({ name: "vm-1", tag: "tag-1" }).then(
+    () => assert.fail("expected create failure"),
+    (caught: unknown) => {
+      assert.ok(caught instanceof ExeCommandError);
+      return caught;
+    },
+  );
+  assert.equal(error.reason, "unknown-image");
+  assert.ok(error.detail?.includes("boom"));
+  assert.ok(!error.detail?.includes("\u001b") && !error.detail?.includes("\n"));
+  assert.ok(!error.message.includes(secret) && !error.message.includes("boom"));
+  assert.ok(!JSON.stringify(error).includes(secret));
+  assert.ok(!JSON.stringify(error).includes("boom"));
+  const { sanitizeTelemetryText } = await import("../src/telemetry.js");
+  assert.ok(!sanitizeTelemetryText(error.detail ?? "", [secret]).includes(secret));
+  // Redact-before-truncate: secret straddling truncation boundary must vanish, not clip.
+  const long = `x`.repeat(990) + secret + `y`.repeat(50);
+  assert.ok(!sanitizeTelemetryText(long, [secret]).includes(secret));
+});
+
+test("create VM falls back to strict stdout JSON message, non-create stays opaque", async () => {
+  const stdoutClient = new ExeClient(
+    runner([
+      {
+        code: 1,
+        stderr: "",
+        stdout: JSON.stringify({ message: "tag bad", extra: `z`.repeat(5000) }),
+      },
+    ]).run,
+  );
+  const stdoutError = await stdoutClient.createVm({ name: "vm-1", tag: "tag-1" }).then(
+    () => assert.fail("expected create failure"),
+    (caught: unknown) => {
+      assert.ok(caught instanceof ExeCommandError);
+      return caught;
+    },
+  );
+  assert.equal(stdoutError.reason, "unclassified-create-rejection");
+  assert.ok(stdoutError.detail?.includes("tag bad"));
+  assert.ok(!(stdoutError.detail ?? "").includes("zzz"));
+  // Whole non-JSON stdout never becomes detail.
+  const dumpClient = new ExeClient(
+    runner([{ code: 1, stderr: "", stdout: "plain success-shaped dump" }]).run,
+  );
+  const dumpError = await dumpClient.createVm({ name: "vm-1", tag: "tag-1" }).then(
+    () => assert.fail("expected create failure"),
+    (caught: unknown) => {
+      assert.ok(caught instanceof ExeCommandError);
+      return caught;
+    },
+  );
+  assert.equal(dumpError.detail, undefined);
+  // Non-create ops keep old opaque behavior: no reason, no detail.
+  const other = new ExeClient(runner([{ killed: false, code: 1, stderr: "tag invalid" }]).run);
+  await assert.rejects(
+    () => other.exec("vm.exe.xyz", ["true"]),
+    (error) => {
+      assert.ok(error instanceof ExeCommandError);
+      assert.equal(error.reason, undefined);
+      assert.equal(error.detail, undefined);
+      return true;
+    },
+  );
+  // Buffer stderr classifies instead of mapping to unclassified.
+  assert.equal(classifyExeCreateRejection(Buffer.from("unknown image name")), "unknown-image");
+});
+
 test("destroy is retry-safe when VM is already absent", async () => {
   const fake = runner([
     { stdout: JSON.stringify({ vms: [vm] }), stderr: "" },
@@ -222,6 +326,20 @@ test("destroy is retry-safe when VM is already absent", async () => {
   assert.deepEqual(await client.destroyVm(vm.vm_name), { destroyed: false, notFound: true });
   assert.ok(fake.calls[1]?.args.includes("rm"));
   assert.ok(fake.calls[1]?.args.includes(vm.vm_name));
+});
+
+test("explicit invalid exe tag is rejected before SSH", async () => {
+  const fake = runner([]);
+  const client = new ExeClient(fake.run);
+  await assert.rejects(
+    () => client.createVm({ name: "vm-1", tag: "Bad.Tag" }),
+    /exe\.dev tags must match/,
+  );
+  await assert.rejects(
+    () => client.createVm({ name: "vm-1", tag: "1abc" }),
+    /exe\.dev tags must match/,
+  );
+  assert.equal(fake.calls.length, 0);
 });
 
 test("unsafe VM control inputs fail before runner", async () => {

@@ -459,13 +459,20 @@ export function readPersistedDecisionRequest(runDir: string): PersistedDecisionR
   };
 }
 
-function publicFailureDetail(error: unknown): string | undefined {
+function publicFailureDetail(error: unknown, secrets: string[]): string | undefined {
   if (error instanceof LinearIssueValidationError) return error.message;
   if (error instanceof ExeCommandError) {
     if (error.timedOut) return `${error.operation} timed out`;
-    return error.exitCode === null
-      ? `${error.operation} failed`
-      : `${error.operation} exited with code ${error.exitCode}`;
+    const base =
+      error.exitCode === null
+        ? `${error.operation} failed`
+        : `${error.operation} exited with code ${error.exitCode}`;
+    if (error.operation !== "create VM") return error.reason ? `${base} (${error.reason})` : base;
+    if (!error.reason) return base;
+    if (!error.detail) return `${base} (${error.reason})`;
+    // Redact with run credentials before truncate/output; sanitizeTelemetryText redacts first.
+    const detail = sanitizeTelemetryText(error.detail, secrets);
+    return `${base} (${error.reason}; ${detail})`;
   }
   if (error && typeof error === "object" && "code" in error) {
     const code = error.code;
@@ -2578,7 +2585,11 @@ export async function runController(options: ControllerOptions): Promise<Control
         options.githubToken,
         options.openRouterKey,
       ]);
-      const detail = publicFailureDetail(error);
+      const detail = publicFailureDetail(error, [
+        options.linearToken,
+        options.githubToken,
+        options.openRouterKey,
+      ]);
       bestEffortEmit({
         type: "failure",
         actor: "controller",

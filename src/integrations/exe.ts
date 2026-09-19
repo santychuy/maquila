@@ -3,7 +3,19 @@ import { isAbsolute, posix } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
-const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const SAFE_VM_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/** Built-in exe.dev tag boundary from observed provider error: must match ^[a-z][a-z0-9_-]*$. */
+export const EXE_TAG_PATTERN = /^[a-z][a-z0-9_-]*$/;
+export const EXE_TAG_MAX_LENGTH = 64;
+
+export function assertExeTag(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) throw new Error("invalid tag");
+  if (value.length > EXE_TAG_MAX_LENGTH || !EXE_TAG_PATTERN.test(value))
+    throw new Error(
+      `invalid tag "${value}": exe.dev tags must match ^[a-z][a-z0-9_-]*$ (1-64 chars)`,
+    );
+  return value;
+}
 const SAFE_DESTINATION = /^(?:[A-Za-z0-9._+-]+@)?[A-Za-z0-9.-]+$/;
 const SSH_OPTIONS = [
   "-o",
@@ -81,14 +93,130 @@ export interface ExeVm {
   sshUser?: string;
 }
 
+// ponytail: allowlisted create-VM rejection codes only; no raw provider output ever leaves this module.
+export type ExeCreateVmReason =
+  | "invalid-tag"
+  | "unknown-image"
+  | "name-taken"
+  | "quota-exceeded"
+  | "team-pool-required"
+  | "integration-required"
+  | "unclassified-create-rejection";
+
+export function classifyExeCreateRejection(stderr: unknown): ExeCreateVmReason {
+  const text = providerText(stderr).toLowerCase();
+  if (text.includes("integration")) return "integration-required";
+  if (text.includes("tag")) return "invalid-tag";
+  if (text.includes("image")) return "unknown-image";
+  if (text.includes("taken") || text.includes("exists") || text.includes("already"))
+    return "name-taken";
+  if (text.includes("quota") || text.includes("limit")) return "quota-exceeded";
+  if (text.includes("pool") || text.includes("team")) return "team-pool-required";
+  return "unclassified-create-rejection";
+}
+
 export class ExeCommandError extends Error {
+  readonly detail?: string;
+
   constructor(
     readonly operation: string,
     readonly timedOut: boolean,
     readonly exitCode: number | null,
+    readonly reason?: ExeCreateVmReason,
+    detail?: string,
   ) {
     super(`${operation} failed${timedOut ? " by timeout" : ""}`);
+    // ponytail: non-enumerable detail keeps raw-adjacent text out of JSON/spread leaks;
+    // controller must sanitizeTelemetryText it with run credentials before any output.
+    Object.defineProperty(this, "detail", {
+      value: detail,
+      enumerable: false,
+      writable: false,
+    });
   }
+}
+
+function providerText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value instanceof Uint8Array) {
+    try {
+      return Buffer.from(value).toString("utf8");
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+function stripAnsiCsi(value: string): string {
+  let out = "";
+  let i = 0;
+  while (i < value.length) {
+    const esc = value.indexOf("\u001b", i);
+    if (esc === -1) return out + value.slice(i);
+    out += value.slice(i, esc);
+    if (value[esc + 1] !== "[") {
+      i = esc + 1;
+      continue;
+    }
+    let end = esc + 2;
+    while (end < value.length) {
+      const code = value.charCodeAt(end);
+      if ((code >= 65 && code <= 90) || (code >= 97 && code <= 122)) {
+        end += 1;
+        break;
+      }
+      end += 1;
+    }
+    i = end;
+  }
+  return out;
+}
+
+function redactGenericProviderText(value: string): string {
+  return stripAnsiCsi(value)
+    .replaceAll(/\p{Cc}/gu, " ")
+    .replaceAll(/(https?:\/\/)[^/\s@]+@/gi, "$1[REDACTED]@")
+    .replaceAll(/\b(bearer|basic)\s+[^\s"'}]+/gi, "$1 [REDACTED]")
+    .replaceAll(
+      /\b(api[_-]?key|token|secret|password|authorization)\b\s*[:=]\s*[^\s"'};,]+/gi,
+      "$1=[REDACTED]",
+    );
+}
+
+function boundedDetail(raw: string): string | undefined {
+  if (!raw || raw.length > 20_000) return undefined;
+  const cleaned = redactGenericProviderText(raw).replaceAll(/\s+/g, " ").trim();
+  if (!cleaned) return undefined;
+  // ponytail: no display cap here; controller redacts known run credentials first,
+  // then applies its sole display cap. Premature slice would clip a secret
+  // spanning the boundary so full-token replacement misses its prefix.
+  return cleaned;
+}
+
+function strictStdoutMessage(stdout: string): string | undefined {
+  if (!stdout || stdout.length > 100_000) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed)) return undefined;
+  if (typeof parsed.message === "string" && parsed.message.trim()) return parsed.message;
+  if (typeof parsed.error === "string" && parsed.error.trim()) return parsed.error;
+  if (isRecord(parsed.error) && typeof parsed.error.message === "string") {
+    return parsed.error.message.trim() ? parsed.error.message : undefined;
+  }
+  return undefined;
+}
+
+// Create-VM only: prefer stderr, else strict JSON message field from stdout.
+// Never returns whole stdout/command dumps; controller redacts run credentials after.
+function createVmDetail(error: Record<string, unknown>): string | undefined {
+  const stderr = providerText(error.stderr);
+  if (stderr.trim()) return boundedDetail(stderr);
+  return boundedDetail(strictStdoutMessage(providerText(error.stdout)) ?? "");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -102,7 +230,7 @@ function nonBlank(value: unknown, label: string): string {
 
 function safeName(value: unknown, label: string): string {
   const result = nonBlank(value, label);
-  if (!SAFE_NAME.test(result)) throw new Error(`invalid ${label}`);
+  if (!SAFE_VM_NAME.test(result)) throw new Error(`invalid ${label}`);
   return result;
 }
 
@@ -166,6 +294,14 @@ function commandFailure(error: unknown, operation: string): ExeCommandError {
       : typeof error.code === "number"
         ? error.code
         : null;
+  if (operation === "create VM" && !timedOut)
+    return new ExeCommandError(
+      operation,
+      timedOut,
+      exitCode,
+      classifyExeCreateRejection(error.stderr),
+      createVmDetail(error),
+    );
   return new ExeCommandError(operation, timedOut, timedOut ? null : exitCode);
 }
 
@@ -278,7 +414,7 @@ export class ExeClient {
 
   async createVm(options: { name: string; tag: string; integration?: string }): Promise<ExeVm> {
     const name = safeName(options.name, "VM name");
-    const tag = safeName(options.tag, "tag");
+    const tag = assertExeTag(options.tag);
     const args = [
       "new",
       "--json",

@@ -1,6 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
-import { externalCommandEnvironment } from "./integrations/exe.js";
+import {
+  EXE_TAG_MAX_LENGTH,
+  EXE_TAG_PATTERN,
+  assertExeTag,
+  externalCommandEnvironment,
+} from "./integrations/exe.js";
 
 const SAFE_NAME = /^[A-Za-z0-9_.-]+$/;
 
@@ -85,9 +90,23 @@ export function validateResolvedTarget(input: {
 }): Omit<TargetRepository, "path"> {
   const owner = safeName(input.owner, "owner");
   const repo = safeName(input.repo, "repository");
-  const tag = safeName(input.tag, "tag");
+  const tag = assertExeTag(input.tag);
   if (!validRefShape(input.baseRef)) throw new Error("invalid base ref");
   return { owner, repo, baseRef: input.baseRef, tag };
+}
+
+/** Default exe.dev tag: keep provider-valid defaults unchanged, else slug owner-repo. */
+export function defaultExeTag(owner: string, repo: string): string {
+  const candidate = `${owner}-${repo}`;
+  if (candidate.length <= EXE_TAG_MAX_LENGTH && EXE_TAG_PATTERN.test(candidate)) return candidate;
+  let slug = candidate
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9_-]+/g, "-")
+    .replaceAll(/-{2,}/g, "-");
+  if (!/^[a-z]/.test(slug)) slug = `t-${slug.replaceAll(/^[^a-z]+/g, "") || "tag"}`;
+  slug = slug.slice(0, EXE_TAG_MAX_LENGTH).replaceAll(/[-_]+$/g, "") || "t-tag";
+  if (!EXE_TAG_PATTERN.test(slug)) throw new Error("cannot derive valid exe.dev tag");
+  return slug;
 }
 
 export function resolveTargetRepository(options: ResolveTargetOptions): TargetRepository {
@@ -107,6 +126,6 @@ export function resolveTargetRepository(options: ResolveTargetOptions): TargetRe
   if (!validRefShape(baseRef)) throw new Error("invalid base ref");
   const checkedRef = git(path, ["check-ref-format", "--branch", baseRef]);
   if (checkedRef !== baseRef) throw new Error("invalid base ref");
-  const tag = safeName(options.tag ?? `${owner}-${repo}`, "tag");
+  const tag = options.tag === undefined ? defaultExeTag(owner, repo) : assertExeTag(options.tag);
   return { path, owner, repo, baseRef, tag };
 }

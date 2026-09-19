@@ -27,7 +27,7 @@ import {
 import { createFeaturePrExecution } from "../src/workflows/execution.js";
 import { createFeaturePrManifest, featurePrDefinitionSha256 } from "../src/workflows/manifest.js";
 import { acquireControllerLock } from "../src/controller-lock.js";
-import { ExeCommandError } from "../src/integrations/exe.js";
+import { ExeClient, ExeCommandError } from "../src/integrations/exe.js";
 import { createLinearDecisionComment } from "../src/integrations/linear.js";
 import {
   createControllerState,
@@ -3209,6 +3209,60 @@ test("controller preserves and redacts intake failure evidence", async () => {
       exe.calls.some((call) => call.operation === "create"),
       false,
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("create VM provider detail redacts credential spanning old truncation boundary", async () => {
+  const root = mkdtempSync(join(tmpdir(), "maquila-create-boundary-"));
+  // Synthetic credential straddling the removed 500-char premature slice.
+  const secret = `lin-boundary-${"A".repeat(24)}`;
+  const stderr = `${"x".repeat(490)}${secret} tag rejected`;
+  const failing = new ExeClient(async () => {
+    throw { killed: false, code: 1, stderr };
+  });
+  const createError = await failing.createVm({ name: "vm-1", tag: "tag-1" }).then(
+    () => assert.fail("expected create failure"),
+    (caught: unknown) => {
+      assert.ok(caught instanceof ExeCommandError);
+      return caught;
+    },
+  );
+  // Controls normalization must preserve the exact secret for later replacement.
+  assert.ok(createError.detail?.includes(secret));
+  assert.ok(!JSON.stringify(createError).includes(secret));
+  class BoundaryExe extends FakeExe {
+    override async createVm(_options: { name: string; tag: string }): Promise<{
+      vmName: string;
+      status: string;
+      sshDest: string;
+    }> {
+      throw createError;
+    }
+    override async destroyVm(_name: string) {
+      return { destroyed: false, notFound: true };
+    }
+  }
+  try {
+    const result = await runController({
+      ...controllerOptions(root, new BoundaryExe()),
+      linearToken: secret,
+    });
+    assert.equal(result.status, "failed");
+    const receiptText = readFileSync(join(result.runDir, "receipt.json"), "utf8");
+    const telemetryEvents = readTelemetry(
+      telemetryPath(root, readControllerState(result.runDir).runId),
+    );
+    const telemetryText = JSON.stringify(telemetryEvents);
+    const statusText = JSON.stringify(result);
+    for (const text of [receiptText, telemetryText, statusText]) {
+      assert.ok(!text.includes(secret));
+      // No clipped fragment of the secret may survive (old slice kept 10-char prefix).
+      assert.ok(!text.includes(secret.slice(0, 10)));
+      assert.ok(!text.includes(secret.slice(2, 10)));
+    }
+    assert.match(telemetryText, /\[REDACTED\]/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

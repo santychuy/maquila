@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { defaultGit, parseGitHubOrigin, resolveTargetRepository } from "../src/target.js";
+import {
+  defaultGit,
+  defaultExeTag,
+  parseGitHubOrigin,
+  resolveTargetRepository,
+} from "../src/target.js";
 
 test("GitHub origin parser accepts HTTPS and SSH forms", () => {
   assert.deepEqual(parseGitHubOrigin("https://github.com/acme/widget.git"), {
@@ -76,6 +81,31 @@ test("default target Git inspection receives only operational environment", () =
   assert.equal(captured.LINEAR_API_TOKEN, undefined);
   assert.equal(captured.GITHUB_TOKEN, undefined);
   assert.equal(captured.UNRELATED_SECRET, undefined);
+});
+
+test("exe tag derivation keeps valid defaults and slugs dots, case, and leading digits", () => {
+  assert.equal(defaultExeTag("santychuycom", "santychuy.com"), "santychuycom-santychuy-com");
+  assert.equal(defaultExeTag("santychuy", "bookbounce"), "santychuy-bookbounce");
+  assert.equal(defaultExeTag("Acme", "Widget"), "acme-widget");
+  const digit = defaultExeTag("123acme", "widget");
+  assert.match(digit, /^[a-z][a-z0-9_-]*$/);
+  assert.ok(digit.includes("acme") && digit.includes("widget"));
+});
+
+function pilotGit(_cwd: string, args: string[]): string {
+  if (args[0] === "rev-parse") return "/tmp/target";
+  if (args[0] === "remote") return "https://github.com/santychuycom/santychuy.com.git";
+  if (args[0] === "symbolic-ref") return "refs/remotes/origin/main";
+  return args[2] ?? "";
+}
+
+test("explicit invalid exe tag fails early with provider constraint", () => {
+  const pilot = resolveTargetRepository({ target: "/tmp/target", git: pilotGit });
+  assert.equal(pilot.tag, "santychuycom-santychuy-com");
+  assert.throws(
+    () => resolveTargetRepository({ target: "/tmp/target", tag: "Bad.Tag", git: pilotGit }),
+    /exe\.dev tags must match/,
+  );
 });
 
 test("target resolution fails closed on unsupported or ambiguous inputs", () => {
