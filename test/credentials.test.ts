@@ -109,6 +109,36 @@ test("OpenRouter 1Password reference is used when env is absent", async () => {
   assert.equal(result.openRouterKey, "openrouter-op");
 });
 
+test("saved local keys need no 1Password and environment remains authoritative", async () => {
+  const config = {
+    version: 1 as const,
+    linear: { token: "saved-linear" },
+    openrouter: { token: "saved-router" },
+  };
+  const saved = await resolveControllerCredentials({
+    env: { GITHUB_TOKEN: "github" },
+    config,
+    runOp: async () => {
+      throw new Error("1Password must not run");
+    },
+  });
+  assert.equal(saved.linearToken, "saved-linear");
+  assert.equal(saved.openRouterKey, "saved-router");
+  const overridden = await resolveControllerCredentials({
+    env: {
+      GITHUB_TOKEN: "github",
+      LINEAR_API_TOKEN: "env-linear",
+      OPENROUTER_API_KEY: "env-router",
+    },
+    config,
+    runOp: async () => {
+      throw new Error("1Password must not run");
+    },
+  });
+  assert.equal(overridden.linearToken, "env-linear");
+  assert.equal(overridden.openRouterKey, "env-router");
+});
+
 test("identity is optional and must be absolute when set", async () => {
   const result = await resolveControllerCredentials({
     env: {

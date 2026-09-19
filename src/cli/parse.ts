@@ -32,6 +32,8 @@ export function parseCli(args: string[]): ParsedCli {
       "workflow-manifest": { type: "string" },
       json: { type: "boolean" },
       port: { type: "string" },
+      agent: { type: "boolean" },
+      "from-scratch": { type: "boolean" },
       "linear-token-reference": { type: "string" },
       "openrouter-token-reference": { type: "string" },
       "install-skill": { type: "boolean" },

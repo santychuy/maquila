@@ -3,8 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { test } from "node:test";
-import { runDoctor, type DoctorOptions } from "../src/doctor.js";
-import { fetchLinearIssue } from "../src/integrations/linear.js";
+import { fetchOpenRouterKey, runDoctor, type DoctorOptions } from "../src/doctor.js";
+import { fetchLinearIdentity, fetchLinearIssue } from "../src/integrations/linear.js";
 const MODELS = new Set(["google/gemini-3.7-flash", "z-ai/glm-5.3"]);
 function options(root: string) {
   return {
@@ -23,6 +23,17 @@ function options(root: string) {
     resolveLinear: async () => "linear-secret",
     resolveOpenRouter: async () => "openrouter-secret",
     resolveModelIds: async () => MODELS,
+    fetchLinearIdentity: async () => ({
+      user: { id: "user-1", name: "Alice" },
+      workspace: { id: "ws-1", name: "Personal", urlKey: "personal" },
+    }),
+    fetchOpenRouterKey: async () => ({
+      limit: 10,
+      limitRemaining: 8,
+      usage: 2,
+      limitReset: null,
+      includeByokInLimit: true,
+    }),
     write: () => undefined,
   };
 }
@@ -209,7 +220,7 @@ test("doctor issue preflight fails absent or wrong-case required label", async (
     };
     const result = await runDoctor({ ...base, issue: "RIFF-3", requireLabel: "maquila-ready" });
     assert.equal(result.checks.find((c) => c.id === "issue")?.status, "fail");
-    assert.equal(JSON.stringify(result).includes("maquila-ready"), false);
+    assert.match(result.checks.find((c) => c.id === "issue")?.message ?? "", /maquila-ready/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -419,5 +430,174 @@ test("doctor uses the strict intake validator for assigned Todo eligibility", as
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("doctor surfaces Linear workspace identity without email", async () => {
+  const root = mkdtempSync(resolve(tmpdir(), "maquila-doctor-"));
+  try {
+    const result = await runDoctor({
+      ...options(root),
+      fetchGithubSnapshot: async () => ({}),
+      listVms: async () => [],
+    });
+    assert.equal(result.checks.find((item) => item.id === "workspace")?.status, "pass");
+    assert.deepEqual(result.linearIdentity, {
+      user: { id: "user-1", name: "Alice" },
+      workspace: { id: "ws-1", name: "Personal", urlKey: "personal" },
+    });
+    assert.equal(JSON.stringify(result).includes("email"), false);
+    assert.equal(JSON.stringify(result).includes("secret"), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("doctor OpenRouter credits pass, warn unlimited, and fail exhausted remaining", async () => {
+  const root = mkdtempSync(resolve(tmpdir(), "maquila-doctor-"));
+  try {
+    mkdirSync(resolve(root, "dist"));
+    writeFileSync(resolve(root, "dist/maquila"), "");
+    const base = {
+      ...options(root),
+      fetchGithubSnapshot: async () => ({}),
+      listVms: async () => [],
+    };
+    const ok = await runDoctor(base);
+    assert.equal(ok.checks.find((item) => item.id === "credits")?.status, "pass");
+    assert.deepEqual(ok.openRouterKey, {
+      limit: 10,
+      limitRemaining: 8,
+      usage: 2,
+      limitReset: null,
+      includeByokInLimit: true,
+    });
+    const unlimited = await runDoctor({
+      ...base,
+      fetchOpenRouterKey: async () => ({
+        limit: null,
+        limitRemaining: null,
+        usage: 1,
+        limitReset: null,
+        includeByokInLimit: true,
+      }),
+    });
+    assert.equal(unlimited.checks.find((item) => item.id === "credits")?.status, "warn");
+    assert.equal(unlimited.ok, true);
+    const exhausted = await runDoctor({
+      ...base,
+      fetchOpenRouterKey: async () => ({
+        limit: 10,
+        limitRemaining: 0,
+        usage: 10,
+        limitReset: null,
+        includeByokInLimit: true,
+      }),
+    });
+    assert.equal(exhausted.checks.find((item) => item.id === "credits")?.status, "fail");
+    assert.equal(exhausted.ok, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("OpenRouter key parser rejects invalid or inconsistent budget metadata", async () => {
+  const original = globalThis.fetch;
+  try {
+    const valid = {
+      limit: 10,
+      limit_remaining: 8,
+      usage: 2,
+      limit_reset: null,
+      include_byok_in_limit: true,
+    };
+    for (const invalid of [
+      { limit: -1 },
+      { usage: -1 },
+      { usage: null },
+      { limit_remaining: null },
+      { limit: null },
+      { limit_remaining: 11 },
+      { limit_reset: "secret-from-server" },
+      { include_byok_in_limit: undefined },
+    ]) {
+      globalThis.fetch = async () =>
+        new Response(JSON.stringify({ data: { ...valid, ...invalid } }));
+      await assert.rejects(() => fetchOpenRouterKey({ key: "secret" }), /^Error: invalid$/);
+    }
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ data: { ...valid, limit_remaining: -1 } }));
+    assert.equal((await fetchOpenRouterKey({ key: "secret" })).limitRemaining, -1);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+test("Linear identity and OpenRouter key probes omit secrets from errors and extra fields", async () => {
+  const identity = await fetchLinearIdentity({
+    token: "linear-secret",
+    fetch: async (_url, init) => {
+      assert.ok(init?.signal instanceof AbortSignal);
+      assert.equal(init.signal.aborted, false);
+      assert.equal(typeof init.body, "string");
+      assert.doesNotMatch(init.body as string, /mutation|email/);
+      return new Response(
+        JSON.stringify({
+          data: {
+            viewer: { id: "user", name: "Alice", email: "private@example.invalid" },
+            organization: { id: "workspace", name: "Personal", urlKey: "personal" },
+          },
+        }),
+      );
+    },
+  });
+  assert.deepEqual(identity, {
+    user: { id: "user", name: "Alice" },
+    workspace: { id: "workspace", name: "Personal", urlKey: "personal" },
+  });
+  await assert.rejects(
+    () =>
+      fetchLinearIdentity({
+        token: "linear-secret",
+        fetch: async () =>
+          new Response(JSON.stringify({ errors: [{ message: "linear-secret sk-or-leak" }] }), {
+            status: 200,
+          }),
+      }),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.message === "Linear GraphQL request failed" &&
+      !error.message.includes("linear-secret") &&
+      !error.message.includes("sk-or-leak"),
+  );
+  const original = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        data: {
+          label: "sk-or-v1-secret-label",
+          name: "production",
+          hash: "abc",
+          limit: 5,
+          limit_remaining: 4,
+          usage: 1,
+          limit_reset: null,
+          include_byok_in_limit: true,
+        },
+      }),
+      { status: 200 },
+    );
+  try {
+    const status = await fetchOpenRouterKey({ key: "sk-or-v1-secret-label" });
+    assert.deepEqual(status, {
+      limit: 5,
+      limitRemaining: 4,
+      usage: 1,
+      limitReset: null,
+      includeByokInLimit: true,
+    });
+    assert.equal(JSON.stringify(status).includes("sk-or"), false);
+    assert.equal(JSON.stringify(status).includes("label"), false);
+  } finally {
+    globalThis.fetch = original;
   }
 });

@@ -10,7 +10,7 @@ The SDK calls the same core through a blocking `run(request)`. The host owns que
 
 ## Read-only issue preflight
 
-`doctor --issue ID --require-label LABEL` can check strict assigned-Todo Linear intake and an exact label before an agent submits a run. The skill stops on failed preflight and uses the same explicit target for start. This check does not reserve work or enforce a controller trigger policy; ordinary manual starts retain their current intake contract. Automatic discovery, durable queue ownership, and accept-time `maquila-ready` enforcement for the planned Bookbounce pilot are not implemented. Recipe, manifest, verification, review, and publication gates are unchanged.
+`doctor --issue ID` checks strict assigned-Todo Linear intake and the exact `maquila-ready` label by default. `--require-label LABEL` overrides that label; `--require-label ""` skips the label check. Commands target the current directory; pass `--target PATH` only to aim elsewhere. This check does not reserve work or enforce a controller trigger policy; ordinary manual starts retain their current intake contract. Automatic discovery, durable queue ownership, and accept-time `maquila-ready` enforcement for the planned website pilot are not implemented. Recipe, manifest, verification, review, and publication gates are unchanged.
 
 ## Mental model
 

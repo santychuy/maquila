@@ -123,6 +123,8 @@ function publicJsonError(message: string): string {
     /^GitHub CLI auth is unavailable$/,
     /^1Password reference could not be read$/,
     /^invalid Linear token reference$/,
+    /^invalid API key$/,
+    /^maquila config must not be stored in the target repository$/,
     /^invalid maquila config$/,
     /^SSH_AUTH_SOCK is invalid$/,
     /^exe\.dev identity must be an absolute path$/,
@@ -158,6 +160,8 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       if (options.command === "setup") {
         const result = await runSetup({
           json: options.json,
+          agent: options.agent,
+          fromScratch: options.fromScratch,
           linearTokenReference: options.linearTokenReference,
           openRouterTokenReference: options.openRouterTokenReference,
           installSkill: options.installSkill,
@@ -170,6 +174,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       if (options.command === "doctor") {
         const result = await runDoctor({
           json: options.json,
+          agent: options.agent,
           target: options.target,
           identity: options.identity,
           issue: options.issue,

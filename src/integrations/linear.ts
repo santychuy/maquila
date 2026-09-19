@@ -74,7 +74,7 @@ function timestamp(value: string, label: string): string {
 }
 
 async function requestLinear(
-  options: Pick<LinearOptions, "fetch" | "token">,
+  options: Pick<LinearOptions, "fetch" | "token"> & { signal?: AbortSignal },
   query: string,
   variables: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
@@ -84,6 +84,7 @@ async function requestLinear(
       method: "POST",
       headers: { Authorization: options.token, "content-type": "application/json" },
       body: JSON.stringify({ query, variables }),
+      signal: options.signal,
     });
   } catch {
     throw new Error("Linear request failed");
@@ -99,6 +100,32 @@ async function requestLinear(
   if ("errors" in root && (!Array.isArray(root.errors) || root.errors.length > 0))
     throw new Error("Linear GraphQL request failed");
   return record(root.data, "Linear data");
+}
+
+export interface LinearIdentity {
+  user: { id: string; name: string };
+  workspace: { id: string; name: string; urlKey: string };
+}
+
+export async function fetchLinearIdentity(
+  options: Pick<LinearOptions, "fetch" | "token">,
+): Promise<LinearIdentity> {
+  text(options.token, "Linear token");
+  const data = await requestLinear(
+    { ...options, signal: AbortSignal.timeout(10_000) },
+    "{ viewer { id name } organization { id name urlKey } }",
+    {},
+  );
+  const viewer = record(data.viewer, "viewer");
+  const organization = record(data.organization, "organization");
+  return {
+    user: { id: text(viewer.id, "viewer.id"), name: text(viewer.name, "viewer.name") },
+    workspace: {
+      id: text(organization.id, "organization.id"),
+      name: text(organization.name, "organization.name"),
+      urlKey: text(organization.urlKey, "organization.urlKey"),
+    },
+  };
 }
 
 export async function fetchLinearIssue(options: LinearOptions): Promise<LinearSnapshot> {

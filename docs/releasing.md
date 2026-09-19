@@ -62,6 +62,6 @@ After the release owner approves publication, publish the reviewed tarball with 
 
 After publication, verify registry name/version/license/integrity and install that exact registry version in another fresh consumer. A local tarball test is not evidence of successful registry publication. Update README release status only after this verification.
 
-## 5. Proceed to the Bookbounce pilot separately
+## 5. Proceed to the website pilot separately
 
-Only after install/release acceptance, request permission for one real assigned Linear `Todo` issue labeled exactly `maquila-ready` against `santychuy/bookbounce`. The live test spends VM/model credits and can create a PR. No automatic-intake service is enabled by publishing this package, and human merge remains mandatory.
+The local POC targets one approved assigned Linear `Todo` issue labeled exactly `maquila-ready` against `santychuycom/santychuy.com`. An isolated npm tarball installation can prove onboarding before registry publication; it is not a registry-release claim. Verify personal Linear identity, dedicated model-key spending limits, and VM limits before starting paid work. The live test spends VM/model credits and can create a PR. No automatic-intake service is enabled by installing or publishing this package, and human merge remains mandatory.

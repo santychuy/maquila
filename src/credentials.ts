@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { isAbsolute } from "node:path";
 import { promisify } from "node:util";
 import type { MaquilaConfig } from "./config.js";
-import { parseTokenReference } from "./config.js";
+import { parseApiToken, parseTokenReference } from "./config.js";
 import { externalCommandEnvironment } from "./integrations/exe.js";
 
 const execFileAsync = promisify(execFile);
@@ -71,7 +71,9 @@ export async function resolveLinearToken(
 ): Promise<string> {
   const fromEnv = nonBlank(env.LINEAR_API_TOKEN);
   if (fromEnv) return fromEnv;
-  const reference = config?.linear?.tokenReference;
+  const credential = config?.linear;
+  if (credential && "token" in credential) return parseApiToken(credential.token);
+  const reference = credential?.tokenReference;
   if (!reference) throw new Error("LINEAR_API_TOKEN is required");
   const safe = parseTokenReference(reference);
   try {
@@ -93,7 +95,9 @@ export async function resolveOpenRouterKey(
 ): Promise<string> {
   const fromEnv = nonBlank(env.OPENROUTER_API_KEY);
   if (fromEnv) return fromEnv;
-  const reference = config?.openrouter?.tokenReference;
+  const credential = config?.openrouter;
+  if (credential && "token" in credential) return parseApiToken(credential.token);
+  const reference = credential?.tokenReference;
   if (!reference) throw new Error("OPENROUTER_API_KEY is required");
   const safe = parseTokenReference(reference, "OpenRouter");
   try {

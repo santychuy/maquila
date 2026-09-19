@@ -10,46 +10,47 @@ The package is **`@santychuy/maquila`**. The command is **`maquila`**. License: 
 
 The installed CLI runs on **Node.js >=22.19.0**. You also need Git, OpenSSH, access to the target GitHub repository, Linear, exe.dev, and a dedicated capped OpenRouter key. GitHub CLI (`gh`) is convenient but optional when `GITHUB_TOKEN` is supplied. Bun is needed to build Maquila from source, not to run the installed JavaScript CLI.
 
-Before the first registry release, install a maintainer-built tarball:
+Before the first registry release, install a maintainer-built tarball with npm or bun:
 
 ```bash
-bun add --global /absolute/path/to/santychuy-maquila-0.1.0.tgz
+npm install -g /absolute/path/to/santychuy-maquila-0.1.0.tgz
 maquila --help
 ```
 
 After the package is published:
 
 ```bash
-bun add --global @santychuy/maquila
+npm install -g @santychuy/maquila
 ```
 
-The SDK can be added to a host project with `bun add @santychuy/maquila` after publication, or with the tarball path before publication. The public artifact ships JavaScript, declarations, agent/skill assets, and a source runtime archive. It does not ship a platform-specific executable. The standalone binary remains a source-development convenience.
+`bun add --global` of the same tarball or package name also works. The first npm publication is not yet confirmed; do not install the unrelated unscoped `maquila` package. The SDK can be added to a host project with `npm install @santychuy/maquila` after publication, or with the tarball path before publication. The public artifact ships JavaScript, declarations, agent/skill assets, and a source runtime archive. It does not ship a platform-specific executable. The standalone binary remains a source-development convenience.
 
 ## Set up one project
 
 Run these from your terminal or have an operating agent use the JSON forms:
 
 ```bash
-maquila setup --target /absolute/path/to/project --install-skill
-maquila doctor --target /absolute/path/to/project --json
+cd /absolute/path/to/project
+maquila setup --install-skill
+maquila doctor --json
 ```
 
-Setup detects credentials and explains missing access. It stores only optional 1Password `op://` references, never raw keys. It does not create a VM or start work. See [setup and credentials](docs/setup.md) for vendor access, readiness limits, state paths, and upgrades.
+On a TTY, `maquila setup --install-skill` installs the Pi skill and still walks guided checks. Missing Linear/OpenRouter credentials open a paste-first walkthrough: hidden terminal paste, environment variable, or optional 1Password. `--json` and `--agent` stay non-interactive and never prompt for secrets. Confirmed keys are stored unencrypted in owner-only host config (`0600`), never in the target repository, CLI flags, issues, or telemetry. It does not create a VM or start work. See [setup and credentials](docs/setup.md) for vendor access, readiness limits, state paths, and upgrades.
 
 ## Run one issue
 
-The Linear issue must be assigned and in `Todo`. For the planned Bookbounce pilot, also require the exact `maquila-ready` label:
+The Linear issue must be assigned, in `Todo`, and carry the exact `maquila-ready` label:
 
 ```bash
-maquila doctor --target /absolute/path/to/bookbounce \
-  --issue "<ISSUE-ID>" --require-label maquila-ready --json
+cd /absolute/path/to/project
+maquila doctor --issue "<ISSUE-ID>" --json
 ```
 
 **Stop if preflight fails.** When it passes and you intend to spend VM/model credits and create a PR:
 
 ```bash
 maquila dashboard
-maquila run start --target /absolute/path/to/bookbounce --issue "<ISSUE-ID>" --json
+maquila run start --issue "<ISSUE-ID>" --json
 maquila run status --run-id "<RUN-ID>" --json
 ```
 
@@ -62,12 +63,12 @@ If planning needs a decision, Maquila pauses and posts a numbered Linear thread 
 The installed Pi skill routes through the same public commands:
 
 ```text
-/skill:maquila Run <ISSUE-ID> against /absolute/path/to/bookbounce
+/skill:maquila Run <ISSUE-ID> against /absolute/path/to/project
 ```
 
-Other agents can use `setup --json`, `doctor --json`, `run start --json`, and `run status --json`. Keep credentials in the controller's environment, not in model prompts. The operating agent starts and observes work; it cannot replace deterministic acceptance gates.
+Other agents can use `setup --agent`, `doctor --agent`, `run start --json`, and `run status --json` (`--json` also works for setup/doctor). Keep credentials in the controller's environment, not in model prompts. The operating agent starts and observes work; it cannot replace deterministic acceptance gates.
 
-**Automatic intake is not enabled.** The planned first pilot is local, limited to `santychuy/bookbounce`, with only the exact `maquila-ready` label triggering selection. A durable queue, duplicate prevention across polling/restarts, and accept-time trigger enforcement are still required. Manual `run start` does not enforce this label; preflight alone is not an authorization lock. Always-on hosting comes later.
+**Automatic intake is not enabled.** The planned pilot is local, limited to one approved issue against `santychuycom/santychuy.com`, with only the exact `maquila-ready` label triggering selection. A durable queue, duplicate prevention across polling/restarts, and accept-time trigger enforcement are still required. Manual `run start` does not enforce this label; preflight alone is not an authorization lock. Always-on hosting comes later.
 
 ## Use the SDK
 

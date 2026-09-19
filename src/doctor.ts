@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
+import { isAgentMode, renderAgentProgress } from "./agent-mode.js";
 import { isAbsolute, resolve } from "node:path";
 import { listAgents } from "./agents/index.js";
 import { loadMaquilaConfig, type MaquilaConfig } from "./config.js";
@@ -11,9 +12,15 @@ import {
 } from "./credentials.js";
 import { ExeClient } from "./integrations/exe.js";
 import { fetchGitHubSnapshot } from "./integrations/github.js";
-import { fetchLinearIssue, type LinearSnapshot } from "./integrations/linear.js";
+import {
+  fetchLinearIdentity,
+  fetchLinearIssue,
+  type LinearIdentity,
+  type LinearSnapshot,
+} from "./integrations/linear.js";
 import { resolveTargetRepository, type TargetRepository } from "./target.js";
 
+export const DEFAULT_REQUIRED_LABEL = "maquila-ready";
 export type CheckStatus = "pass" | "fail" | "warn";
 export interface DoctorCheck {
   id: string;
@@ -21,13 +28,23 @@ export interface DoctorCheck {
   message: string;
   remediation?: string;
 }
+export interface OpenRouterKeyStatus {
+  limit: number | null;
+  limitRemaining: number | null;
+  usage: number;
+  limitReset: string | null;
+  includeByokInLimit: boolean;
+}
 export interface DoctorResult {
   version: 1;
   ok: boolean;
   checks: DoctorCheck[];
+  linearIdentity?: LinearIdentity;
+  openRouterKey?: OpenRouterKeyStatus;
 }
 export interface DoctorOptions {
   json?: boolean;
+  agent?: boolean;
   target?: string;
   identity?: string;
   issue?: string;
@@ -50,6 +67,8 @@ export interface DoctorOptions {
   resolveModelIds?: () => Promise<Set<string>>;
   loadConfig?: typeof loadMaquilaConfig;
   fetchLinearIssue?: (options: { token: string; issue: string }) => Promise<LinearSnapshot>;
+  fetchLinearIdentity?: (options: { token: string }) => Promise<LinearIdentity>;
+  fetchOpenRouterKey?: (options: { key: string }) => Promise<OpenRouterKeyStatus>;
   fetchGithubSnapshot?: (options: {
     token: string;
     owner: string;
@@ -96,6 +115,53 @@ async function resolveOpenRouterModelIds(): Promise<Set<string>> {
         : [],
     ),
   );
+}
+function finiteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+function parseOpenRouterKey(value: unknown): OpenRouterKeyStatus {
+  if (!value || typeof value !== "object" || !("data" in value)) throw new Error("invalid");
+  const data = value.data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("invalid");
+  const fields: Record<string, unknown> = Object.fromEntries(Object.entries(data));
+  const limit = fields.limit;
+  const remaining = fields.limit_remaining;
+  const reset = fields.limit_reset;
+  if (limit !== null && (!finiteNumber(limit) || limit < 0)) throw new Error("invalid");
+  if (remaining !== null && !finiteNumber(remaining)) throw new Error("invalid");
+  if ((limit === null) !== (remaining === null)) throw new Error("invalid");
+  if (limit !== null && remaining !== null && remaining > limit) throw new Error("invalid");
+  if (!finiteNumber(fields.usage) || fields.usage < 0) throw new Error("invalid");
+  if (reset !== null && reset !== "daily" && reset !== "weekly" && reset !== "monthly")
+    throw new Error("invalid");
+  if (typeof fields.include_byok_in_limit !== "boolean") throw new Error("invalid");
+  return {
+    limit,
+    limitRemaining: remaining,
+    usage: fields.usage,
+    limitReset: reset,
+    includeByokInLimit: fields.include_byok_in_limit,
+  };
+}
+export async function fetchOpenRouterKey(options: { key: string }): Promise<OpenRouterKeyStatus> {
+  if (!options.key.trim()) throw new Error("OpenRouter key unavailable");
+  let response: Response;
+  try {
+    response = await fetch("https://openrouter.ai/api/v1/key", {
+      headers: { Authorization: `Bearer ${options.key}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {
+    throw new Error("OpenRouter key request failed");
+  }
+  if (!response.ok) throw new Error("OpenRouter key request failed");
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    throw new Error("OpenRouter key response invalid");
+  }
+  return parseOpenRouterKey(body);
 }
 export function validateDoctorIssueOptions(
   options: Pick<DoctorOptions, "issue" | "requireLabel">,
@@ -162,6 +228,8 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
       ),
     );
   }
+  let linearIdentity: LinearIdentity | undefined;
+  let openRouterKey: OpenRouterKeyStatus | undefined;
   const [github, linear, openrouter] = await Promise.allSettled([
     resolveGithub(env),
     resolveLinear(env, config),
@@ -193,11 +261,9 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
     check(
       "linear",
       linear?.status === "fulfilled",
-      options.issue === undefined
-        ? "Linear credential resolves; no API access probe run"
-        : "Linear credential resolves; issue access is checked separately",
+      "Linear credential resolves",
       "Linear credential unavailable",
-      `export LINEAR_API_TOKEN or maquila setup --linear-token-reference op://Vault/Item/field\n${LINEAR_URL}\nhttps://developer.1password.com/docs/cli/get-started/`,
+      `run maquila setup to paste a Linear API key, or export LINEAR_API_TOKEN\noptional: maquila setup --linear-token-reference op://Vault/Item/field\n${LINEAR_URL}`,
     ),
   );
   if (options.issue !== undefined) {
@@ -217,9 +283,9 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
           eligible,
           options.requireLabel === undefined
             ? "Linear issue is assigned Todo; no work was started"
-            : "Linear issue is assigned Todo and has the required label; no work was started",
-          "Linear issue lacks the required label",
-          "add the exact required label to the intended issue, then repeat doctor",
+            : `Linear issue is assigned Todo and has the required "${options.requireLabel}" label; no work was started`,
+          `Linear issue lacks the required "${options.requireLabel ?? DEFAULT_REQUIRED_LABEL}" label`,
+          `add the exact required label to the intended issue, then repeat doctor`,
         ),
       );
     } catch {
@@ -234,15 +300,109 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
       );
     }
   }
+  if (linear.status === "fulfilled" && linear.value.trim()) {
+    try {
+      linearIdentity = await (options.fetchLinearIdentity ?? fetchLinearIdentity)({
+        token: linear.value,
+      });
+      checks.push(
+        check(
+          "workspace",
+          true,
+          `Linear user ${linearIdentity.user.name} in workspace ${linearIdentity.workspace.name} (${linearIdentity.workspace.urlKey})`,
+          "Linear workspace identity unavailable",
+        ),
+      );
+    } catch {
+      checks.push(
+        check(
+          "workspace",
+          false,
+          "",
+          "Linear workspace identity unavailable",
+          "check Linear credentials and repeat doctor",
+        ),
+      );
+    }
+  } else {
+    checks.push(
+      check(
+        "workspace",
+        false,
+        "",
+        "Linear workspace identity unavailable",
+        "run maquila setup to paste a Linear API key, or export LINEAR_API_TOKEN",
+      ),
+    );
+  }
   checks.push(
     check(
       "openrouter",
       openrouter?.status === "fulfilled",
-      "OpenRouter credential resolves; no authenticated request run",
+      "OpenRouter credential resolves",
       "OpenRouter credential unavailable",
-      `export OPENROUTER_API_KEY or maquila setup --openrouter-token-reference op://Vault/Item/field\n${OPENROUTER_URL}\nhttps://developer.1password.com/docs/cli/get-started/`,
+      `run maquila setup to paste an OpenRouter API key, or export OPENROUTER_API_KEY\noptional: maquila setup --openrouter-token-reference op://Vault/Item/field\n${OPENROUTER_URL}`,
     ),
   );
+  if (openrouter.status === "fulfilled" && openrouter.value.trim()) {
+    try {
+      openRouterKey = await (options.fetchOpenRouterKey ?? fetchOpenRouterKey)({
+        key: openrouter.value,
+      });
+      const exhausted =
+        openRouterKey.limit !== null &&
+        openRouterKey.limitRemaining !== null &&
+        openRouterKey.limitRemaining <= 0;
+      const unlimited = openRouterKey.limit === null;
+      const resetting = openRouterKey.limitReset !== null;
+      const byokExcluded = !openRouterKey.includeByokInLimit;
+      const cap = openRouterKey.limit === null ? "unlimited" : String(openRouterKey.limit);
+      const remaining =
+        openRouterKey.limitRemaining === null ? "unknown" : String(openRouterKey.limitRemaining);
+      const reset = openRouterKey.limitReset ?? "none";
+      const message = `OpenRouter limit ${cap}, remaining ${remaining}, reset ${reset}`;
+      if (exhausted)
+        checks.push(
+          check(
+            "credits",
+            false,
+            "",
+            `${message}; remaining credits are exhausted`,
+            "add credits on a dedicated capped OpenRouter key",
+          ),
+        );
+      else if (unlimited || resetting || byokExcluded) {
+        const reasons = [
+          unlimited ? "unlimited cap is not a spend lock" : undefined,
+          resetting ? "limit resets; remaining is not a fixed lock" : undefined,
+          byokExcluded ? "BYOK usage is excluded from this limit" : undefined,
+        ].filter((item): item is string => Boolean(item));
+        checks.push(
+          check("credits", false, "", `${message}; ${reasons.join("; ")}`, undefined, true),
+        );
+      } else checks.push(check("credits", true, message, "OpenRouter key limits unavailable"));
+    } catch {
+      checks.push(
+        check(
+          "credits",
+          false,
+          "",
+          "OpenRouter key limits unavailable",
+          "check OPENROUTER_API_KEY and repeat doctor",
+        ),
+      );
+    }
+  } else {
+    checks.push(
+      check(
+        "credits",
+        false,
+        "",
+        "OpenRouter key limits unavailable",
+        "run maquila setup to paste an OpenRouter API key, or export OPENROUTER_API_KEY",
+      ),
+    );
+  }
   try {
     const available = await (options.resolveModelIds ?? resolveOpenRouterModelIds)();
     const missing = [
@@ -322,8 +482,11 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
     version: 1,
     ok: checks.every((item) => item.status !== "fail"),
     checks,
+    ...(linearIdentity ? { linearIdentity } : {}),
+    ...(openRouterKey ? { openRouterKey } : {}),
   };
   if (options.json) write(`${JSON.stringify(result)}\n`);
+  else if (isAgentMode(options.agent, env)) write(renderAgentProgress(result));
   else
     for (const item of checks)
       write(

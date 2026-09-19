@@ -8,6 +8,7 @@ import { agentExitCode, HELP, main, parseCli } from "../src/cli/index.js";
 import { MAX_TIMEOUT_SECONDS } from "../src/workflows/plan.js";
 
 test("setup and doctor accept target and absolute identity", () => {
+  assert.deepEqual(parseCli(["setup"]), { command: "setup", target: process.cwd() });
   assert.deepEqual(parseCli(["setup", "--target", "/tmp/repo", "--identity", "/tmp/key"]), {
     command: "setup",
     target: "/tmp/repo",
@@ -34,6 +35,23 @@ test("setup and doctor parse exact readiness label only with one issue", () => {
     ]),
     { command: "doctor", target: "/tmp/repo", issue: "RIFF-1", requireLabel: "maquila-ready" },
   );
+  assert.deepEqual(parseCli(["doctor", "--issue", "RIFF-1"]), {
+    command: "doctor",
+    target: process.cwd(),
+    issue: "RIFF-1",
+    requireLabel: "maquila-ready",
+  });
+  assert.deepEqual(parseCli(["doctor", "--issue", "RIFF-1", "--require-label", ""]), {
+    command: "doctor",
+    target: process.cwd(),
+    issue: "RIFF-1",
+  });
+  assert.deepEqual(parseCli(["doctor", "--issue", "RIFF-1", "--require-label", "other"]), {
+    command: "doctor",
+    target: process.cwd(),
+    issue: "RIFF-1",
+    requireLabel: "other",
+  });
   assert.throws(() => parseCli(["setup", "--issue", "RIFF-1"]), /unsupported/);
   assert.throws(() => parseCli(["doctor", "--require-label", "maquila-ready"]), /requires --issue/);
   assert.throws(
@@ -522,10 +540,12 @@ test("agent definitions fail closed on schema and access violations", () => {
 test("doctor rejects blank, oversized, and control-containing preflight options", () => {
   for (const value of ["", " ", "RIFF-1\n", "RIFF-1\0", "a".repeat(129)]) {
     assert.throws(() => parseCli(["doctor", "--issue", value]), /--issue/);
-    assert.throws(
-      () => parseCli(["doctor", "--issue", "RIFF-1", "--require-label", value]),
-      /--require-label/,
-    );
+    // Empty --require-label skips the label check; other blanks are rejected.
+    if (value !== "")
+      assert.throws(
+        () => parseCli(["doctor", "--issue", "RIFF-1", "--require-label", value]),
+        /--require-label/,
+      );
   }
   assert.throws(() => parseCli(["setup", "--require-label", "maquila-ready"]), /unsupported/);
 });

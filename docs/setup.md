@@ -1,13 +1,26 @@
 # Setup and credentials
 
-Install the package first; see [README](../README.md). Setup is read-only except for the XDG config and optional managed skill installation. It never logs in to vendors, accepts raw keys, changes SSH configuration, or creates a VM. Use a trusted, non-sensitive target repository.
+Install the package first; see [README](../README.md). Setup is read-only except for the XDG config and optional managed skill installation. It never logs in to vendors, changes SSH configuration, or creates a VM. Human TTY setup can paste Linear and OpenRouter API keys into a hidden prompt; agents and `--json` never receive those keys. Use a trusted, non-sensitive target repository.
 
 ```bash
-maquila setup --target /absolute/path/to/project --install-skill
-maquila doctor --target /absolute/path/to/project --json
+cd /absolute/path/to/project
+maquila setup --install-skill
+maquila doctor --json
 ```
 
-Use `--json` for non-interactive agent setup. Store credentials in the host environment or supported `op://` references, not in an issue, SDK request, or prompt. Environment credentials take precedence over saved references.
+Commands target the current directory; pass `--target PATH` only to aim elsewhere.
+
+To set up from zero — counting a credential only after you choose it in this walkthrough — run:
+
+```bash
+maquila setup --from-scratch
+```
+
+It visits GitHub, Linear, OpenRouter, exe.dev SSH, and the Pi skill one at a time. Saved config is not used unless you choose a station. Skipped stations keep setup incomplete even if this process still has leftover environment variables. Linear and OpenRouter default to a hidden API-key paste. Environment variables remain valid. 1Password `op://` references are optional, validated without environment tokens shadowing them, and merged into existing config on save. Declining to save leaves setup incomplete. Confirmed keys are stored unencrypted in owner-only host config, never under the target repository; an `XDG_CONFIG_HOME` inside the target fails closed. Exporting `GITHUB_TOKEN`, `LINEAR_API_TOKEN`, `OPENROUTER_API_KEY`, or `MAQUILA_EXE_IDENTITY` in another shell cannot change this process; restart setup after export. `gh auth login` and `op` persist and can be rechecked without restart. There is no raw-key CLI flag. Plain stdlib prompts, no prompt-framework dependency.
+
+On a TTY, setup runs a step-by-step wizard even with `--install-skill`. Pass `--json`, `--agent`, or credential reference flags for a single-run non-interactive path.
+
+Use `--agent` for progressive agent setup: the same checks render as markdown with `Resolved` and `Pending` sections, each pending check carrying its fix and a machine-readable `{check, status, via}` block. It accepts partial values across calls and never prompts for secrets. `--agent` cannot be combined with `--json`. Agent mode also auto-activates when a known agent environment is detected (explicit `--agent` wins). Store credentials in host config, the host environment, or optional `op://` references, not in an issue, SDK request, or prompt. Environment credentials take precedence over saved keys and references.
 
 ## Credential details
 
@@ -33,7 +46,7 @@ Create keys at https://openrouter.ai/settings/keys. Export a key for local comma
 export OPENROUTER_API_KEY=...
 ```
 
-Or store only a 1Password reference in Maquila config:
+Or paste it during `maquila setup`. Optional 1Password:
 
 ```bash
 maquila setup --openrouter-token-reference op://Vault/OpenRouter/api-key
@@ -43,21 +56,19 @@ Use a dedicated key with a spend/request cap. During `maquila run`, controller w
 
 ### Linear
 
-Create keys at https://linear.app/settings/api. Choose one option.
-
-### Shell or CI
+Create keys at https://linear.app/settings/api. On a TTY, `maquila setup` can paste the key into a hidden prompt. For shell or CI:
 
 ```bash
 export LINEAR_API_TOKEN=...
 ```
 
-### 1Password
+Optional 1Password:
 
 ```bash
 maquila setup --linear-token-reference op://Vault/Linear/token
 ```
 
-Maquila stores only the `op://` reference, never the Linear key. Config lives at `$XDG_CONFIG_HOME/maquila/config.json` or `~/.config/maquila/config.json` with mode `0600`.
+Config lives at `$XDG_CONFIG_HOME/maquila/config.json` or `~/.config/maquila/config.json` with directory mode `0700` and file mode `0600`. Saved API keys are unencrypted; other processes running as the same user can read them. Never commit this file.
 
 ### exe.dev
 
@@ -122,16 +133,15 @@ See exe.dev's official SSH key setup: https://exe.dev/docs/cli-ssh-key
 
 ## What readiness means
 
-Generic setup/doctor check the GitHub target/base with an authenticated read, list exe.dev VMs, resolve Linear and OpenRouter credentials, and look up configured models in the anonymous OpenRouter catalog. They do not prove Linear issue access, GitHub write permission, model credits, or successful VM execution.
+Generic setup/doctor check the GitHub target/base with an authenticated read, list exe.dev VMs, resolve Linear and OpenRouter credentials, read Linear viewer/workspace identity (no email), read OpenRouter key limit metadata, and look up configured models in the anonymous OpenRouter catalog. They do not prove Linear issue access unless `--issue` is passed, GitHub write permission, a specific dollar spend cap, exe.dev billing, or successful VM execution. An unlimited, resetting, or BYOK-excluded OpenRouter limit is a warning, not a fixed spending lock. Setup and doctor JSON expose `linearIdentity` and `openRouterKey` metadata without key labels, hashes, or raw credentials. An exhausted key fails readiness; remaining key allowance does not prove the account has enough funded credits. See [OpenRouter credit limits](https://openrouter.ai/docs/api/reference/limits).
 
 To check a specific issue:
 
 ```bash
-maquila doctor --target /absolute/path/to/project \
-  --issue "<ISSUE-ID>" --require-label maquila-ready --json
+maquila doctor --issue "<ISSUE-ID>" --json
 ```
 
-The issue must be accessible, assigned, and exactly `Todo`. Labels are case-sensitive. `--require-label` requires `--issue`. Stop on nonzero exit or JSON `ok: false`. Preflight is a point-in-time check, not an issue reservation or automatic trigger gate.
+The issue must be accessible, assigned, exactly `Todo`, and carry the `maquila-ready` label. Labels are case-sensitive. `--require-label LABEL` overrides the default label; `--require-label ""` skips the label check. `--require-label` requires `--issue`. Stop on nonzero exit or JSON `ok: false`. Preflight is a point-in-time check, not an issue reservation or automatic trigger gate.
 
 ## Repeatable skill installation
 
