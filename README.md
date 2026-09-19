@@ -8,7 +8,7 @@ The package is **`@santychuy/maquila`**. The command is **`maquila`**. License: 
 
 ## Install
 
-The installed CLI runs on **Node.js >=22.19.0**. You also need Git, OpenSSH, access to the target GitHub repository, Linear, exe.dev, and a dedicated capped OpenRouter key. GitHub CLI (`gh`) is convenient but optional when `GITHUB_TOKEN` is supplied. Bun is needed to build Maquila from source, not to run the installed JavaScript CLI.
+The installed CLI runs on **Node.js >=22.19.0**. You also need Git, OpenSSH, access to the target GitHub repository, Linear, exe.dev, and a dedicated capped OpenRouter key. GitHub CLI (`gh`) is optional with `GITHUB_TOKEN` for non-visual work; UI runs require `gh pr edit --help` to list `--attach`. Bun is needed to build Maquila from source, not to run the installed JavaScript CLI.
 
 Before the first registry release, install a maintainer-built tarball with npm or bun:
 
@@ -54,7 +54,7 @@ maquila run start --issue "<ISSUE-ID>" --json
 maquila run status --run-id "<RUN-ID>" --json
 ```
 
-Start returns an accepted run ID, not a completed result. The read-only dashboard shows progress, evidence, cleanup, and the PR URL. You can close the initiating terminal after detached startup, but the local host must stay running.
+Start returns an accepted run ID, not a completed result. The read-only dashboard shows progress, evidence, cleanup, and the PR URL. Planner-classified web UI work must produce at least two validated screenshots in VM; short video is best effort. Host controller attaches visuals to PR body before marking draft ready. You can close the initiating terminal after detached startup, but the local host must stay running.
 
 If planning needs a decision, Maquila pauses and posts a numbered Linear thread for the issue's pinned assignee. That assignee replies with the `Decision:` template. The controller can resume the same planner session. Waits expire after 24 hours; there is no reboot-time service that automatically restarts polling.
 

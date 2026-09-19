@@ -34,6 +34,10 @@ Only one recipe exists. `plan` runs first. Accepted plan produces manifest. Seri
 5. **review** — fresh read-only reviewer receives accepted plan, staged patch, and deterministic verification result.
 6. **publish** — controller verifies harvested evidence and patch binding, destroys VM, applies patch against pinned base in temporary clone, then creates bot commit, branch, and ready-for-review PR.
 
+Planner classifies user-visible web work through `visualEvidence`; conservative approved web-file extensions also require capture, so planner cannot waive obvious UI evidence. For classified UI work, controller installs pinned `agent-browser` and Chromium only after planning. Worker starts existing application on loopback, uses a domain-restricted browser session, and writes 2–10 required PNG screenshots plus best-effort 10–30 second video/contact sheet outside repository diff. Missing or invalid screenshots fail implementation; missing video requires an explicit reason. Reviewer receives validated screenshots/contact sheet with patch and verification.
+
+Controller validates basenames, loopback URL, media signatures, count/size limits, SHA-256 hashes, and successful-attempt ownership before harvest. Host publication creates a draft PR, attaches screenshots to PR body through `gh`, optionally attaches video, then marks PR ready. Screenshot attachment failure leaves PR draft and fails run; video attachment failure is a recorded warning. GitHub credentials never enter VM.
+
 `verify` is a block with deterministic evidence, not an agent session. Its execution entry uses primary role run ID: worker run for mixed work, documenter run for docs-only work. No synthetic verifier run exists.
 
 A structured `model_request_failed` result during the post-plan lifecycle is the narrow exception to serial stop behavior. The controller preserves that attempt's remote evidence, destroys the VM, waits with bounded backoff, creates a replacement VM at the same pinned base SHA, restores the accepted planner evidence and manifest, and retries the complete post-plan lifecycle under the same controller run ID. It allows at most three total lifecycle attempts. Attempt number is persisted in controller state and telemetry.
@@ -52,6 +56,7 @@ A Run is one accepted issue's lifecycle, from intake through cleanup and publica
 | Execution schema, run links, manifest and patch hashes  | `src/workflows/execution.ts`  |
 | Serial block execution and local compatibility fallback | `src/workflows/worker.ts`     |
 | Run evidence archive safety and harvest validation      | `src/runs/evidence.ts`        |
+| UI classification and media validation                  | `src/ui-evidence.ts`          |
 | Batch coordination state and persistence                | `src/runs/batch-state.ts`     |
 | Batch serial dispatch and detached startup              | `src/run-batch.ts`            |
 | Host orchestration, remote sequence checks, publication | `src/controller.ts`           |
@@ -77,9 +82,9 @@ Controller run lives at `.maquila/controllers/<run-id>/`. Agent run evidence rem
 | Remote frames             |       protocol 2 | Gap-free sequence plus required step ID, actor, and phase identity                                                                                                      |
 | Host telemetry JSONL      | record version 1 | Gap-free host sequence; step-tagged phases validate matching step, actor, and phase                                                                                     |
 
-Primary run also holds `verification.json`, `review-diff.sha256`, `lifecycle.json`, and `workflow-execution.json`. During harvest, Run evidence code checks expected run set, receipts, envelopes, path ownership, verification, reviewer verdict, base SHA, and reviewed patch. `evidence-manifest.json` hashes harvested remote evidence files. Before a transient retry destroys its VM, the controller stores `workflow-attempt-<n>-evidence.tar` after size, secret, path, and archive-member checks. Final acceptance still uses only the successful attempt's exact run set.
+Primary run also holds `verification.json`, `review-diff.sha256`, `lifecycle.json`, and `workflow-execution.json`. UI runs additionally hold `ui-evidence.json`, required screenshots, and optional video/contact sheet; copied controller artifacts keep the same safe basenames. During harvest, Run evidence code checks expected run set, receipts, envelopes, path ownership, verification, reviewer verdict, base SHA, reviewed patch, and any controller-required UI evidence. `evidence-manifest.json` hashes harvested remote evidence files. Before a transient retry destroys its VM, the controller stores `workflow-attempt-<n>-evidence.tar` after size, secret, path, and archive-member checks. Final acceptance still uses only the successful attempt's exact run set.
 
-Hashes prove internal consistency among captured values. VM evidence is not authentic against a compromised VM: VM processes have OS-level access and could forge internally consistent evidence. Use trusted, non-sensitive repositories.
+Hashes prove internal consistency among captured values. VM evidence is not authentic against a compromised VM: VM processes have OS-level access and could forge internally consistent evidence. Browser capture is restricted to loopback domains, but screenshots and video cannot be deterministically proven free of visible secrets; worker and reviewer must inspect them. Use trusted, non-sensitive repositories.
 
 ## Controller, protocol, and observer
 

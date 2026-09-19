@@ -48,6 +48,11 @@ export interface MaquilaPublication {
   url: string;
   branch: string;
   commitSha: string;
+  visualEvidence?: {
+    screenshots: number;
+    video: "attached" | "skipped" | "failed";
+    warning?: string;
+  };
 }
 export interface MaquilaDryRun {
   mode: "dry-run";

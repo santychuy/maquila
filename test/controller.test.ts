@@ -461,6 +461,41 @@ test("harvest validates evidence requirements", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+test("harvest rejects required UI evidence when screenshots are missing", () => {
+  const root = mkdtempSync(join(tmpdir(), "maquila-controller-"));
+  try {
+    const archive = validArchive(root);
+    file(
+      root,
+      ids[0]!,
+      "envelope.json",
+      JSON.stringify({
+        summary: "Document architecture assessment",
+        evidence: ["RIFF-39 requests documentation"],
+        changes: [
+          { path: "src/a.ts", action: "add", rationale: "Implement assessment" },
+          { path: "docs/a.md", action: "add", rationale: "Document assessment" },
+        ],
+        verification: ["Run bun run check"],
+        risks: [],
+        decisionsNeeded: [],
+        visualEvidence: { required: true, reason: "User-visible UI changes" },
+      }),
+    );
+    execFileSync("tar", ["-cf", archive, "-C", root, ".maquila/runs"]);
+    assert.throws(
+      () =>
+        harvest(archive, join(root, "out"), {
+          ...HARVEST_EXPECTED,
+          uiEvidenceRequired: true,
+        }),
+      /required remote evidence missing/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("harvest accepts docs-only evidence without a worker receipt", () => {
   const root = mkdtempSync(join(tmpdir(), "maquila-controller-"));
   try {

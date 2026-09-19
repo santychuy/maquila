@@ -1,8 +1,16 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { externalCommandEnvironment } from "./exe.js";
 
@@ -33,11 +41,23 @@ export interface GitHubPublication {
   url: string;
   branch: string;
   commitSha: string;
+  visualEvidence?: {
+    screenshots: number;
+    video: "attached" | "skipped" | "failed";
+    warning?: string;
+  };
+}
+
+export interface GitHubVisualEvidence {
+  summary: string;
+  screenshots: Array<{ path: string; alt: string }>;
+  video?: string;
 }
 
 export interface GitHubPublicationOptions {
   fetch?: typeof globalThis.fetch;
   runGit?: (args: string[], cwd: string, env: NodeJS.ProcessEnv) => Promise<string>;
+  runGh?: (args: string[], cwd: string, env: NodeJS.ProcessEnv) => Promise<string>;
   token: string;
   owner: string;
   repo: string;
@@ -50,6 +70,7 @@ export interface GitHubPublicationOptions {
   issueUrl: string;
   patchPath: string;
   patchSha256: string;
+  visualEvidence?: GitHubVisualEvidence;
 }
 
 export interface GitHubPublicationDryRun {
@@ -109,6 +130,52 @@ async function runGit(args: string[], cwd: string, env: NodeJS.ProcessEnv): Prom
   } catch {
     throw new Error("GitHub publication Git command failed");
   }
+}
+
+async function runGh(args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<string> {
+  try {
+    return (
+      await execFileAsync("gh", args, {
+        cwd,
+        env,
+        encoding: "utf8",
+        maxBuffer: 2 * 1024 * 1024,
+      })
+    ).stdout;
+  } catch {
+    throw new Error("GitHub visual evidence attachment failed");
+  }
+}
+
+function visualEvidence(value: GitHubVisualEvidence | undefined): GitHubVisualEvidence | undefined {
+  if (!value) return undefined;
+  const summary = text(value.summary, "visual evidence summary");
+  if (summary.length > 500 || /[\r\n\0]/.test(summary))
+    throw new Error("invalid visual evidence summary");
+  if (value.screenshots.length < 2 || value.screenshots.length > 10)
+    throw new Error("visual evidence requires 2-10 screenshots");
+  const screenshots = value.screenshots.map((item) => {
+    const path = resolve(text(item.path, "visual evidence screenshot"));
+    const alt = text(item.alt, "visual evidence alt text");
+    if (
+      !/^ui-[a-z0-9][a-z0-9-]{0,80}\.png$/.test(basename(path)) ||
+      alt.length > 125 ||
+      /[\r\n\0#]/.test(alt)
+    )
+      throw new Error("invalid visual evidence screenshot");
+    if (!existsSync(path) || !statSync(path).isFile())
+      throw new Error("visual evidence screenshot is missing");
+    return { path, alt };
+  });
+  const video = value.video ? resolve(text(value.video, "visual evidence video")) : undefined;
+  if (
+    video &&
+    (!/^ui-[a-z0-9][a-z0-9-]{0,80}\.(?:mp4|webm)$/.test(basename(video)) ||
+      !existsSync(video) ||
+      !statSync(video).isFile())
+  )
+    throw new Error("invalid visual evidence video");
+  return { summary, screenshots, ...(video ? { video } : {}) };
 }
 
 async function request(
@@ -218,6 +285,7 @@ function publication(
   owner: string,
   repo: string,
   branch: string,
+  allowDraft = false,
 ): GitHubPublication {
   const pull = record(value, "GitHub pull request");
   const number = pull.number;
@@ -229,7 +297,8 @@ function publication(
     number < 1 ||
     url !== `https://github.com/${owner}/${repo}/pull/${number}` ||
     pull.state !== "open" ||
-    pull.draft !== false ||
+    typeof pull.draft !== "boolean" ||
+    (!allowDraft && pull.draft) ||
     typeof head.sha !== "string" ||
     !/^[0-9a-f]{40}$/i.test(head.sha)
   ) {
@@ -257,6 +326,7 @@ function validateGitHubPublication(options: GitHubPublicationOptions) {
   }
   const patchPath = resolve(text(options.patchPath, "patchPath"));
   const patchSha256 = text(options.patchSha256, "patchSha256");
+  const evidence = visualEvidence(options.visualEvidence);
   if (
     !/^[A-Za-z0-9_.-]+$/.test(owner) ||
     !/^[A-Za-z0-9_.-]+$/.test(repo) ||
@@ -284,8 +354,109 @@ function validateGitHubPublication(options: GitHubPublicationOptions) {
     issueUrl,
     patchPath,
     patchSha256,
+    visualEvidence: evidence,
     branch: `maquila/${issueIdentifier.toLowerCase()}-${idempotencyKey.slice(0, 12)}`,
   };
+}
+
+async function attachVisualEvidence(input: {
+  pullRequest: GitHubPublication;
+  pullBody: string;
+  evidence: GitHubVisualEvidence;
+  directory: string;
+  env: NodeJS.ProcessEnv;
+  runner: (args: string[], cwd: string, env: NodeJS.ProcessEnv) => Promise<string>;
+  draft: boolean;
+}): Promise<GitHubPublication["visualEvidence"]> {
+  const digest = createHash("sha256");
+  digest.update(input.evidence.summary);
+  for (const item of input.evidence.screenshots) {
+    digest.update(item.alt);
+    digest.update(readFileSync(item.path));
+  }
+  if (input.evidence.video) digest.update(readFileSync(input.evidence.video));
+  const id = digest.digest("hex");
+  const screenshotMarker = `<!-- maquila-ui-evidence:${id}:screenshots -->`;
+  const videoMarker = `<!-- maquila-ui-evidence:${id}:video -->`;
+  let body = input.pullBody;
+  if (!body.includes(screenshotMarker)) {
+    body = [
+      body.trimEnd(),
+      "",
+      "## UI evidence",
+      "",
+      input.evidence.summary,
+      "",
+      ...input.evidence.screenshots.map(
+        (item) => `![${item.alt.replaceAll(/[[\]]/g, "")}](${basename(item.path)})`,
+      ),
+      "",
+      screenshotMarker,
+    ].join("\n");
+    const bodyPath = join(input.directory, "pr-body-ui.md");
+    writeFileSync(bodyPath, `${body.trim()}\n`, { mode: 0o600 });
+    await input.runner(
+      [
+        "pr",
+        "edit",
+        input.pullRequest.url,
+        "--body-file",
+        bodyPath,
+        ...input.evidence.screenshots.flatMap((item) => ["--attach", `${item.path}#${item.alt}`]),
+      ],
+      input.directory,
+      input.env,
+    );
+  }
+  let result: NonNullable<GitHubPublication["visualEvidence"]> = {
+    screenshots: input.evidence.screenshots.length,
+    video: "skipped",
+  };
+  if (input.evidence.video && body.includes(videoMarker)) result.video = "attached";
+  else if (input.evidence.video)
+    try {
+      body = await input.runner(
+        ["pr", "view", input.pullRequest.url, "--json", "body", "--jq", ".body"],
+        input.directory,
+        input.env,
+      );
+      const bodyPath = join(input.directory, "pr-body-video.md");
+      writeFileSync(
+        bodyPath,
+        `${body.trimEnd()}\n\n### Interaction recording\n\n[View recording](${basename(input.evidence.video)})\n\n${videoMarker}\n`,
+        { mode: 0o600 },
+      );
+      await input.runner(
+        [
+          "pr",
+          "edit",
+          input.pullRequest.url,
+          "--body-file",
+          bodyPath,
+          "--attach",
+          input.evidence.video,
+        ],
+        input.directory,
+        input.env,
+      );
+      result.video = "attached";
+    } catch {
+      result = {
+        screenshots: input.evidence.screenshots.length,
+        video: "failed",
+        warning: "video attachment failed",
+      };
+    }
+  if (input.draft) {
+    await input.runner(["pr", "ready", input.pullRequest.url], input.directory, input.env);
+    const isDraft = await input.runner(
+      ["pr", "view", input.pullRequest.url, "--json", "isDraft", "--jq", ".isDraft"],
+      input.directory,
+      input.env,
+    );
+    if (isDraft.trim() !== "false") throw new Error("GitHub pull request remained draft");
+  }
+  return result;
 }
 
 export function createGitHubPublicationDryRun(
@@ -321,6 +492,7 @@ export async function publishGitHubPullRequest(
     issueUrl,
     patchPath,
     patchSha256,
+    visualEvidence: evidence,
     branch,
   } = validateGitHubPublication(options);
   const directory = mkdtempSync(join(tmpdir(), "maquila-publish-"));
@@ -338,13 +510,21 @@ export async function publishGitHubPullRequest(
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_TERMINAL_PROMPT: "0",
+    GH_TOKEN: token,
+    GH_PROMPT_DISABLED: "1",
   };
   const runner = options.runGit ?? runGit;
+  const ghRunner = options.runGh ?? runGh;
   const git = (args: string[]) =>
     runner(["-c", "core.hooksPath=/dev/null", ...args], directory, env);
   const fetcher = options.fetch ?? fetch;
 
   try {
+    if (evidence) {
+      await ghRunner(["--version"], directory, env);
+      const help = await ghRunner(["pr", "edit", "--help"], directory, env);
+      if (!help.includes("--attach")) throw new Error("GitHub CLI does not support attachments");
+    }
     await git(["init", "--quiet"]);
     await git(["remote", "add", "origin", `https://github.com/${owner}/${repo}.git`]);
     await git(["fetch", "--quiet", "--no-tags", "--depth=1", "origin", `refs/heads/${baseRef}`]);
@@ -415,10 +595,21 @@ export async function publishGitHubPullRequest(
     if (!Array.isArray(existing)) throw new Error("GitHub pull request list is malformed");
     if (existing.length > 1) throw new Error("multiple GitHub pull requests match publication");
     if (existing.length === 1) {
-      const result = publication(existing[0], owner, repo, branch);
+      const pull = record(existing[0], "GitHub pull request");
+      const result = publication(pull, owner, repo, branch, Boolean(evidence));
       if (result.commitSha !== commitSha)
         throw new Error("GitHub pull request has unexpected content");
-      return result;
+      if (!evidence) return result;
+      const attached = await attachVisualEvidence({
+        pullRequest: result,
+        pullBody: typeof pull.body === "string" ? pull.body : "",
+        evidence,
+        directory,
+        env,
+        runner: ghRunner,
+        draft: pull.draft === true,
+      });
+      return { ...result, visualEvidence: attached };
     }
 
     const createResponse = await request(
@@ -431,7 +622,7 @@ export async function publishGitHubPullRequest(
           title: `[${issueIdentifier}] ${issueTitle}`,
           head: branch,
           base: baseRef,
-          draft: false,
+          draft: Boolean(evidence),
           body: [
             `Automated proposal for [${issueIdentifier}](${issueUrl}).`,
             "",
@@ -446,15 +637,24 @@ export async function publishGitHubPullRequest(
     );
     if (createResponse.status !== 201)
       throw new Error(`GitHub publication failed (${createResponse.status})`);
-    const result = publication(
+    const created = record(
       await responseJson(createResponse, "GitHub pull request"),
-      owner,
-      repo,
-      branch,
+      "GitHub pull request",
     );
+    const result = publication(created, owner, repo, branch, Boolean(evidence));
     if (result.commitSha !== commitSha)
       throw new Error("GitHub pull request has unexpected content");
-    return result;
+    if (!evidence) return result;
+    const attached = await attachVisualEvidence({
+      pullRequest: result,
+      pullBody: typeof created.body === "string" ? created.body : "",
+      evidence,
+      directory,
+      env,
+      runner: ghRunner,
+      draft: created.draft === true,
+    });
+    return { ...result, visualEvidence: attached };
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

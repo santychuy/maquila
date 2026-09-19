@@ -28,6 +28,7 @@ export type {
   ExecutionVm,
   ProviderReference,
   PublicationDryRun,
+  PublicationVisualEvidence,
   ReviewedPatchPublicationRequest,
   SourceControlProvider,
   SourceControlPublication,

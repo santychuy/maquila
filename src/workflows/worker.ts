@@ -24,6 +24,12 @@ import { isRemoteToolName, type RemoteEventSink, type RemoteFailure } from "../r
 import { createRunArtifacts, type RunArtifacts } from "../run-artifacts.js";
 import { assertCleanBaseline, verifyRepository, type VerificationResult } from "../verify.js";
 import { workflowStep, type WorkflowStepId } from "../workflow-step.js";
+import {
+  planRequiresUiEvidence,
+  validateUiEvidenceManifest,
+  validateWorkerUiEvidence,
+  type UiEvidenceManifest,
+} from "../ui-evidence.js";
 
 const MAX_REVIEW_DIFF_BYTES = 1_000_000;
 
@@ -71,6 +77,7 @@ interface BlockState {
   worker?: AgentRunResult;
   documenter?: AgentRunResult;
   verification?: VerificationResult;
+  uiEvidence?: UiEvidenceManifest;
 }
 
 type BlockOutcome =
@@ -189,20 +196,34 @@ function phaseEvent(
   else sink?.({ type, actor, phase, stepId, status: status!, sourceAt });
 }
 
-function promptIssue(issue: string, plan: PlannerEnvelope): string {
+function promptIssue(
+  issue: string,
+  plan: PlannerEnvelope,
+  uiEvidenceRequired: boolean,
+  runDirectory: string,
+): string {
   const changes = plan.changes.filter((change) => !isDocumentationPath(change.path));
-  return `Issue:\n${issue}\n\nAccepted non-documentation plan:\n${JSON.stringify({ ...plan, changes }, null, 2)}\nImplement plan. Do not modify docs/. Submit worker envelope.`;
+  const evidence = uiEvidenceRequired
+    ? `\n\nUI evidence is required because approved paths contain user-visible web files. After implementation and focused checks:\n- infer the repository's existing development command; do not add dependencies or configuration only for capture\n- start the application on a loopback HTTP address and wait until ready\n- use agent-browser with one named session and --allowed-domains localhost,127.0.0.1\n- save 2-10 meaningful PNG screenshots as ui-<description>.png in ${runDirectory}\n- best effort: record a 10-30 second ui-demo.webm with --cursor --contact-sheet; the generated contact sheet must also be in ${runDirectory}; use ffprobe to report videoDurationSeconds\n- never capture credentials, personal data, browser chrome, or unrelated pages\n- stop the agent-browser session and application process before submission\n- submit visualEvidence. Screenshots are mandatory. Video is optional only with a concrete videoSkippedReason. All paths must be basenames.`
+    : "\n\nUI evidence is not required for these approved paths. Omit visualEvidence.";
+  return `Issue:\n${issue}\n\nAccepted non-documentation plan:\n${JSON.stringify({ ...plan, changes }, null, 2)}\nImplement plan. Do not modify docs/.${evidence}\nSubmit worker envelope.`;
 }
 
 async function runImplementBlock(context: BlockContext, state: BlockState): Promise<BlockOutcome> {
   phaseEvent(context.onEvent, "phase_started", "implement");
+  const uiEvidenceRequired = planRequiresUiEvidence(context.plan, context.implementPaths);
   let worker: AgentRunResult;
   try {
     worker = await context.run({
       agent: loadAgent("worker"),
       cwd: context.repo,
       timeoutSeconds: context.timeoutSeconds,
-      prompt: promptIssue(context.issue, context.plan),
+      prompt: promptIssue(
+        context.issue,
+        context.plan,
+        uiEvidenceRequired,
+        context.workerArtifacts.runDir,
+      ),
       artifacts: context.workerArtifacts,
       envelopeRole: "worker",
       receiptContext: { baseSha: context.baseSha },
@@ -262,8 +283,43 @@ async function runImplementBlock(context: BlockContext, state: BlockState): Prom
       },
     };
   }
+  let uiEvidence: UiEvidenceManifest | undefined;
+  try {
+    if (!("implemented" in worker.envelope)) throw new Error("worker envelope is missing");
+    uiEvidence = validateWorkerUiEvidence(
+      worker.envelope,
+      context.workerArtifacts.runDir,
+      uiEvidenceRequired,
+      true,
+    );
+    if (uiEvidence) {
+      context.workerArtifacts.writeJson("ui-evidence.json", uiEvidence);
+      addArtifact(context.workerArtifacts, "ui-evidence.json");
+      for (const name of [
+        ...uiEvidence.screenshots.map((item) => item.name),
+        uiEvidence.video?.name,
+        uiEvidence.contactSheet?.name,
+      ])
+        if (name) addArtifact(context.workerArtifacts, name);
+    }
+  } catch (error) {
+    phaseEvent(context.onEvent, "phase_finished", "implement", "failed");
+    writeLifecycle(context.workerArtifacts, {
+      status: "failed",
+      stage: "ui_evidence",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return {
+      status: "stop",
+      result: {
+        status: "failed",
+        runDir: worker.runDir,
+        failure: { phase: "implementing", code: "agent_failed" },
+      },
+    };
+  }
   phaseEvent(context.onEvent, "phase_finished", "implement", "completed");
-  return { status: "continue", state: { ...state, worker } };
+  return { status: "continue", state: { ...state, worker, uiEvidence } };
 }
 
 async function runDocumentBlock(context: BlockContext, state: BlockState): Promise<BlockOutcome> {
@@ -398,6 +454,26 @@ async function runVerifyBlock(context: BlockContext, state: BlockState): Promise
       },
     };
   }
+  try {
+    if (state.uiEvidence)
+      validateUiEvidenceManifest(state.uiEvidence, context.workerArtifacts.runDir);
+  } catch (error) {
+    writeLifecycle(primaryArtifacts, {
+      status: "failed",
+      stage: "ui_evidence",
+      error: error instanceof Error ? error.message : String(error),
+      verification,
+    });
+    return {
+      status: "stop",
+      result: {
+        status: "failed",
+        runDir: worker?.runDir ?? documenter.runDir,
+        verification,
+        failure: { phase: "verifying", code: "verification_failed" },
+      },
+    };
+  }
   return { status: "continue", state: { ...state, verification } };
 }
 
@@ -436,7 +512,10 @@ async function runReviewBlock(context: BlockContext, state: BlockState): Promise
 
   const reviewerArtifacts = createRunArtifacts(context.issue, context.root);
   phaseEvent(context.onEvent, "phase_started", "review");
-  const reviewPrompt = `Issue:\n${context.issue}\n\nAccepted plan:\n${JSON.stringify(context.plan, null, 2)}\n\nGit diff:\n${patch}\n\nDeterministic verification:\n${JSON.stringify(verification, null, 2)}\nReview implementation. Submit reviewer envelope.`;
+  const uiReview = state.uiEvidence
+    ? `\n\nValidated UI evidence:\n${JSON.stringify(state.uiEvidence, null, 2)}\nOpen and inspect each screenshot and contact sheet from ${context.workerArtifacts.runDir}. Confirm they show the requested UI without visible secrets.`
+    : "";
+  const reviewPrompt = `Issue:\n${context.issue}\n\nAccepted plan:\n${JSON.stringify(context.plan, null, 2)}\n\nGit diff:\n${patch}\n\nDeterministic verification:\n${JSON.stringify(verification, null, 2)}${uiReview}\nReview implementation. Submit reviewer envelope.`;
   let reviewer: AgentRunResult;
   try {
     reviewer = await context.run({

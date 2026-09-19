@@ -85,6 +85,7 @@ import {
   type RemoteResultFrame,
 } from "./remote-protocol.js";
 import { workflowStep, type WorkflowStepDescriptor, type WorkflowStepId } from "./workflow-step.js";
+import { planRequiresUiEvidence, type UiEvidenceManifest } from "./ui-evidence.js";
 import {
   createTelemetryWriter,
   readTelemetry,
@@ -99,10 +100,12 @@ const REMOTE_WORK = "/home/exedev/work";
 const REMOTE_NODE = "/home/exedev/.local/node/bin/node";
 const REMOTE_NPM = "/home/exedev/.local/node/bin/npm";
 const REMOTE_BUN = "/home/exedev/.local/bun/bin/bun";
+const REMOTE_AGENT_BROWSER = "/home/exedev/.local/agent-browser/bin/agent-browser";
 const REMOTE_PATH =
-  "/home/exedev/.local/bun/bin:/home/exedev/.local/node/bin:/usr/local/bin:/usr/bin:/bin";
+  "/home/exedev/.local/agent-browser/bin:/home/exedev/.local/bun/bin:/home/exedev/.local/node/bin:/usr/local/bin:/usr/bin:/bin";
 const NODE_VERSION = "24.15.0";
 const BUN_VERSION = "1.3.14";
+const AGENT_BROWSER_VERSION = "0.38.1";
 const NODE_CHECKSUMS: Record<string, string> = {
   x64: "472655581fb851559730c48763e0c9d3bc25975c59d518003fc0849d3e4ba0f6",
   arm64: "f3d5a797b5d210ce8e2cb265544c8e482eaedcb8aa409a8b46da7e8595d0dda0",
@@ -517,6 +520,41 @@ async function waitForVm(
   }
 }
 
+async function installAgentBrowser(exe: ControllerExe, destination: string): Promise<void> {
+  await remote(
+    exe,
+    destination,
+    [
+      "env",
+      `PATH=${REMOTE_PATH}`,
+      REMOTE_NPM,
+      "install",
+      "--global",
+      "--prefix",
+      "/home/exedev/.local/agent-browser",
+      `agent-browser@${AGENT_BROWSER_VERSION}`,
+    ],
+    300_000,
+  );
+  await remote(
+    exe,
+    destination,
+    ["env", `PATH=${REMOTE_PATH}`, REMOTE_AGENT_BROWSER, "install", "--with-deps"],
+    600_000,
+  );
+  const version = (
+    await remote(
+      exe,
+      destination,
+      ["env", `PATH=${REMOTE_PATH}`, REMOTE_AGENT_BROWSER, "--version"],
+      30_000,
+    )
+  )
+    .trim()
+    .replace(/^agent-browser\s+/, "");
+  if (version !== AGENT_BROWSER_VERSION) throw new Error("unexpected agent-browser version");
+}
+
 async function bootstrapReplacementVm(input: {
   exe: ControllerExe;
   vm: { sshDest: string };
@@ -527,6 +565,7 @@ async function bootstrapReplacementVm(input: {
   requiredModels: string[];
   runDir: string;
   attempt: number;
+  uiEvidenceRequired: boolean;
   sleep: (milliseconds: number) => Promise<void>;
   onStage: (message: string) => void;
 }): Promise<void> {
@@ -617,6 +656,10 @@ async function bootstrapReplacementVm(input: {
   input.onStage("Bun verification failed during workflow recovery");
   const bunVersion = (await remote(exe, vm.sshDest, [REMOTE_BUN, "--version"], 30_000)).trim();
   if (bunVersion !== BUN_VERSION) throw new Error("unexpected Bun version");
+  if (input.uiEvidenceRequired) {
+    input.onStage("browser installation failed during workflow recovery");
+    await installAgentBrowser(exe, vm.sshDest);
+  }
   writeJson(resolve(input.runDir, `bootstrap-attempt-${input.attempt}.json`), {
     nodeVersion: NODE_VERSION,
     nodeArch,
@@ -1014,6 +1057,7 @@ export async function runController(options: ControllerOptions): Promise<Control
   let intakeSnapshot: ProviderIntake | undefined;
   let decisionRequest: ControllerDecisionRequest | undefined;
   let reviewedPatchSha256: string | undefined;
+  let uiEvidence: UiEvidenceManifest | undefined;
   let cleanupFailed = false;
   let cleanupOutcome: CleanupState = "not-needed";
   let stage = "recovery";
@@ -2366,6 +2410,23 @@ export async function runController(options: ControllerOptions): Promise<Control
         state = pinControllerWorkflowManifest(runDir, hash(localManifest));
       const remoteManifest = "/home/exedev/workflow-manifest.json";
       await exe.copyTo(vm.sshDest, localManifest, remoteManifest);
+      const uiEvidenceRequired = planRequiresUiEvidence(
+        parsedPlan.envelope,
+        workflowManifest.allowedPaths,
+      );
+      if (uiEvidenceRequired) {
+        publicFailureMessage = "browser installation failed";
+        await remote(exe, vm.sshDest, ["rm", "-f", "/home/exedev/.pi/agent/models.json"], 30_000);
+        await installAgentBrowser(exe, vm.sshDest);
+        publicFailureMessage = "model credential restoration failed";
+        await exe.copyTo(vm.sshDest, models, "/home/exedev/.pi/agent/models.json");
+        await remote(
+          exe,
+          vm.sshDest,
+          ["chmod", "600", "/home/exedev/.pi/agent/models.json"],
+          30_000,
+        );
+      }
       const expectedWorkerSteps = featurePrRemoteStepsFromManifest(workflowManifest.steps);
       const sleep =
         options.sleep ??
@@ -2469,6 +2530,7 @@ export async function runController(options: ControllerOptions): Promise<Control
           requiredModels,
           runDir,
           attempt: workflowAttempt + 1,
+          uiEvidenceRequired,
           sleep,
           onStage(message) {
             publicFailureMessage = message;
@@ -2545,10 +2607,23 @@ export async function runController(options: ControllerOptions): Promise<Control
         [options.openRouterKey],
         "evidence archive",
       );
-      harvest(resolve(runDir, "evidence.tar"), runDir, {
+      uiEvidence = harvest(resolve(runDir, "evidence.tar"), runDir, {
         manifest: workflowManifest,
         execution: remoteExecution,
+        uiEvidenceRequired,
       });
+      if (uiEvidence) {
+        for (const artifact of [
+          ...uiEvidence.screenshots,
+          ...(uiEvidence.video ? [uiEvidence.video] : []),
+          ...(uiEvidence.contactSheet ? [uiEvidence.contactSheet] : []),
+        ])
+          emit({
+            type: "artifact_available",
+            actor: "controller",
+            payload: { name: artifact.name, size: artifact.size, sha256: artifact.sha256 },
+          });
+      }
       emit({
         type: "artifact_available",
         actor: "controller",
@@ -2826,6 +2901,18 @@ export async function runController(options: ControllerOptions): Promise<Control
           issueUrl: intakeSnapshot.workItem.url,
           patchPath: resolve(runDir, "change.patch"),
           patchSha256: reviewedPatchSha256,
+          ...(uiEvidence
+            ? {
+                visualEvidence: {
+                  summary: uiEvidence.summary,
+                  screenshots: uiEvidence.screenshots.map((item) => ({
+                    path: resolve(runDir, item.name),
+                    alt: item.alt,
+                  })),
+                  ...(uiEvidence.video ? { video: resolve(runDir, uiEvidence.video.name) } : {}),
+                },
+              }
+            : {}),
         };
         let pullRequest: GitHubPublication | undefined;
         let publicationDryRun: GitHubPublicationDryRun | undefined;
@@ -2854,6 +2941,11 @@ export async function runController(options: ControllerOptions): Promise<Control
                 publicationInput,
               )
             : await (options.publish ?? publishGitHubPullRequest)(publicationInput);
+          if (
+            uiEvidence &&
+            pullRequest.visualEvidence?.screenshots !== uiEvidence.screenshots.length
+          )
+            throw new Error("publication did not attach required UI screenshots");
           const publicationPath = resolve(runDir, "publication.json");
           writeJson(publicationPath, pullRequest);
           emit({

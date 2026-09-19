@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import {
   createGitHubPublicationDryRun,
@@ -555,6 +558,137 @@ test("GitHub publication pushes one deterministic branch and opens a ready PR", 
   const body = JSON.parse(requestBody) as Record<string, unknown>;
   assert.equal(body.draft, false);
   assert.equal(body.head, result.branch);
+});
+
+test("GitHub publication attaches required screenshots and best-effort video", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "maquila-ui-publication-"));
+  try {
+    const baseSha = "a".repeat(40);
+    const commitSha = "c".repeat(40);
+    const screenshotA = join(directory, "ui-default.png");
+    const screenshotB = join(directory, "ui-active.png");
+    const video = join(directory, "ui-demo.webm");
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    writeFileSync(screenshotA, png);
+    writeFileSync(screenshotB, png);
+    writeFileSync(video, Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0, 0, 0, 0]));
+    const fake = sequence([
+      { body: {}, status: 404 },
+      { body: [] },
+      {
+        body: {
+          number: 42,
+          html_url: "https://github.com/santychuy/bookbounce/pull/42",
+          state: "open",
+          draft: true,
+          body: "Automated proposal.",
+          head: { sha: commitSha },
+        },
+        status: 201,
+      },
+    ]);
+    const ghCommands: string[][] = [];
+    let uploadedBody = "";
+    let revision = 0;
+    const result = await publishGitHubPullRequest({
+      fetch: fake.fetch,
+      runGit: async (args) => {
+        if (args.includes("rev-parse")) return `${revision++ === 0 ? baseSha : commitSha}\n`;
+        if (args.includes("show")) return "2026-01-01T00:00:00Z\n";
+        return "";
+      },
+      runGh: async (args) => {
+        ghCommands.push(args);
+        if (args.includes("--help")) return "  --attach file   Attach a file\n";
+        if (args.includes("isDraft")) return "false\n";
+        if (args.includes("view")) return uploadedBody;
+        const bodyIndex = args.indexOf("--body-file");
+        if (bodyIndex >= 0) uploadedBody = readFileSync(args[bodyIndex + 1]!, "utf8");
+        return "";
+      },
+      token: "secret",
+      owner: "santychuy",
+      repo: "bookbounce",
+      baseRef: "main",
+      baseSha,
+      runId: "11111111-1111-4111-8111-111111111111",
+      idempotencyKey: "d".repeat(64),
+      issueIdentifier: "RIFF-40",
+      issueTitle: "Remove previous tab",
+      issueUrl: "https://linear.app/example/issue/RIFF-40/remove-previous-tab",
+      patchPath: "/tmp/change.patch",
+      patchSha256: "e".repeat(64),
+      visualEvidence: {
+        summary: "Default and active navigation states.",
+        screenshots: [
+          { path: screenshotA, alt: "Default navigation" },
+          { path: screenshotB, alt: "Active navigation" },
+        ],
+        video,
+      },
+    });
+
+    assert.deepEqual(result.visualEvidence, { screenshots: 2, video: "attached" });
+    assert.equal(ghCommands.filter((args) => args.includes("--attach")).length, 2);
+    assert.ok(
+      ghCommands.findIndex((args) => args.includes("--attach")) <
+        ghCommands.findIndex((args) => args.includes("ready")),
+    );
+    assert.match(uploadedBody, /maquila-ui-evidence:[0-9a-f]{64}:video/);
+    const createBody = fake.calls.at(-1)?.init?.body;
+    assert.equal(typeof createBody === "string" && JSON.parse(createBody).draft, true);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("GitHub publication checks attachment support before Git or API mutation", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "maquila-ui-preflight-"));
+  try {
+    const screenshotA = join(directory, "ui-default.png");
+    const screenshotB = join(directory, "ui-active.png");
+    writeFileSync(screenshotA, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    writeFileSync(screenshotB, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    let gitCalls = 0;
+    let fetchCalls = 0;
+    await assert.rejects(
+      publishGitHubPullRequest({
+        fetch: async () => {
+          fetchCalls += 1;
+          throw new Error("unexpected fetch");
+        },
+        runGit: async () => {
+          gitCalls += 1;
+          return "";
+        },
+        runGh: async (args) => (args.includes("--help") ? "old gh" : "gh version old"),
+        token: "secret",
+        owner: "santychuy",
+        repo: "bookbounce",
+        baseRef: "main",
+        baseSha: "a".repeat(40),
+        runId: "11111111-1111-4111-8111-111111111111",
+        idempotencyKey: "d".repeat(64),
+        issueIdentifier: "RIFF-40",
+        issueTitle: "Remove previous tab",
+        issueUrl: "https://linear.app/example/issue/RIFF-40/remove-previous-tab",
+        patchPath: "/tmp/change.patch",
+        patchSha256: "e".repeat(64),
+        visualEvidence: {
+          summary: "Default and active navigation states.",
+          screenshots: [
+            { path: screenshotA, alt: "Default navigation" },
+            { path: screenshotB, alt: "Active navigation" },
+          ],
+        },
+      }),
+      /does not support attachments/,
+    );
+    assert.equal(gitCalls, 0);
+    assert.equal(fetchCalls, 0);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("GitHub publication reuses matching branch and PR without pushing", async () => {

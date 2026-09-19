@@ -28,6 +28,15 @@ export const PlannerEnvelopeSchema = Type.Object(
       description:
         "Unresolved decisions blocking planning; non-empty permits empty changes and verification",
     }),
+    visualEvidence: Type.Optional(
+      Type.Object(
+        {
+          required: Type.Boolean({ description: "Whether planned work changes visible web UI" }),
+          reason: Type.String({ description: "Why browser evidence is or is not required" }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
@@ -45,6 +54,42 @@ const WorkerValidationSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const WorkerVisualEvidenceSchema = Type.Object(
+  {
+    summary: Type.String({ description: "What UI state and interaction were captured" }),
+    url: Type.String({ description: "Loopback HTTP URL used for capture" }),
+    appStartCommand: Type.String({ description: "Exact command used to start the application" }),
+    steps: Type.Array(Type.String(), {
+      description: "Browser interactions performed",
+      minItems: 1,
+      maxItems: 20,
+    }),
+    screenshots: Type.Array(
+      Type.Object(
+        {
+          file: Type.String({ description: "PNG basename inside the run directory" }),
+          alt: Type.String({ description: "Concise accessible description of the screenshot" }),
+        },
+        { additionalProperties: false },
+      ),
+      { description: "Two to ten meaningful screenshots", minItems: 2, maxItems: 10 },
+    ),
+    video: Type.Union([Type.String(), Type.Null()], {
+      description: "Optional WebM or MP4 basename",
+    }),
+    videoDurationSeconds: Type.Union([Type.Number(), Type.Null()], {
+      description: "ffprobe duration for captured video",
+    }),
+    contactSheet: Type.Union([Type.String(), Type.Null()], {
+      description: "PNG contact sheet when video was captured",
+    }),
+    videoSkippedReason: Type.Union([Type.String(), Type.Null()], {
+      description: "Reason optional video was not captured",
+    }),
+  },
+  { additionalProperties: false },
+);
+
 export const WorkerEnvelopeSchema = Type.Object(
   {
     implemented: Type.String({ description: "What was implemented" }),
@@ -53,6 +98,7 @@ export const WorkerEnvelopeSchema = Type.Object(
       description: "Checks run with honest outcomes",
     }),
     openRisks: Type.Array(Type.String(), { description: "Remaining risks or follow-ups" }),
+    visualEvidence: Type.Optional(WorkerVisualEvidenceSchema),
   },
   { additionalProperties: false },
 );
@@ -215,6 +261,10 @@ export function renderPlannerPlan(envelope: PlannerEnvelope): string {
     renderList(envelope.verification),
     "## Risks",
     renderList(envelope.risks),
+    "## Visual Evidence",
+    envelope.visualEvidence
+      ? `${envelope.visualEvidence.required ? "Required" : "Not required"}: ${envelope.visualEvidence.reason}`
+      : "Not classified (legacy planner envelope)",
     "## Decisions Needed",
     renderList(envelope.decisionsNeeded),
   ].join("\n\n");

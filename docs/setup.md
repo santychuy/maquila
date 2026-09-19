@@ -36,6 +36,8 @@ gh auth login --web --hostname github.com
 
 Or create a fine-grained token at https://github.com/settings/personal-access-tokens/new and set `GITHUB_TOKEN`. For CI, `GH_TOKEN` also works.
 
+Planner-classified UI runs attach screenshots and optional video through host GitHub CLI. Before such a run, `gh pr edit --help` must list `--attach`. Controller verifies attachment support before creating a branch or draft PR; GitHub credentials never enter execution VM.
+
 ### OpenRouter
 
 Remote planner, worker, documenter, and reviewer sessions use the model pinned in each agent definition. Planner uses `openrouter/z-ai/glm-5.3`; worker, documenter, and reviewer use `openrouter/google/gemini-3.7-flash`. Agent definitions are authoritative, not a run-time `--model` override. The runtime does not bundle an OpenRouter model catalog; `maquila doctor` and remote bootstrap validate pinned identifiers against OpenRouter's live catalog. Agent requests cap maximum output at 16,384 tokens so provider credit checks remain bounded.

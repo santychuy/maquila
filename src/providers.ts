@@ -90,6 +90,11 @@ export interface WorkItemProvider {
   waitForDecision(reference: unknown, receipt: DecisionReceipt): Promise<DecisionReply | undefined>;
 }
 
+export interface PublicationVisualEvidence {
+  summary: string;
+  screenshots: Array<{ path: string; alt: string }>;
+  video?: string;
+}
 export interface ReviewedPatchPublicationRequest {
   runId: string;
   idempotencyKey: string;
@@ -99,6 +104,7 @@ export interface ReviewedPatchPublicationRequest {
   patchPath: string;
   patchSha256: string;
   baseSha: string;
+  visualEvidence?: PublicationVisualEvidence;
 }
 export interface PublicationDryRun {
   version: 1;
@@ -117,6 +123,11 @@ export interface SourceControlPublication {
   url: string;
   branch: string;
   commitSha: string;
+  visualEvidence?: {
+    screenshots: number;
+    video: "attached" | "skipped" | "failed";
+    warning?: string;
+  };
 }
 export interface SourceControlProvider {
   fetchSourceControl(reference: unknown): Promise<SourceControlSnapshot>;

@@ -322,6 +322,20 @@ export const TelemetryRecordSchema = Type.Union([
           maxLength: 255,
         }),
         commitSha: Type.String({ pattern: COMMIT_SHA }),
+        visualEvidence: Type.Optional(
+          Type.Object(
+            {
+              screenshots: Type.Integer({ minimum: 2, maximum: 10 }),
+              video: Type.Union([
+                Type.Literal("attached"),
+                Type.Literal("skipped"),
+                Type.Literal("failed"),
+              ]),
+              warning: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+            },
+            { additionalProperties: false },
+          ),
+        ),
       },
       { additionalProperties: false },
     ),

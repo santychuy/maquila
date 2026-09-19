@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -24,6 +25,11 @@ import {
 } from "../workflows/execution.js";
 import { isDocumentationPath } from "../workflows/feature-pr.js";
 import type { WorkflowManifest } from "../workflows/manifest.js";
+import {
+  planRequiresUiEvidence,
+  validateUiEvidenceManifest,
+  type UiEvidenceManifest,
+} from "../ui-evidence.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -59,9 +65,14 @@ function privatizeTree(path: string): void {
 export interface HarvestExpectations {
   manifest: WorkflowManifest;
   execution: WorkflowExecution;
+  uiEvidenceRequired?: boolean;
 }
 
-export function harvest(archive: string, runDir: string, expected: HarvestExpectations): void {
+export function harvest(
+  archive: string,
+  runDir: string,
+  expected: HarvestExpectations,
+): UiEvidenceManifest | undefined {
   const names = execFileSync("tar", ["-tf", archive], { encoding: "utf8" })
     .split("\n")
     .filter(Boolean);
@@ -87,6 +98,20 @@ export function harvest(archive: string, runDir: string, expected: HarvestExpect
   const documenterRun = completedStepRunId(expected.execution, "document");
   const reviewerRun = completedStepRunId(expected.execution, "review");
   const primaryRun = primaryRunId(expected.execution);
+  const planner = parseEnvelope(
+    "planner",
+    json(resolve(target, ".maquila", "runs", plannerRun, "envelope.json")),
+  );
+  const classifiedUiEvidence =
+    Boolean(workerRun) &&
+    planner.ok &&
+    planRequiresUiEvidence(planner.envelope, expected.manifest.allowedPaths);
+  if (
+    expected.uiEvidenceRequired !== undefined &&
+    classifiedUiEvidence !== expected.uiEvidenceRequired
+  )
+    throw new Error("remote UI evidence classification does not match");
+  const uiEvidenceRequired = expected.uiEvidenceRequired ?? classifiedUiEvidence;
   const runs = [plannerRun, ...completedExecutionRunIds(expected.execution)];
   if (runs.some((run) => !UUID.test(run))) throw new Error("unsafe remote run id");
   if (new Set(runs).size !== runs.length) throw new Error("remote run ids must be distinct");
@@ -99,6 +124,7 @@ export function harvest(archive: string, runDir: string, expected: HarvestExpect
     [primaryRun, "verification.json"],
     [primaryRun, "review-diff.sha256"],
     [primaryRun, "workflow-execution.json"],
+    ...(uiEvidenceRequired ? [[primaryRun, "ui-evidence.json"]] : []),
     [documenterRun, "envelope.json"],
     [reviewerRun, "receipt.json"],
     [reviewerRun, "envelope.json"],
@@ -138,6 +164,21 @@ export function harvest(archive: string, runDir: string, expected: HarvestExpect
       return undefined;
     return value;
   };
+  const primaryRunDirectory = resolve(target, ".maquila", "runs", primaryRun);
+  const uiEvidence = uiEvidenceRequired
+    ? validateUiEvidenceManifest(
+        json(resolve(primaryRunDirectory, "ui-evidence.json")),
+        primaryRunDirectory,
+      )
+    : undefined;
+  const uiEvidenceArtifacts = uiEvidence
+    ? [
+        "ui-evidence.json",
+        ...uiEvidence.screenshots.map((item) => item.name),
+        ...(uiEvidence.video ? [uiEvidence.video.name] : []),
+        ...(uiEvidence.contactSheet ? [uiEvidence.contactSheet.name] : []),
+      ]
+    : [];
   const plannerReceipt = receipt(plannerRun, "planner", ["envelope.json", "plan.md"]);
   const workerReceipt = workerRun
     ? receipt(workerRun, "worker", [
@@ -146,6 +187,7 @@ export function harvest(archive: string, runDir: string, expected: HarvestExpect
         "verification.json",
         "review-diff.sha256",
         "workflow-execution.json",
+        ...uiEvidenceArtifacts,
       ])
     : undefined;
   const documenterReceipt = receipt(documenterRun, "documenter", [
@@ -155,10 +197,6 @@ export function harvest(archive: string, runDir: string, expected: HarvestExpect
       : []),
   ]);
   const reviewerReceipt = receipt(reviewerRun, "reviewer", ["envelope.json", "lifecycle.json"]);
-  const planner = parseEnvelope(
-    "planner",
-    json(resolve(target, ".maquila", "runs", plannerRun, "envelope.json")),
-  );
   const workerEnvelope = workerRun
     ? parseEnvelope("worker", json(resolve(target, ".maquila", "runs", workerRun, "envelope.json")))
     : undefined;
@@ -301,4 +339,9 @@ export function harvest(archive: string, runDir: string, expected: HarvestExpect
     if (existsSync(path) && statSync(path).isFile()) manifest[name] = hash(path);
   }
   writeJson(resolve(runDir, "evidence-manifest.json"), manifest);
+  if (uiEvidence) {
+    for (const name of uiEvidenceArtifacts)
+      copyFileSync(resolve(primaryRunDirectory, name), resolve(runDir, name));
+  }
+  return uiEvidence;
 }

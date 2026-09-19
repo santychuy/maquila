@@ -34,7 +34,17 @@ export interface RunStatusSummary {
     commentUrl: string;
     continuationRunId: string;
   } | null;
-  pullRequest: { number: number; url: string; branch: string; commitSha: string } | null;
+  pullRequest: {
+    number: number;
+    url: string;
+    branch: string;
+    commitSha: string;
+    visualEvidence?: {
+      screenshots: number;
+      video: "attached" | "skipped" | "failed";
+      warning?: string;
+    };
+  } | null;
   artifacts: Array<{ name: string; size: number; sha256?: string }>;
 }
 
