@@ -134,6 +134,10 @@ test("GitHub provider handles references and delegates clone, dry-run, and publi
     patchPath: "/safe.patch",
     patchSha256: "e".repeat(64),
     baseSha: "b".repeat(40),
+    token: "",
+    owner: "wrong",
+    repo: "wrong",
+    baseRef: "wrong",
   };
   assert.equal((await provider.fetchSourceControl(ref)).repository, "owner/repo");
   assert.equal(
@@ -142,8 +146,25 @@ test("GitHub provider handles references and delegates clone, dry-run, and publi
   );
   assert.equal(provider.dryRunPublication(ref, request).mode, "dry-run");
   assert.equal((await provider.publishReviewedPatch(ref, request)).number, 4);
-  assert.equal((dry as { token: string }).token, "github-secret");
-  assert.equal((published as { token: string }).token, "github-secret");
+  const dryOptions = dry as { token: string; owner: string; repo: string; baseRef: string };
+  const publishOptions = published as {
+    token: string;
+    owner: string;
+    repo: string;
+    baseRef: string;
+  };
+  assert.deepEqual(
+    [dryOptions, publishOptions].map(({ token, owner, repo, baseRef }) => ({
+      token,
+      owner,
+      repo,
+      baseRef,
+    })),
+    [
+      { token: "github-secret", owner: "owner", repo: "repo", baseRef: "main" },
+      { token: "github-secret", owner: "owner", repo: "repo", baseRef: "main" },
+    ],
+  );
 });
 test("exe provider validates each execution reference before delegation", async () => {
   const calls: string[] = [];

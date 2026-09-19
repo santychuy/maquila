@@ -124,11 +124,11 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     const parsed = validateSourceControlReference(reference, GITHUB_PROVIDER);
     const { owner, repo } = repository(parsed);
     return (this.options.createPublicationDryRun ?? createGitHubPublicationDryRun)({
+      ...request,
       token: this.options.token,
       owner,
       repo,
       baseRef: parsed.baseRef,
-      ...request,
       ...(this.options.fetch ? { fetch: this.options.fetch } : {}),
     });
   }
@@ -141,11 +141,11 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     const publication: GitHubPublication = await (
       this.options.publishPullRequest ?? publishGitHubPullRequest
     )({
+      ...request,
       token: this.options.token,
       owner,
       repo,
       baseRef: parsed.baseRef,
-      ...request,
       ...(this.options.fetch ? { fetch: this.options.fetch } : {}),
     });
     return publication;
