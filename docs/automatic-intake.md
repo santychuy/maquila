@@ -26,11 +26,14 @@ Continue only when JSON reports `ok: true`. Then deploy through Maquila itself:
 maquila intake deploy \
   --target /absolute/path/to/target-repository \
   --allow-credential-transfer \
+  --ttl 24h \
   --controller-name maquila-controller \
   --port 8080
 ```
 
 `--allow-credential-transfer` is required because deploy copies the resolved Linear, GitHub, and OpenRouter credentials into the trusted persistent VM. Use dedicated least-privilege credentials, especially a fine-grained GitHub token and capped OpenRouter key.
+
+`--ttl` is optional. It accepts `m`, `h`, `d`, or `w` durations from one minute through 365 days, such as `30m`, `24h`, or `2w`. Omit it for an indefinite controller. A TTL deployment installs a persistent systemd timer inside the controller VM, reports its absolute `expiresAt`, and runs the same full cleanup used by `intake destroy`: stop intake, remove the Linear webhook, make the proxy private, revoke the dedicated key, and delete the VM. Failed pre-destruction cleanup retries after five minutes.
 
 `deploy` performs the complete controller lifecycle:
 
@@ -55,7 +58,7 @@ A dirty local checkout is allowed for this pilot and reported as `sourceDirty: t
 maquila intake status --json
 ```
 
-Healthy output reports deployment `running`, VM `running`, and service `active`.
+Healthy output reports deployment `running`, VM `running`, service `active`, and either `Expires: never` or the configured timestamp. It also reports whether that timestamp has passed.
 
 Rollback is owned by the same CLI:
 
@@ -63,7 +66,7 @@ Rollback is owned by the same CLI:
 maquila intake destroy --json
 ```
 
-Destroy removes the Linear webhook, makes the proxy private, revokes the dedicated exe.dev key, and deletes the controller VM. Ambiguous cleanup persists `cleanup_pending` instead of claiming success; rerun destroy after provider recovery.
+Destroy removes the Linear webhook, makes the proxy private, revokes the dedicated exe.dev key, and deletes the controller VM. Ambiguous cleanup persists `cleanup_pending` instead of claiming success; rerun destroy after provider recovery. Operator state is intentionally separate from the VM, so it can remain stale after successful automatic self-destruction; a later destroy or deploy reconciles already-removed external resources before continuing.
 
 `maquila intake serve` remains the internal host command. Normal operators use `deploy`, `status`, and `destroy` rather than provisioning the VM manually.
 

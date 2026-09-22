@@ -1,4 +1,6 @@
 import { execFile, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { rmSync } from "node:fs";
 import { isAbsolute, posix } from "node:path";
 import { promisify } from "node:util";
 
@@ -405,9 +407,13 @@ export class ExeClient {
     }
   }
 
-  private async controlJson(operation: string, args: string[]): Promise<unknown> {
+  private async controlJson(
+    operation: string,
+    args: string[],
+    connectionOptions = this.connectionOptions,
+  ): Promise<unknown> {
     const result = await this.invoke(operation, "ssh", [
-      ...this.connectionOptions,
+      ...connectionOptions,
       "-n",
       "exe.dev",
       ...args,
@@ -520,6 +526,59 @@ export class ExeClient {
       quoteRemoteArg(publicKey),
       "--json",
     ]);
+  }
+
+  async hasSshKey(publicKey: string): Promise<boolean> {
+    if (!SAFE_PUBLIC_KEY.test(publicKey)) throw new Error("invalid exe.dev public key");
+    const value = await this.controlJson("list SSH keys", ["ssh-key", "list", "--json"]);
+    if (!isRecord(value) || !Array.isArray(value.ssh_keys))
+      throw new Error("invalid exe.dev SSH key list");
+    const key = publicKey.split(" ").slice(0, 2).join(" ");
+    return value.ssh_keys.some(
+      (entry) =>
+        isRecord(entry) && typeof entry.public_key === "string" && entry.public_key === key,
+    );
+  }
+
+  async destroyVmFromWithin(vmName: string, publicKey: string): Promise<void> {
+    const name = safeName(vmName, "VM name");
+    if (!SAFE_PUBLIC_KEY.test(publicKey)) throw new Error("invalid exe.dev public key");
+    const socket = `/tmp/maquila-exe-${process.pid}-${randomBytes(8).toString("hex")}`;
+    await this.invoke("open exe.dev cleanup connection", "ssh", [
+      ...this.connectionOptions,
+      "-M",
+      "-S",
+      socket,
+      "-fN",
+      "exe.dev",
+    ]);
+    const master = [...this.connectionOptions, "-S", socket];
+    let removed = false;
+    try {
+      await this.controlJson(
+        "remove controller SSH key",
+        ["ssh-key", "remove", quoteRemoteArg(publicKey), "--json"],
+        master,
+      );
+      removed = true;
+      await this.controlJson("destroy controller VM", ["rm", name, "--json"], master);
+    } catch (error) {
+      if (removed)
+        await this.controlJson(
+          "restore controller SSH key",
+          ["ssh-key", "add", "--tag=maquila-controller", quoteRemoteArg(publicKey), "--json"],
+          master,
+        ).catch(() => undefined);
+      throw error;
+    } finally {
+      await this.invoke("close exe.dev cleanup connection", "ssh", [
+        ...master,
+        "-O",
+        "exit",
+        "exe.dev",
+      ]).catch(() => undefined);
+      rmSync(socket, { force: true });
+    }
   }
 
   async configurePublicProxy(vmName: string, port: number): Promise<void> {

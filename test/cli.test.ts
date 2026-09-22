@@ -329,11 +329,45 @@ test("detached run and status commands default target to cwd and treat JSON as o
       json: true,
     },
   );
+  assert.deepEqual(
+    parseCli([
+      "intake",
+      "deploy",
+      "--target",
+      "/tmp/target",
+      "--allow-credential-transfer",
+      "--ttl",
+      "24h",
+    ]),
+    {
+      command: "intake-deploy",
+      target: "/tmp/target",
+      controllerName: "maquila-controller",
+      port: 8080,
+      allowCredentialTransfer: true,
+      ttlSeconds: 86_400,
+    },
+  );
+  for (const ttl of ["0m", "1s", "1.5h", "366d", "forever"])
+    assert.throws(
+      () =>
+        parseCli([
+          "intake",
+          "deploy",
+          "--target",
+          "/tmp/target",
+          "--allow-credential-transfer",
+          "--ttl",
+          ttl,
+        ]),
+      /TTL/,
+    );
   assert.deepEqual(parseCli(["intake", "status", "--json"]), {
     command: "intake-status",
     json: true,
   });
   assert.deepEqual(parseCli(["intake", "destroy"]), { command: "intake-destroy" });
+  assert.deepEqual(parseCli(["intake", "expire"]), { command: "intake-expire" });
   assert.throws(() => parseCli(["intake", "deploy"]), /requires/);
   assert.throws(
     () =>

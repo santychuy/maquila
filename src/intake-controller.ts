@@ -38,8 +38,12 @@ const REMOTE_CLI = `${REMOTE_PREFIX}/bin/maquila`;
 const REMOTE_IDENTITY = `${REMOTE_HOME}/.ssh/maquila-controller`;
 const REMOTE_ENV = `${REMOTE_HOME}/.config/maquila/intake.env`;
 const REMOTE_UNIT = `${REMOTE_HOME}/.config/systemd/user/maquila-intake.service`;
+const REMOTE_EXPIRY_UNIT = `${REMOTE_HOME}/.config/systemd/user/maquila-intake-expiry.service`;
+const REMOTE_EXPIRY_TIMER = `${REMOTE_HOME}/.config/systemd/user/maquila-intake-expiry.timer`;
 const REMOTE_GIT_CREDENTIALS = `${REMOTE_HOME}/.config/maquila/git-credentials`;
+const REMOTE_STATE = `${REMOTE_HOME}/.local/state/maquila/.maquila/intake-controller.json`;
 const SERVICE_NAME = "maquila-intake.service";
+const EXPIRY_TIMER_NAME = "maquila-intake-expiry.timer";
 
 export interface ControllerPackage {
   path: string;
@@ -143,6 +147,15 @@ function serviceUnit(port: number): string {
   return `[Unit]\nDescription=Maquila automatic Linear intake\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nEnvironmentFile=%h/.config/maquila/intake.env\nExecStart=${REMOTE_CLI} intake serve --target ${REMOTE_TARGET} --port ${port}\nRestart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n`;
 }
 
+function expiryServiceUnit(): string {
+  return `[Unit]\nDescription=Expire Maquila intake controller\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=oneshot\nEnvironmentFile=%h/.config/maquila/intake.env\nExecStart=${REMOTE_CLI} intake expire\nRestart=on-failure\nRestartSec=300\n`;
+}
+
+function expiryTimerUnit(expiresAt: string): string {
+  const calendar = `${expiresAt.slice(0, 19).replace("T", " ")} UTC`;
+  return `[Unit]\nDescription=Expire Maquila intake controller at ${expiresAt}\n\n[Timer]\nOnCalendar=${calendar}\nPersistent=true\nUnit=maquila-intake-expiry.service\n\n[Install]\nWantedBy=timers.target\n`;
+}
+
 async function waitForSsh(
   exe: ExeClient,
   destination: string,
@@ -176,7 +189,7 @@ async function bootstrapRuntime(exe: ExeClient, destination: string): Promise<vo
       `${REMOTE_HOME}/.ssh`,
       `${REMOTE_HOME}/.config/maquila`,
       `${REMOTE_HOME}/.config/systemd/user`,
-      `${REMOTE_HOME}/.local/state/maquila`,
+      `${REMOTE_HOME}/.local/state/maquila/.maquila`,
     ],
     30_000,
   );
@@ -260,6 +273,7 @@ export interface DeployIntakeControllerOptions {
   credentials: ControllerCredentials;
   vmName: string;
   port: number;
+  ttlSeconds?: number;
   exe?: ExeClient;
   package?: ControllerPackage;
   fetch?: typeof globalThis.fetch;
@@ -277,17 +291,41 @@ export async function deployIntakeController(
   const vmName = assertExeVmName(options.vmName);
   if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65_535)
     throw new Error("controller port is invalid");
+  if (
+    options.ttlSeconds !== undefined &&
+    (!Number.isSafeInteger(options.ttlSeconds) ||
+      options.ttlSeconds < 60 ||
+      options.ttlSeconds > 365 * 24 * 60 * 60)
+  )
+    throw new Error("controller TTL must be between 1 minute and 365 days");
+  const now = options.now ?? Date.now;
   const exe = options.exe ?? new ExeClient(undefined, 30_000, options.credentials.identity);
-  const previous = readIntakeControllerState(options.statePath);
+  let previous = readIntakeControllerState(options.statePath);
   if (previous?.status === "running") {
-    if (
-      previous.vmName !== vmName ||
-      previous.port !== options.port ||
-      previous.targetFullName !== `${options.target.owner}/${options.target.repo}` ||
-      previous.targetBaseRef !== options.target.baseRef
-    )
-      throw new Error("running intake controller does not match requested deployment");
-    return previous;
+    if (previous.expiresAt && now() >= Date.parse(previous.expiresAt))
+      previous = await destroyIntakeController({
+        statePath: options.statePath,
+        credentials: options.credentials,
+        exe,
+        deleteWebhook: options.deleteWebhook,
+        listWebhooks: options.listWebhooks,
+        now,
+      });
+    else {
+      const requestedExpiry =
+        options.ttlSeconds === undefined
+          ? undefined
+          : new Date(Date.parse(previous.createdAt) + options.ttlSeconds * 1000).toISOString();
+      if (
+        previous.vmName !== vmName ||
+        previous.port !== options.port ||
+        previous.targetFullName !== `${options.target.owner}/${options.target.repo}` ||
+        previous.targetBaseRef !== options.target.baseRef ||
+        previous.expiresAt !== requestedExpiry
+      )
+        throw new Error("running intake controller does not match requested deployment");
+      return previous;
+    }
   }
   if (previous && previous.status !== "destroyed")
     await destroyIntakeController({
@@ -296,15 +334,18 @@ export async function deployIntakeController(
       exe,
       deleteWebhook: options.deleteWebhook,
       listWebhooks: options.listWebhooks,
-      now: options.now,
+      now,
     });
   const built = options.package ?? buildIntakeControllerPackage(options.codeRoot);
   const sleep =
     options.sleep ?? ((milliseconds) => new Promise((done) => setTimeout(done, milliseconds)));
-  const now = options.now ?? Date.now;
   const temporary = mkdtempSync(resolve(tmpdir(), "maquila-controller-secrets-"));
   const deploymentId = randomUUID();
   const createdAt = new Date(now()).toISOString();
+  const expiresAt =
+    options.ttlSeconds === undefined
+      ? undefined
+      : new Date(Date.parse(createdAt) + options.ttlSeconds * 1000).toISOString();
   const publicUrl = `https://${vmName}.exe.xyz`;
   const webhookUrl = new URL("/hooks/linear", publicUrl).href;
   const webhookSecret = randomBytes(32).toString("hex");
@@ -336,6 +377,7 @@ export async function deployIntakeController(
       sourceDirty: built.sourceDirty,
       packageSha256: built.sha256,
       bootPersistent: false,
+      ...(expiresAt ? { expiresAt } : {}),
       createdAt,
       updatedAt: createdAt,
     };
@@ -479,6 +521,41 @@ export async function deployIntakeController(
     writeIntakeControllerState(options.statePath, state);
     state = { ...state, status: "running", updatedAt: new Date(now()).toISOString() };
     writeIntakeControllerState(options.statePath, state);
+    if (state.expiresAt) {
+      checkpoint = "expiry installation";
+      const expiryUnitPath = secretFile(
+        temporary,
+        "maquila-intake-expiry.service",
+        expiryServiceUnit(),
+      );
+      const expiryTimerPath = secretFile(
+        temporary,
+        "maquila-intake-expiry.timer",
+        expiryTimerUnit(state.expiresAt),
+      );
+      await exe.copyTo(vm.sshDest, options.statePath, REMOTE_STATE);
+      await exe.copyTo(vm.sshDest, expiryUnitPath, REMOTE_EXPIRY_UNIT);
+      await exe.copyTo(vm.sshDest, expiryTimerPath, REMOTE_EXPIRY_TIMER);
+      await exe.exec(
+        vm.sshDest,
+        ["chmod", "600", REMOTE_STATE, REMOTE_EXPIRY_UNIT, REMOTE_EXPIRY_TIMER],
+        30_000,
+      );
+      await userServiceCommand(exe, vm.sshDest, ["daemon-reload"]);
+      await userServiceCommand(exe, vm.sshDest, ["enable", "--now", EXPIRY_TIMER_NAME]);
+      const timerActive = (
+        await userServiceCommand(exe, vm.sshDest, [
+          "show",
+          EXPIRY_TIMER_NAME,
+          "--property=ActiveState",
+          "--value",
+        ])
+      ).stdout.trim();
+      if (timerActive !== "active") {
+        checkpoint = `expiry timer health check (${timerActive || "unknown"})`;
+        throw new Error("controller expiry timer is not active");
+      }
+    }
     return state;
   } catch (error) {
     if (state)
@@ -508,6 +585,7 @@ export async function destroyIntakeController(options: {
   now?: () => number;
   deleteWebhook?: typeof deleteLinearAutomaticWebhook;
   listWebhooks?: typeof listLinearAutomaticWebhooks;
+  selfDestruct?: boolean;
 }): Promise<IntakeControllerState | undefined> {
   let state = readIntakeControllerState(options.statePath);
   if (!state || state.status === "destroyed") return state;
@@ -534,7 +612,12 @@ export async function destroyIntakeController(options: {
     try {
       await exe.exec(
         state.sshDest,
-        ["rm", "-f", REMOTE_ENV, REMOTE_IDENTITY, `${REMOTE_IDENTITY}.pub`, REMOTE_GIT_CREDENTIALS],
+        [
+          "rm",
+          "-f",
+          REMOTE_GIT_CREDENTIALS,
+          ...(options.selfDestruct ? [] : [REMOTE_ENV, REMOTE_IDENTITY, `${REMOTE_IDENTITY}.pub`]),
+        ],
         30_000,
       );
     } catch {
@@ -542,24 +625,26 @@ export async function destroyIntakeController(options: {
     }
   }
   try {
-    let webhookIds = state.linearWebhookId ? [state.linearWebhookId] : [];
-    if (!webhookIds.length) {
+    const listWebhooks = options.listWebhooks ?? listLinearAutomaticWebhooks;
+    const deleteWebhook = options.deleteWebhook ?? deleteLinearAutomaticWebhook;
+    const webhookId = state.linearWebhookId;
+    if (webhookId)
+      try {
+        await deleteWebhook({ token: options.credentials.linearToken, id: webhookId });
+      } catch (error) {
+        const remaining = await listWebhooks({ token: options.credentials.linearToken });
+        if (remaining.some((webhook) => webhook.id === webhookId)) throw error;
+      }
+    else {
       const label = `Maquila ${state.deploymentId}`;
       const url = new URL("/hooks/linear", state.publicUrl).href;
-      webhookIds = (
-        await (options.listWebhooks ?? listLinearAutomaticWebhooks)({
-          token: options.credentials.linearToken,
-        })
-      )
+      const webhookIds = (await listWebhooks({ token: options.credentials.linearToken }))
         .filter((webhook) => webhook.label === label && webhook.url === url)
         .map((webhook) => webhook.id);
       if (webhookIds.length > 1) throw new Error("Linear automatic webhook is ambiguous");
+      for (const id of webhookIds)
+        await deleteWebhook({ token: options.credentials.linearToken, id });
     }
-    for (const id of webhookIds)
-      await (options.deleteWebhook ?? deleteLinearAutomaticWebhook)({
-        token: options.credentials.linearToken,
-        id,
-      });
     if (state.linearWebhookId) {
       const { linearWebhookId: _removed, ...withoutWebhook } = state;
       state = { ...withoutWebhook, updatedAt: new Date(now()).toISOString() };
@@ -568,19 +653,39 @@ export async function destroyIntakeController(options: {
   } catch {
     failed = true;
   }
-  if (state.controllerPublicKey)
+  if (options.selfDestruct && failed) {
+    state = {
+      ...state,
+      status: "cleanup_pending",
+      updatedAt: new Date(now()).toISOString(),
+    };
+    writeIntakeControllerState(options.statePath, state);
+    throw new Error("intake controller cleanup is incomplete");
+  }
+  if (options.selfDestruct) {
+    if (!state.controllerPublicKey) failed = true;
+    else
+      try {
+        await exe.destroyVmFromWithin(state.vmName, state.controllerPublicKey);
+      } catch {
+        failed = true;
+      }
+  } else {
+    if (state.controllerPublicKey)
+      try {
+        if (await exe.hasSshKey(state.controllerPublicKey))
+          await exe.removeSshKey(state.controllerPublicKey);
+        const { controllerPublicKey: _removed, ...withoutKey } = state;
+        state = { ...withoutKey, updatedAt: new Date(now()).toISOString() };
+        writeIntakeControllerState(options.statePath, state);
+      } catch {
+        failed = true;
+      }
     try {
-      await exe.removeSshKey(state.controllerPublicKey);
-      const { controllerPublicKey: _removed, ...withoutKey } = state;
-      state = { ...withoutKey, updatedAt: new Date(now()).toISOString() };
-      writeIntakeControllerState(options.statePath, state);
+      await exe.destroyVm(state.vmName);
     } catch {
       failed = true;
     }
-  try {
-    await exe.destroyVm(state.vmName);
-  } catch {
-    failed = true;
   }
   state = {
     ...state,
@@ -592,32 +697,59 @@ export async function destroyIntakeController(options: {
   return state;
 }
 
+export async function expireIntakeController(options: {
+  statePath: string;
+  credentials: ControllerCredentials;
+  exe?: ExeClient;
+  now?: () => number;
+  deleteWebhook?: typeof deleteLinearAutomaticWebhook;
+  listWebhooks?: typeof listLinearAutomaticWebhooks;
+}): Promise<IntakeControllerState> {
+  const state = readIntakeControllerState(options.statePath);
+  if (!state?.expiresAt) throw new Error("intake controller has no expiration");
+  const now = options.now ?? Date.now;
+  if (now() < Date.parse(state.expiresAt)) throw new Error("intake controller TTL has not expired");
+  const result = await destroyIntakeController({ ...options, now, selfDestruct: true });
+  if (!result) throw new Error("intake controller state is absent");
+  return result;
+}
+
 export async function statusIntakeController(options: {
   statePath: string;
   identity?: string;
   exe?: ExeClient;
+  now?: () => number;
 }): Promise<{
   state?: IntakeControllerState;
   vm: "absent" | "running" | "unknown";
   service: "absent" | "active" | "inactive" | "unknown";
+  expired: boolean;
 }> {
   const state = readIntakeControllerState(options.statePath);
-  if (!state) return { vm: "absent", service: "absent" };
-  if (state.status === "destroyed") return { state, vm: "absent", service: "absent" };
+  if (!state) return { vm: "absent", service: "absent", expired: false };
+  const expired = Boolean(
+    state.expiresAt && (options.now ?? Date.now)() >= Date.parse(state.expiresAt),
+  );
+  if (state.status === "destroyed") return { state, vm: "absent", service: "absent", expired };
   const exe = options.exe ?? new ExeClient(undefined, 30_000, options.identity);
   try {
     const exists = (await exe.listVms()).some((vm) => vm.vmName === state.vmName);
-    if (!exists) return { state, vm: "absent", service: "absent" };
+    if (!exists) return { state, vm: "absent", service: "absent", expired };
     try {
       const service = (
         await userServiceCommand(exe, state.sshDest, ["is-active", SERVICE_NAME])
       ).stdout.trim();
-      return { state, vm: "running", service: service === "active" ? "active" : "inactive" };
+      return {
+        state,
+        vm: "running",
+        service: service === "active" ? "active" : "inactive",
+        expired,
+      };
     } catch {
-      return { state, vm: "running", service: "unknown" };
+      return { state, vm: "running", service: "unknown", expired };
     }
   } catch {
-    return { state, vm: "unknown", service: "unknown" };
+    return { state, vm: "unknown", service: "unknown", expired };
   }
 }
 

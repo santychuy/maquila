@@ -14,7 +14,7 @@ export const HELP = `Usage:
   maquila run batch status --batch-id UUID [--json]
   maquila run resume --run-id UUID [--identity ABS] [--json]
   maquila run status --run-id UUID [--json]
-  maquila intake deploy --target PATH --allow-credential-transfer [--controller-name NAME] [--port 8080] [--identity ABS] [--json]
+  maquila intake deploy --target PATH --allow-credential-transfer [--ttl 24h] [--controller-name NAME] [--port 8080] [--identity ABS] [--json]
   maquila intake status [--identity ABS] [--json]
   maquila intake destroy [--identity ABS] [--json]
   maquila intake serve --target PATH --port PORT [--poll-interval-ms 60000]
@@ -33,13 +33,14 @@ export interface IntakeDeployCommand {
   controllerName: string;
   port: number;
   allowCredentialTransfer: true;
+  ttlSeconds?: number;
   identity?: string;
   json?: boolean;
   timeoutSeconds?: undefined;
 }
 
 export interface IntakeLifecycleCommand {
-  command: "intake-status" | "intake-destroy";
+  command: "intake-status" | "intake-destroy" | "intake-expire";
   identity?: string;
   json?: boolean;
   timeoutSeconds?: undefined;

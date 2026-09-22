@@ -9,6 +9,7 @@ import { AutomaticLaunchUncertainError, runAutomaticIntakeService } from "../aut
 import {
   deployIntakeController,
   destroyIntakeController,
+  expireIntakeController,
   statusIntakeController,
 } from "../intake-controller.js";
 import { intakeControllerStatePath } from "../intake-controller-state.js";
@@ -202,6 +203,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
           credentials,
           vmName: options.controllerName,
           port: options.port,
+          ttlSeconds: options.ttlSeconds,
         });
         const output = {
           status: result.status,
@@ -212,11 +214,12 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
           sourceSha: result.sourceSha,
           sourceDirty: result.sourceDirty,
           packageSha256: result.packageSha256,
+          expiresAt: result.expiresAt ?? null,
         };
         if (options.json) json(output);
         else
           process.stdout.write(
-            `Controller: ${output.vmName}\nStatus: ${output.status}\nPublic URL: ${output.publicUrl}\nWebhook: ${output.webhookUrl}\nTarget: ${output.target}\n`,
+            `Controller: ${output.vmName}\nStatus: ${output.status}\nExpires: ${output.expiresAt ?? "never"}\nPublic URL: ${output.publicUrl}\nWebhook: ${output.webhookUrl}\nTarget: ${output.target}\n`,
           );
         return 0;
       }
@@ -229,9 +232,22 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         else if (!result.state) process.stdout.write("Intake controller: absent\n");
         else
           process.stdout.write(
-            `Controller: ${result.state.vmName}\nDeployment: ${result.state.status}\nVM: ${result.vm}\nService: ${result.service}\nBoot persistent: ${result.state.bootPersistent ? "yes" : "no"}\nPublic URL: ${result.state.publicUrl}\nTarget: ${result.state.targetFullName}\n`,
+            `Controller: ${result.state.vmName}\nDeployment: ${result.state.status}\nVM: ${result.vm}\nService: ${result.service}\nBoot persistent: ${result.state.bootPersistent ? "yes" : "no"}\nExpires: ${result.state.expiresAt ?? "never"}\nExpired: ${result.expired ? "yes" : "no"}\nPublic URL: ${result.state.publicUrl}\nTarget: ${result.state.targetFullName}\n`,
           );
         return result.vm === "unknown" || result.service === "unknown" ? 1 : 0;
+      }
+      if (options.command === "intake-expire") {
+        const launchEnv = { ...process.env, MAQUILA_HOME: root };
+        const credentials = await resolveControllerCredentials({
+          env: launchEnv,
+          config: loadMaquilaConfig({ env: launchEnv }),
+        });
+        await expireIntakeController({
+          statePath: intakeControllerStatePath(stateDirectory(root)),
+          credentials,
+        });
+        process.stdout.write("Intake controller expired\n");
+        return 0;
       }
       if (options.command === "intake-destroy") {
         const launchEnv = { ...process.env, MAQUILA_HOME: root };

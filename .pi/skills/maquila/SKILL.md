@@ -80,11 +80,18 @@ From the operator host, run the same target through preflight and first-party de
 
 ```bash
 maquila doctor --target /absolute/path/to/repository --json
-maquila intake deploy --target /absolute/path/to/repository --allow-credential-transfer --controller-name maquila-controller --port 8080
+# Bounded controller: automatically performs full teardown after 24 hours.
+maquila intake deploy --target /absolute/path/to/repository --allow-credential-transfer --ttl 24h --controller-name maquila-controller --port 8080
 maquila intake status --json
 ```
 
-Deploy owns controller VM creation, pinned runtime bootstrap, exact local package upload, dedicated exe.dev key registration, target checkout, owner-only credential transfer, managed intake service, HTTPS proxy, and marked Linear webhook. It posts one idempotent accepted-run dashboard link to the Linear issue. Use only the first-party rollback:
+For an indefinite controller, omit `--ttl`:
+
+```bash
+maquila intake deploy --target /absolute/path/to/repository --allow-credential-transfer --controller-name maquila-controller --port 8080
+```
+
+Deploy owns controller VM creation, pinned runtime bootstrap, exact local package upload, dedicated exe.dev key registration, target checkout, owner-only credential transfer, managed intake service, HTTPS proxy, and marked Linear webhook. Optional `--ttl` accepts `m`, `h`, `d`, or `w`; its persistent controller-side timer performs full cleanup. Omission remains indefinite. It posts one idempotent accepted-run dashboard link to the Linear issue. Use only the first-party rollback:
 
 ```bash
 maquila intake destroy --json

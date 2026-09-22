@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -41,7 +41,12 @@ test("intake controller state is strict, atomic, and private", () => {
     assert.deepEqual(readIntakeControllerState(path), state());
     assert.equal(statSync(path).mode & 0o777, 0o600);
     assert.equal(statSync(directory).mode & 0o777, 0o700);
-    const malformed = { ...JSON.parse(readFileSync(path, "utf8")), token: "secret" };
+    const expiring = { ...state(), expiresAt: "2026-01-02T00:00:00.000Z" };
+    writeIntakeControllerState(path, expiring);
+    assert.deepEqual(readIntakeControllerState(path), expiring);
+    writeFileSync(path, JSON.stringify({ ...expiring, expiresAt: "never" }));
+    assert.throws(() => readIntakeControllerState(path), /malformed/);
+    const malformed = { ...expiring, token: "secret" };
     writeFileSync(path, JSON.stringify(malformed));
     assert.throws(() => readIntakeControllerState(path), /malformed/);
   } finally {

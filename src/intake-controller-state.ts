@@ -24,6 +24,7 @@ export interface IntakeControllerState {
   bootPersistent: boolean;
   controllerPublicKey?: string;
   linearWebhookId?: string;
+  expiresAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -54,6 +55,7 @@ function valid(value: unknown): value is IntakeControllerState {
     "bootPersistent",
     "controllerPublicKey",
     "linearWebhookId",
+    "expiresAt",
     "createdAt",
     "updatedAt",
   ];
@@ -102,6 +104,9 @@ function valid(value: unknown): value is IntakeControllerState {
     (value.linearWebhookId === undefined ||
       (typeof value.linearWebhookId === "string" && UUID.test(value.linearWebhookId))) &&
     validTimestamp(value.createdAt) &&
+    (value.expiresAt === undefined ||
+      (validTimestamp(value.expiresAt) &&
+        Date.parse(value.expiresAt) > Date.parse(value.createdAt))) &&
     validTimestamp(value.updatedAt)
   );
 }

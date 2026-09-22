@@ -8,6 +8,8 @@ import { ExeClient, type ExecResult, type ExeVm } from "../src/integrations/exe.
 import {
   deployIntakeController,
   destroyIntakeController,
+  expireIntakeController,
+  statusIntakeController,
   type ControllerPackage,
 } from "../src/intake-controller.js";
 import { readIntakeControllerState } from "../src/intake-controller-state.js";
@@ -21,6 +23,7 @@ class FakeExe extends ExeClient {
   destroyed = false;
   keyAdded = false;
   keyRemoved = false;
+  selfDestroyed = false;
   proxyPublic = false;
   active = true;
 
@@ -71,6 +74,19 @@ class FakeExe extends ExeClient {
   override async removeSshKey(publicKey: string): Promise<void> {
     assert.equal(publicKey, PUBLIC_KEY);
     this.keyRemoved = true;
+  }
+
+  override async hasSshKey(publicKey: string): Promise<boolean> {
+    assert.equal(publicKey, PUBLIC_KEY);
+    return this.keyAdded && !this.keyRemoved;
+  }
+
+  override async destroyVmFromWithin(vmName: string, publicKey: string): Promise<void> {
+    assert.equal(vmName, "maquila-controller");
+    assert.equal(publicKey, PUBLIC_KEY);
+    this.keyRemoved = true;
+    this.selfDestroyed = true;
+    this.destroyed = true;
   }
 
   override async configurePublicProxy(_vmName: string, port: number): Promise<void> {
@@ -139,6 +155,7 @@ test("first-party intake deploy owns VM, key, proxy, webhook, and rollback", asy
       credentials,
       vmName: "maquila-controller",
       port: 8080,
+      ttlSeconds: 3600,
       exe,
       package: fakePackage(directory),
       fetch: async () => new Response(null, { status: 404 }),
@@ -161,6 +178,7 @@ test("first-party intake deploy owns VM, key, proxy, webhook, and rollback", asy
     assert.equal(exe.keyAdded, true);
     assert.equal(exe.proxyPublic, true);
     assert.equal(state.bootPersistent, true);
+    assert.equal(state.expiresAt, "2026-01-01T01:00:00.000Z");
     assert.ok(
       exe.commands.some((argv) => argv.join(" ").includes("sudo -n loginctl enable-linger exedev")),
     );
@@ -169,8 +187,26 @@ test("first-party intake deploy owns VM, key, proxy, webhook, and rollback", asy
     assert.doesNotMatch(commandText, /linear-secret|github-secret|openrouter-secret/);
     const environment = exe.copies.find((copy) => copy.remote.endsWith("intake.env"));
     assert.match(environment?.content ?? "", /LINEAR_API_TOKEN=/);
+    const timer = exe.copies.find((copy) => copy.remote.endsWith("maquila-intake-expiry.timer"));
+    assert.match(timer?.content ?? "", /OnCalendar=2026-01-01 01:00:00 UTC/);
+    assert.match(timer?.content ?? "", /Persistent=true/);
+    const expiryService = exe.copies.find((copy) =>
+      copy.remote.endsWith("maquila-intake-expiry.service"),
+    );
+    assert.match(expiryService?.content ?? "", /intake expire/);
+    assert.match(expiryService?.content ?? "", /Restart=on-failure/);
+    const remoteState = exe.copies.find((copy) =>
+      copy.remote.endsWith(".maquila/intake-controller.json"),
+    );
+    assert.equal(JSON.parse(remoteState?.content ?? "{}").expiresAt, state.expiresAt);
     assert.match(environment?.content ?? "", /MAQUILA_EXE_IDENTITY=/);
     assert.doesNotMatch(JSON.stringify(state), /linear-secret|github-secret|openrouter-secret/);
+    const status = await statusIntakeController({
+      statePath,
+      exe,
+      now: () => Date.parse("2026-01-01T02:00:00.000Z"),
+    });
+    assert.equal(status.expired, true);
 
     const destroyed = await destroyIntakeController({
       statePath,
@@ -190,6 +226,124 @@ test("first-party intake deploy owns VM, key, proxy, webhook, and rollback", asy
     );
     assert.ok(exe.commands.some((argv) => argv.includes("/home/exedev/.ssh/maquila-controller")));
     assert.deepEqual(deleted, ["22222222-2222-4222-8222-222222222222"]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("omitted controller TTL remains indefinite", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "maquila-intake-controller-indefinite-"));
+  const statePath = join(directory, "state.json");
+  const exe = new FakeExe();
+  try {
+    const state = await deployIntakeController({
+      codeRoot: directory,
+      statePath,
+      target,
+      credentials,
+      vmName: "maquila-controller",
+      port: 8080,
+      exe,
+      package: fakePackage(directory),
+      fetch: async () => new Response(null, { status: 404 }),
+      sleep: async () => undefined,
+      resolveTeamId: async () => "team-1",
+      createWebhook: async () => ({ id: "22222222-2222-4222-8222-222222222222" }),
+      listWebhooks: async () => [],
+    });
+    assert.equal(state.expiresAt, undefined);
+    assert.equal(
+      exe.copies.some((copy) => copy.remote.includes("expiry")),
+      false,
+    );
+    await destroyIntakeController({ statePath, credentials, exe, deleteWebhook: async () => {} });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("expired controller performs full cleanup from its persistent timer", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "maquila-intake-controller-expiry-"));
+  const statePath = join(directory, "state.json");
+  const exe = new FakeExe();
+  const deleted: string[] = [];
+  let now = Date.parse("2026-01-01T00:00:00.000Z");
+  try {
+    await deployIntakeController({
+      codeRoot: directory,
+      statePath,
+      target,
+      credentials,
+      vmName: "maquila-controller",
+      port: 8080,
+      ttlSeconds: 60,
+      exe,
+      package: fakePackage(directory),
+      fetch: async () => new Response(null, { status: 404 }),
+      sleep: async () => undefined,
+      now: () => now,
+      resolveTeamId: async () => "team-1",
+      createWebhook: async () => ({ id: "22222222-2222-4222-8222-222222222222" }),
+      listWebhooks: async () => [],
+    });
+    const remoteStatePath = join(directory, "remote-state.json");
+    writeFileSync(remoteStatePath, readFileSync(statePath));
+    await assert.rejects(
+      expireIntakeController({ statePath: remoteStatePath, credentials, exe, now: () => now }),
+      /has not expired/,
+    );
+    now += 60_000;
+    await assert.rejects(
+      expireIntakeController({
+        statePath: remoteStatePath,
+        credentials,
+        exe,
+        now: () => now,
+        deleteWebhook: async () => {
+          throw new Error("temporary Linear failure");
+        },
+        listWebhooks: async () => [
+          {
+            id: "22222222-2222-4222-8222-222222222222",
+            label: "Maquila test",
+            url: "https://maquila-controller.exe.xyz/hooks/linear",
+            enabled: true,
+          },
+        ],
+      }),
+      /cleanup is incomplete/,
+    );
+    assert.equal(exe.selfDestroyed, false);
+    const expired = await expireIntakeController({
+      statePath: remoteStatePath,
+      credentials,
+      exe,
+      now: () => now,
+      deleteWebhook: async ({ id }) => {
+        deleted.push(id);
+      },
+    });
+    assert.equal(expired.status, "destroyed");
+    assert.equal(exe.selfDestroyed, true);
+    assert.equal(exe.proxyPublic, false);
+    assert.deepEqual(deleted, ["22222222-2222-4222-8222-222222222222"]);
+    assert.equal(
+      exe.commands.some(
+        (argv) => argv[0] === "rm" && argv.includes("/home/exedev/.config/maquila/intake.env"),
+      ),
+      false,
+    );
+    const reconciled = await destroyIntakeController({
+      statePath,
+      credentials,
+      exe,
+      now: () => now,
+      deleteWebhook: async () => {
+        throw new Error("already deleted");
+      },
+      listWebhooks: async () => [],
+    });
+    assert.equal(reconciled?.status, "destroyed");
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

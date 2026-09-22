@@ -68,7 +68,7 @@ The installed Pi skill routes through the same public commands:
 
 Other agents can use `setup --agent`, `doctor --agent`, `run start --json`, and `run status --json` (`--json` also works for setup/doctor). Keep credentials in the controller's environment, not in model prompts. The operating agent starts and observes work; it cannot replace deterministic acceptance gates.
 
-**Automatic intake is opt-in.** `maquila intake deploy --target PATH --allow-credential-transfer` provisions the persistent exe.dev controller, installs the exact current build, configures its HTTPS proxy and Linear webhook, and starts the managed intake service. Assigned `Todo` issues carrying exact `maquila-ready` get one admitted automatic run and an idempotent Linear comment with a 24-hour dashboard URL. Use `maquila intake status` and `maquila intake destroy` for inspection and rollback. Manual `run start` does not require the label. See [automatic intake deployment](docs/automatic-intake.md).
+**Automatic intake is opt-in.** `maquila intake deploy --target PATH --allow-credential-transfer` provisions the persistent exe.dev controller, installs the exact current build, configures its HTTPS proxy and Linear webhook, and starts the managed intake service. Add `--ttl 24h` for automatic full teardown; omit it to run indefinitely. Assigned `Todo` issues carrying exact `maquila-ready` get one admitted automatic run and an idempotent Linear comment with a 24-hour dashboard URL. Use `maquila intake status` and `maquila intake destroy` for inspection and rollback. Manual `run start` does not require the label. See [automatic intake deployment](docs/automatic-intake.md).
 
 ## Use the SDK
 

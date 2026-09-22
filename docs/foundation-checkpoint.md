@@ -1,6 +1,6 @@
 # Foundation checkpoint
 
-Verified snapshot updated 2026-09-19. Runtime implementation covers M1–M5 plus the first automatic Linear intake slice; M6 completes its documentation. This page describes current code and deterministic evidence. See [architecture](../ARCHITECTURE.md), [workflows](workflows.md), [envelopes](envelopes.md), and [local observer](observer.md).
+Verified snapshot updated 2026-09-22. Runtime implementation covers M1–M5 plus the first automatic Linear intake slice; M6 completes its documentation. This page describes current code and deterministic evidence. See [architecture](../ARCHITECTURE.md), [workflows](workflows.md), [envelopes](envelopes.md), and [local observer](observer.md).
 
 ## Current boundary
 
@@ -12,7 +12,7 @@ Implemented foundation through M1–M5:
 - Serial block executor runs implement (or trusted docs-only skip), document, deterministic verify, and fresh review. The verifier is a code actor that runs manifest-pinned `bun run check` plus the exact Git gate. Successful result writes version-1 `workflow-execution.json` bound to manifest and reviewed patch.
 - Remote protocol v2 carries canonical step identity. New controller state v2 records recipe, pinned manifest hash, current step, and attempt; state v1 remains readable and resumable for retained decision waits.
 - Host telemetry, `run status`, and observer preserve current workflow checkpoint. Observer remains read-only and loopback-only.
-- `maquila intake deploy/status/destroy` owns one persistent exe.dev controller lifecycle: exact-build deployment, dedicated registered exe.dev key, explicit credential transfer, restart-on-failure user service with lingering enabled, public proxy, team-scoped Linear webhook, rollback, verified intake, bounded reconciliation, durable serial dispatch, controller-time assigned-`Todo`/`maquila-ready` admission, and a token-authenticated public gateway to one observer run. `intake serve` remains its internal host process.
+- `maquila intake deploy/status/destroy` owns one exe.dev controller lifecycle: exact-build deployment, dedicated registered exe.dev key, explicit credential transfer, restart-on-failure user service with lingering enabled, public proxy, team-scoped Linear webhook, rollback, verified intake, bounded reconciliation, durable serial dispatch, controller-time assigned-`Todo`/`maquila-ready` admission, optional persistent controller-side TTL teardown, and a token-authenticated public gateway to one observer run. Omitted TTL remains indefinite; `intake serve` and `intake expire` remain internal host processes.
 - Detached serial issue batching accepts 2–10 unique Linear issues, preallocates independent run IDs, and executes them in CLI order. Each item retains authoritative per-run VM, intake, evidence, idempotency, and pull-request handling; `.maquila/batches/<batch-id>/batch.json` stores coordination metadata only.
 
 All four role schemas run locally and through `maquila run` in a fresh exe.dev VM. Worker owns approved non-doc paths, then documenter owns approved docs paths. Verification and reviewer inspect aggregate diff. Verification is deterministic code, so execution record may link verify to primary writer run rather than inventing verifier session. Controller creates canonical host manifest, copies it into VM, validates remote serial sequence, checks manifest/execution/receipt/envelope/verification/review links, binds reviewed diff to harvested patch, and destroys VM. Trusted controller then verifies pinned base in temporary clone, applies reviewed patch, creates deterministic commit and branch, and opens ready-for-review pull request before reporting `completed`.
@@ -44,7 +44,7 @@ GitHub write credentials never enter VM. OpenRouter uses dedicated capped key as
 
 ## Evidence
 
-Latest automatic-intake checkpoint verification: `bun run check` passed with 369 tests, type-aware lint, format verification, type-check, observer bundle consistency, standalone binary build, and CLI smoke. Independent read-only review found no blocker/high issue. No live Linear webhook, persistent controller VM, model request, or PR publication was performed.
+Latest controller-TTL checkpoint verification: `bun run check` passed with 380 tests, type-aware lint, format verification, type-check, observer bundle consistency, standalone binary build, and CLI smoke. OpenSSH control-master behavior was probed against exe.dev without creating or changing a VM. No live TTL teardown, Linear webhook, model request, or PR publication was performed.
 
 Latest browser-evidence checkpoint verification: `bun run check` passed with 351 tests, type-aware lint, format verification, type-check, observer bundle consistency, and standalone binary smoke. Live RIFF-64 evidence is recorded separately after credentialed validation.
 

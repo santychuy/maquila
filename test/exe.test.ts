@@ -126,6 +126,72 @@ test("controller key and public proxy commands stay strict", async () => {
   await assert.rejects(() => client.configurePublicProxy("unsafe name", 8080), /invalid/);
 });
 
+test("controller SSH key lookup ignores stored comments", async () => {
+  const publicKey = `ssh-ed25519 ${"A".repeat(68)} maquila-controller`;
+  const fake = runner([
+    {
+      stdout: JSON.stringify({
+        ssh_keys: [{ public_key: publicKey.split(" ").slice(0, 2).join(" ") }],
+      }),
+      stderr: "",
+    },
+  ]);
+  assert.equal(await new ExeClient(fake.run).hasSshKey(publicKey), true);
+});
+
+test("controller can revoke its key and self-destruct over one authenticated connection", async () => {
+  const publicKey = `ssh-ed25519 ${"A".repeat(68)} maquila-controller`;
+  const fake = runner([
+    { stdout: "", stderr: "" },
+    { stdout: "{}", stderr: "" },
+    { stdout: "{}", stderr: "" },
+    { stdout: "", stderr: "" },
+  ]);
+  await new ExeClient(fake.run, 30_000, "/tmp/maquila-key").destroyVmFromWithin(
+    "maquila-controller",
+    publicKey,
+  );
+  const socket = fake.calls[0]?.args[fake.calls[0].args.indexOf("-S") + 1];
+  assert.match(socket ?? "", /^\/tmp\/maquila-exe-/);
+  assert.ok(fake.calls[0]?.args.includes("-M"));
+  assert.ok(fake.calls[0]?.args.includes("-fN"));
+  assert.deepEqual(fake.calls[1]?.args.slice(-5), [
+    "exe.dev",
+    "ssh-key",
+    "remove",
+    `'${publicKey}'`,
+    "--json",
+  ]);
+  assert.deepEqual(fake.calls[2]?.args.slice(-4), [
+    "exe.dev",
+    "rm",
+    "maquila-controller",
+    "--json",
+  ]);
+  assert.ok(fake.calls[3]?.args.includes("exit"));
+});
+
+test("failed self-destruction restores controller key for timer retry", async () => {
+  const publicKey = `ssh-ed25519 ${"A".repeat(68)} maquila-controller`;
+  const fake = runner([
+    { stdout: "", stderr: "" },
+    { stdout: "{}", stderr: "" },
+    new Error("destroy failed"),
+    { stdout: "{}", stderr: "" },
+    { stdout: "", stderr: "" },
+  ]);
+  await assert.rejects(
+    () =>
+      new ExeClient(fake.run, 30_000, "/tmp/maquila-key").destroyVmFromWithin(
+        "maquila-controller",
+        publicKey,
+      ),
+    /destroy controller VM failed/,
+  );
+  assert.ok(fake.calls[3]?.args.includes("add"));
+  assert.ok(fake.calls[3]?.args.includes("--tag=maquila-controller"));
+});
+
 test("identity-less client uses OpenSSH defaults without agent forwarding", async () => {
   const fake = runner([{ stdout: JSON.stringify({ vms: [] }), stderr: "" }]);
   await new ExeClient(fake.run, 30_000).listVms();

@@ -25,6 +25,9 @@ test("maquila skill is valid, thin, and routes only through public commands", ()
   assert.match(body, /Continue past doctor only when it exits zero/);
   assert.match(body, /same target/);
   assert.match(body, /maquila intake deploy --target/);
+  assert.match(body, /--ttl 24h/);
+  assert.match(body, /indefinite controller, omit `--ttl`/);
+  assert.match(body, /accepts `m`, `h`, `d`, or `w`/);
   assert.match(body, /maquila intake status --json/);
   assert.match(body, /maquila intake destroy --json/);
   assert.match(body, /assigned `Todo` plus exact `maquila-ready`/);

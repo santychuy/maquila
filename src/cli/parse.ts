@@ -7,6 +7,19 @@ import { parseSetupCommand, parseDoctorCommand } from "./commands/setup-doctor.j
 import { rejectOptions } from "./helpers.js";
 import type { ParsedCli } from "./types.js";
 
+function parseControllerTtl(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") throw new Error("invalid controller TTL");
+  const match = /^(\d+)(m|h|d|w)$/.exec(value);
+  if (!match) throw new Error("controller TTL must use m, h, d, or w");
+  const amount = Number(match[1]);
+  const unit = match[2]!;
+  const seconds = amount * { m: 60, h: 3600, d: 86_400, w: 604_800 }[unit]!;
+  if (!Number.isSafeInteger(seconds) || seconds < 60 || seconds > 365 * 24 * 60 * 60)
+    throw new Error("controller TTL must be between 1 minute and 365 days");
+  return seconds;
+}
+
 export function parseCli(args: string[]): ParsedCli {
   const { positionals, values } = parseArgs({
     args: args[0] === "--" ? args.slice(1) : args,
@@ -42,6 +55,7 @@ export function parseCli(args: string[]): ParsedCli {
       "automatic-admission": { type: "boolean" },
       "controller-name": { type: "string" },
       "allow-credential-transfer": { type: "boolean" },
+      ttl: { type: "string" },
     },
   });
 
@@ -62,6 +76,7 @@ export function parseCli(args: string[]): ParsedCli {
       "controller-name",
       "identity",
       "json",
+      "ttl",
       "allow-credential-transfer",
     ]);
     if (typeof values.target !== "string" || !values["allow-credential-transfer"])
@@ -82,9 +97,14 @@ export function parseCli(args: string[]): ParsedCli {
       controllerName,
       port,
       allowCredentialTransfer: true,
+      ...(values.ttl === undefined ? {} : { ttlSeconds: parseControllerTtl(values.ttl) }),
       ...(typeof values.identity === "string" ? { identity: values.identity } : {}),
       ...(values.json ? { json: true } : {}),
     };
+  }
+  if (command === "intake expire") {
+    rejectOptions(values, []);
+    return { command: "intake-expire" };
   }
   if (command === "intake status" || command === "intake destroy") {
     rejectOptions(values, ["identity", "json"]);
