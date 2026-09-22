@@ -4,6 +4,12 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const SAFE_VM_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const SAFE_PUBLIC_KEY = /^ssh-ed25519 [A-Za-z0-9+/]{40,120}={0,3}(?: [A-Za-z0-9._:@+-]{1,128})?$/;
+
+export function assertExeVmName(value: unknown): string {
+  if (typeof value !== "string" || !SAFE_VM_NAME.test(value)) throw new Error("invalid VM name");
+  return value;
+}
 /** Built-in exe.dev tag boundary from observed provider error: must match ^[a-z][a-z0-9_-]*$. */
 export const EXE_TAG_PATTERN = /^[a-z][a-z0-9_-]*$/;
 export const EXE_TAG_MAX_LENGTH = 64;
@@ -402,6 +408,7 @@ export class ExeClient {
   private async controlJson(operation: string, args: string[]): Promise<unknown> {
     const result = await this.invoke(operation, "ssh", [
       ...this.connectionOptions,
+      "-n",
       "exe.dev",
       ...args,
     ]);
@@ -491,6 +498,43 @@ export class ExeClient {
       ...this.connectionOptions,
       `${destination}:${safeRemotePath(remotePath)}`,
       safeLocalPath(localPath),
+    ]);
+  }
+
+  async addSshKey(publicKey: string, tag: string): Promise<void> {
+    if (!SAFE_PUBLIC_KEY.test(publicKey)) throw new Error("invalid exe.dev public key");
+    await this.controlJson("add SSH key", [
+      "ssh-key",
+      "add",
+      `--tag=${safeName(tag, "SSH key tag")}`,
+      quoteRemoteArg(publicKey),
+      "--json",
+    ]);
+  }
+
+  async removeSshKey(publicKey: string): Promise<void> {
+    if (!SAFE_PUBLIC_KEY.test(publicKey)) throw new Error("invalid exe.dev public key");
+    await this.controlJson("remove SSH key", [
+      "ssh-key",
+      "remove",
+      quoteRemoteArg(publicKey),
+      "--json",
+    ]);
+  }
+
+  async configurePublicProxy(vmName: string, port: number): Promise<void> {
+    const name = safeName(vmName, "VM name");
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error("invalid proxy port");
+    await this.controlJson("set proxy port", ["share", "port", name, String(port), "--json"]);
+    await this.controlJson("set proxy public", ["share", "set-public", name, "--json"]);
+  }
+
+  async makeProxyPrivate(vmName: string): Promise<void> {
+    await this.controlJson("set proxy private", [
+      "share",
+      "set-private",
+      safeName(vmName, "VM name"),
+      "--json",
     ]);
   }
 

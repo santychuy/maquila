@@ -52,6 +52,7 @@ test("detached launch returns only after matching accepted handshake", async () 
       cliPath: "/maquila/dist/src/cli.js",
       runId,
       instanceId,
+      automaticAdmission: true,
       resolveTarget: () => target,
       spawnChild: (_command: string, args: string[], options: { env?: NodeJS.ProcessEnv }) => {
         capturedArgs = args;
@@ -83,6 +84,7 @@ test("detached launch returns only after matching accepted handshake", async () 
     });
     assert.equal(unref, true);
     assert.equal(capturedArgs.includes(target.path), false);
+    assert.equal(capturedArgs.includes("--automatic-admission"), true);
     assert.doesNotMatch(
       capturedArgs.join(" "),
       /linear-secret|github-secret|openrouter-secret|private-identity/,

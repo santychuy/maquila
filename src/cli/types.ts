@@ -14,6 +14,10 @@ export const HELP = `Usage:
   maquila run batch status --batch-id UUID [--json]
   maquila run resume --run-id UUID [--identity ABS] [--json]
   maquila run status --run-id UUID [--json]
+  maquila intake deploy --target PATH --allow-credential-transfer [--controller-name NAME] [--port 8080] [--identity ABS] [--json]
+  maquila intake status [--identity ABS] [--json]
+  maquila intake destroy [--identity ABS] [--json]
+  maquila intake serve --target PATH --port PORT [--poll-interval-ms 60000]
   maquila dashboard [--port 4600]
   maquila observer serve [--port 4600]
   maquila observer ensure [--port 4600] --json
@@ -22,6 +26,32 @@ export const HELP = `Usage:
 
 Lists agents or runs planner, worker/reviewer, and remote controller workflows.
 `;
+
+export interface IntakeDeployCommand {
+  command: "intake-deploy";
+  target: string;
+  controllerName: string;
+  port: number;
+  allowCredentialTransfer: true;
+  identity?: string;
+  json?: boolean;
+  timeoutSeconds?: undefined;
+}
+
+export interface IntakeLifecycleCommand {
+  command: "intake-status" | "intake-destroy";
+  identity?: string;
+  json?: boolean;
+  timeoutSeconds?: undefined;
+}
+
+export interface IntakeServeCommand {
+  command: "intake-serve";
+  target: string;
+  port: number;
+  pollMilliseconds: number;
+  timeoutSeconds?: undefined;
+}
 
 export interface RunStartCommand {
   command: "run-start";
@@ -71,6 +101,7 @@ export interface RunExecuteCommand {
   baseRef: string;
   tag: string;
   timeoutSeconds: number;
+  automaticAdmission?: boolean;
 }
 
 export interface RunResumeCommand {
@@ -134,6 +165,9 @@ export type ParsedCli =
   | PlanCliOptions
   | WorkerCliOptions
   | DirectRunOptions
+  | IntakeDeployCommand
+  | IntakeLifecycleCommand
+  | IntakeServeCommand
   | RunStartCommand
   | RunBatchCommand
   | RunBatchExecuteCommand

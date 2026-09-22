@@ -8,9 +8,23 @@ The four provider seams supply external facts and bounded actions: work-item int
 
 The SDK calls the same core through a blocking `run(request)`. The host owns queues and background lifetime. Detached execution, status, resume, and batch are CLI compatibility surfaces only. There is no public custom recipe API: `feature-pr` remains trusted TypeScript and code-controlled.
 
-## Read-only issue preflight
+## Linear automatic intake
 
-`doctor --issue ID` checks strict assigned-Todo Linear intake and the exact `maquila-ready` label by default. `--require-label LABEL` overrides that label; `--require-label ""` skips the label check. Commands target the current directory; pass `--target PATH` only to aim elsewhere. This check does not reserve work or enforce a controller trigger policy; ordinary manual starts retain their current intake contract. Automatic discovery, durable queue ownership, and accept-time `maquila-ready` enforcement for the planned website pilot are not implemented. Recipe, manifest, verification, review, and publication gates are unchanged.
+`doctor --issue ID` remains read-only preflight. It checks assigned `Todo` intake and exact `maquila-ready` label by default; `--require-label LABEL` overrides that label and `--require-label ""` skips it. Manual `run start` keeps its existing contract.
+
+`maquila intake deploy --target PATH` creates and owns the single-repository persistent controller lifecycle: exact local package upload, pinned runtime bootstrap, dedicated exe.dev key registration, target clone, private credential transfer, user service, public HTTPS proxy, and marked Linear webhook. `intake status` inspects it; `intake destroy` revokes webhook/key/proxy and deletes the VM. `maquila intake serve --target PATH --port PORT` remains the internal host process. It requires `MAQUILA_LINEAR_WEBHOOK_SECRET` and an HTTPS origin in `MAQUILA_PUBLIC_URL`. That process:
+
+- verifies Linear's raw-body HMAC, delivery UUID, and one-minute timestamp window;
+- durably records a bounded delivery/candidate before replying `200`;
+- performs a bounded full reconciliation scan and durably queues each completed Relay page;
+- persists an issue-to-run claim before dispatching one issue through the existing detached launcher;
+- asks the controller to refetch and enforce the same policy, then acknowledges automatic launch only after durable controller state exists and before VM creation;
+- reconciles uncertain launcher outcomes against that controller state and treats admission as the issue's sole automatic run, even when the workflow later fails;
+- serves one authenticated public gateway while the canonical observer remains loopback-only.
+
+Webhook payloads are wake-up hints, never acceptance evidence. Duplicate deliveries and already handled issues are no-ops. Transient eligibility/launcher errors remain pending with bounded backoff. Terminal workflow failures do not trigger a new automatic run. A human must explicitly start any retry.
+
+The service stores intake state and SHA-256 token records under the same `.maquila` state directory. A private generated gateway secret makes the 24-hour token reproducible across publication retries while local access state persists only its hash. After acceptance, an idempotent Linear comment delivers the run URL; service stdout also reports it. The initial URL exchanges its query token for a secure, HTTP-only, same-site cookie. Gateway access is limited to that run's page, static observer assets, and run-scoped read APIs. `/hooks/linear` is public but accepts only a valid Linear signature and enforces a four-second body/persistence deadline. Recipe, verification, review, cleanup, publication, and human merge authority are unchanged. See [automatic Linear intake on exe.dev](automatic-intake.md) for deployment and live proof.
 
 ## Mental model
 

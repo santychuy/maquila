@@ -24,7 +24,10 @@ test("maquila skill is valid, thin, and routes only through public commands", ()
   assert.match(body, /maquila doctor --issue "<issue-id>" --json/);
   assert.match(body, /Continue past doctor only when it exits zero/);
   assert.match(body, /same target/);
-  assert.match(body, /does not discover issues automatically/);
+  assert.match(body, /maquila intake deploy --target/);
+  assert.match(body, /maquila intake status --json/);
+  assert.match(body, /maquila intake destroy --json/);
+  assert.match(body, /assigned `Todo` plus exact `maquila-ready`/);
   assert.match(body, /run status --run-id/);
   assert.match(body, /bounded 30–60 second interval/);
   assert.match(body, /Remove the watcher at every terminal state/);
@@ -37,6 +40,6 @@ test("maquila skill is valid, thin, and routes only through public commands", ()
   assert.match(body, /Do not blind-repeat a failed run/);
   assert.doesNotMatch(body, /bun run maquila/);
   assert.doesNotMatch(body, /absolute target Git repository path/);
-  assert.doesNotMatch(body, /ssh exe\.dev|curl .*exe\.dev|readFile|telemetryPath|destroyVm/);
+  assert.doesNotMatch(body, /curl .*exe\.dev|readFile|telemetryPath|destroyVm/);
   assert.match(body, /Never print environment values/);
 });

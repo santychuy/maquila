@@ -77,7 +77,9 @@ export interface Maquila {
 export interface InternalMaquilaRunControls {
   runId?: string;
   onAccepted?: () => void;
+  onAdmitted?: () => void;
   maquilaRoot?: string;
+  automaticAdmission?: boolean;
 }
 
 type ObjectRecord = Record<string, unknown>;
@@ -259,6 +261,8 @@ export async function runMaquila(
     runId,
     publicationMode: parsed.mode ?? "publish",
     ...(controls.onAccepted ? { onAccepted: controls.onAccepted } : {}),
+    ...(controls.onAdmitted ? { onAdmitted: controls.onAdmitted } : {}),
+    ...(controls.automaticAdmission ? { automaticAdmission: true } : {}),
     infrastructure: {
       workItems: bound.workItemProvider,
       workItemReference: parsed.workItem,

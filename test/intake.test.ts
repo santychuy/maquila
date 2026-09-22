@@ -11,9 +11,14 @@ import {
 } from "../src/integrations/github.js";
 import { createIntake, createProviderIntake } from "../src/intake.js";
 import {
+  createLinearAutomaticRunComment,
+  createLinearAutomaticWebhook,
   createLinearDecisionComment,
+  deleteLinearAutomaticWebhook,
   fetchLinearDecisionReply,
   fetchLinearIssue,
+  fetchSingleLinearTeamId,
+  listLinearAutomaticCandidates,
 } from "../src/integrations/linear.js";
 
 interface FetchReply {
@@ -77,6 +82,63 @@ const reference = {
   ref: "refs/heads/main",
   object: { type: "commit", sha: "a".repeat(40) },
 };
+
+test("automatic Linear candidate query is assigned, Todo, labeled, and bounded", async () => {
+  const request = sequence([
+    {
+      body: {
+        data: {
+          issues: {
+            edges: [
+              {
+                cursor: "cursor-1",
+                node: {
+                  id: "7c3cd7a0-2503-40fe-9f33-56588786452a",
+                  identifier: "RIFF-39",
+                  updatedAt: "2026-01-01T00:00:00.000Z",
+                },
+              },
+            ],
+            pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+          },
+        },
+      },
+    },
+  ]);
+  const result = await listLinearAutomaticCandidates({
+    fetch: request.fetch,
+    token: "linear-secret",
+    teamId: "team-1",
+    first: 10,
+  });
+  assert.equal(result.candidates[0]?.identifier, "RIFF-39");
+  assert.equal(result.hasNextPage, true);
+  const requestBody = request.calls[0]?.init?.body;
+  if (typeof requestBody !== "string") throw new Error("expected string request body");
+  const payload = JSON.parse(requestBody);
+  assert.match(payload.query, /assignee:\{null:false\}/);
+  assert.match(payload.query, /name:\{eq:"Todo"\}/);
+  assert.match(payload.query, /labels:\{some:/);
+  assert.match(payload.query, /maquila-ready/);
+  assert.deepEqual(payload.variables, { after: null, teamId: "team-1" });
+  const unscoped = sequence([
+    {
+      body: {
+        data: {
+          issues: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } },
+        },
+      },
+    },
+  ]);
+  await listLinearAutomaticCandidates({ fetch: unscoped.fetch, token: "linear-secret" });
+  const unscopedBody = unscoped.calls[0]?.init?.body;
+  if (typeof unscopedBody !== "string") throw new Error("expected string request body");
+  assert.doesNotMatch(JSON.parse(unscopedBody).query, /teamId/);
+  await assert.rejects(
+    listLinearAutomaticCandidates({ fetch: request.fetch, token: "linear-secret", first: 51 }),
+    /page size/,
+  );
+});
 
 test("Linear key and UUID produce stable Todo snapshots", async () => {
   const keyFetch = sequence([{ body: linearIssue() }]);
@@ -162,6 +224,133 @@ test("Linear rejects non-Todo, GraphQL errors, and malformed partial data", asyn
       }),
     /must have an assignee/,
   );
+});
+
+test("automatic webhook lifecycle uses one team, caller-owned secret, and stable marker", async () => {
+  const team = sequence([{ body: { data: { teams: { nodes: [{ id: "team-1" }] } } } }]);
+  assert.equal(await fetchSingleLinearTeamId({ fetch: team.fetch, token: "secret" }), "team-1");
+  const created = sequence([
+    {
+      body: {
+        data: {
+          webhooks: { nodes: [], pageInfo: { hasNextPage: false } },
+        },
+      },
+    },
+    {
+      body: {
+        data: {
+          webhookCreate: {
+            success: true,
+            webhook: {
+              id: "33333333-3333-4333-8333-333333333333",
+              enabled: true,
+              url: "https://controller.exe.xyz/hooks/linear",
+              label: "Maquila deployment",
+            },
+          },
+        },
+      },
+    },
+  ]);
+  const webhook = await createLinearAutomaticWebhook({
+    fetch: created.fetch,
+    token: "secret",
+    url: "https://controller.exe.xyz/hooks/linear",
+    secret: "a".repeat(64),
+    label: "Maquila deployment",
+    teamId: "team-1",
+  });
+  assert.equal(webhook.id, "33333333-3333-4333-8333-333333333333");
+  const rawCreate = created.calls[1]?.init?.body;
+  if (typeof rawCreate !== "string") assert.fail("expected webhook request body");
+  const request = JSON.parse(rawCreate) as { variables: { input: Record<string, unknown> } };
+  assert.equal(request.variables.input.secret, "a".repeat(64));
+  assert.deepEqual(request.variables.input.resourceTypes, ["Issue"]);
+  assert.equal(request.variables.input.teamId, "team-1");
+  assert.equal(request.variables.input.allPublicTeams, undefined);
+
+  const deleted = sequence([{ body: { data: { webhookDelete: { success: true } } } }]);
+  await deleteLinearAutomaticWebhook({
+    fetch: deleted.fetch,
+    token: "secret",
+    id: webhook.id,
+  });
+});
+
+test("automatic run link comment is idempotent and carries the expiring dashboard", async () => {
+  const runId = "11111111-1111-4111-8111-111111111111";
+  const created = sequence([
+    {
+      body: {
+        data: {
+          issue: {
+            id: "issue-1",
+            comments: { nodes: [], pageInfo: { hasNextPage: false } },
+          },
+        },
+      },
+    },
+    {
+      body: {
+        data: {
+          commentCreate: {
+            success: true,
+            comment: { id: "comment-1", url: "https://linear.app/example/comment-1" },
+          },
+        },
+      },
+    },
+  ]);
+  const result = await createLinearAutomaticRunComment({
+    fetch: created.fetch,
+    token: "secret",
+    issueId: "issue-1",
+    runId,
+    dashboardUrl: `https://demo.exe.xyz/runs/${runId}?token=secret-link`,
+    expiresAt: "2026-01-02T00:00:00.000Z",
+  });
+  assert.equal(result.commentId, "comment-1");
+  const rawBody = created.calls[1]?.init?.body;
+  if (typeof rawBody !== "string") assert.fail("expected run comment request body");
+  assert.match(rawBody, /secret-link/);
+  assert.match(rawBody, /maquila-run:/);
+
+  const existing = sequence([
+    {
+      body: {
+        data: {
+          issue: {
+            id: "issue-1",
+            comments: {
+              nodes: [
+                {
+                  id: "comment-1",
+                  url: "https://linear.app/example/comment-1",
+                  body: `existing <!-- maquila-run:${runId} -->`,
+                },
+              ],
+              pageInfo: { hasNextPage: false },
+            },
+          },
+        },
+      },
+    },
+  ]);
+  assert.equal(
+    (
+      await createLinearAutomaticRunComment({
+        fetch: existing.fetch,
+        token: "secret",
+        issueId: "issue-1",
+        runId,
+        dashboardUrl: `https://demo.exe.xyz/runs/${runId}?token=secret-link`,
+        expiresAt: "2026-01-02T00:00:00.000Z",
+      })
+    ).commentId,
+    "comment-1",
+  );
+  assert.equal(existing.calls.length, 1);
 });
 
 test("Linear decision comments mention assignee and accept latest assigned Decision reply", async () => {

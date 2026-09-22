@@ -265,8 +265,93 @@ test("detached run and status commands default target to cwd and treat JSON as o
     "acme-widget",
   ]);
   assert.equal(typeof execute === "object" && "target" in execute, false);
+  const automaticExecute = parseCli([
+    "run",
+    "execute",
+    "--run-id",
+    "11111111-1111-4111-8111-111111111111",
+    "--issue",
+    "RIFF-52",
+    "--owner",
+    "acme",
+    "--repo",
+    "widget",
+    "--base-ref",
+    "main",
+    "--tag",
+    "acme-widget",
+    "--automatic-admission",
+  ]);
+  assert.equal(
+    typeof automaticExecute === "object" &&
+      "automaticAdmission" in automaticExecute &&
+      automaticExecute.automaticAdmission,
+    true,
+  );
+  assert.throws(
+    () => parseCli(["run", "start", "--issue", "RIFF-52", "--automatic-admission"]),
+    /unsupported/,
+  );
+  assert.deepEqual(
+    parseCli([
+      "intake",
+      "serve",
+      "--target",
+      "/tmp/target",
+      "--port",
+      "8080",
+      "--poll-interval-ms",
+      "5000",
+    ]),
+    {
+      command: "intake-serve",
+      target: "/tmp/target",
+      port: 8080,
+      pollMilliseconds: 5000,
+    },
+  );
+  assert.throws(() => parseCli(["intake", "serve", "--target", "/tmp/target"]), /requires/);
+  assert.deepEqual(
+    parseCli([
+      "intake",
+      "deploy",
+      "--target",
+      "/tmp/target",
+      "--allow-credential-transfer",
+      "--json",
+    ]),
+    {
+      command: "intake-deploy",
+      target: "/tmp/target",
+      controllerName: "maquila-controller",
+      port: 8080,
+      allowCredentialTransfer: true,
+      json: true,
+    },
+  );
+  assert.deepEqual(parseCli(["intake", "status", "--json"]), {
+    command: "intake-status",
+    json: true,
+  });
+  assert.deepEqual(parseCli(["intake", "destroy"]), { command: "intake-destroy" });
+  assert.throws(() => parseCli(["intake", "deploy"]), /requires/);
+  assert.throws(
+    () =>
+      parseCli([
+        "intake",
+        "deploy",
+        "--target",
+        "/tmp/target",
+        "--controller-name",
+        "unsafe name",
+        "--allow-credential-transfer",
+      ]),
+    /invalid/,
+  );
   assert.match(HELP, /run start/);
   assert.match(HELP, /run status/);
+  assert.match(HELP, /intake deploy/);
+  assert.match(HELP, /intake serve/);
 });
 
 test("batch command accepts bounded repeated issues and exposes status", () => {

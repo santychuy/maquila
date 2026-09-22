@@ -79,6 +79,29 @@ maquila observer serve --port 4600
 
 `dashboard` and `observer ensure --json` start or reuse the same detached instance. `observer status --json` checks descriptor-bound health. `observer stop --json` signals only process whose instance, PID, health response, and stable process identity match private descriptor. Default is fixed `127.0.0.1:4600`; override with `--port` or `MAQUILA_OBSERVER_PORT`. No automatic alternate port or OS boot service exists.
 
+## Automatic intake gateway
+
+A persistent controller host can run:
+
+```bash
+export MAQUILA_LINEAR_WEBHOOK_SECRET='<configured outside shell history>'
+export MAQUILA_PUBLIC_URL='https://controller-name.exe.xyz'
+maquila intake serve --target /absolute/path/to/repository --port 8080
+```
+
+`maquila intake deploy --target PATH` now creates the owner-only environment, managed user service, exe.dev HTTPS proxy, and marked Linear webhook. `intake serve` starts/reuses the loopback observer, starts an internal loopback webhook service, and binds an authenticated gateway on the requested public port; it is the deployed service command rather than the normal operator entrypoint.
+
+Full controller-VM setup, proxy commands, webhook registration, process-manager example, acceptance proof, and rollback live in [automatic Linear intake on exe.dev](automatic-intake.md).
+
+The gateway does not make the observer public. It proxies only:
+
+- `POST /hooks/linear`, which must pass Linear HMAC and freshness checks;
+- one token-authorized `/runs/<run-id>` page;
+- `/styles.css` and `/app.js` with that run cookie;
+- read-only `/api/v1/runs/<run-id>` descendants for the same run.
+
+Root run listing, other run IDs, write methods, redirects, and unauthenticated assets remain unavailable. The query token is exchanged for a `Secure`, `HttpOnly`, `SameSite=Strict` cookie and removed before observer proxying. Only its hash and expiry are retained locally; an owner-only gateway secret reproduces the same token if Linear comment publication must retry. The service posts one idempotent accepted-run comment with the 24-hour URL to the triggering Linear issue and also prints it to stdout.
+
 ## Data contract
 
 Controller is sole writer of `.maquila/telemetry/<run-id>.jsonl`. Each strict event has host-assigned gap-free sequence. Ledger contains phase boundaries, safe agent/tool names, deterministic gate summary, reviewer verdict/count, failure, cleanup, heartbeat, terminal result, and safe artifact metadata. Remote commands are capped at 20,000 frames and 8 MiB; each host ledger is capped at 32 MiB before append or replay. Exceeding a cap fails the run and still attempts cleanup.
@@ -133,6 +156,6 @@ GitHub precedence is `GITHUB_TOKEN`, `GH_TOKEN`, then `gh auth token`. Linear pr
 - JSONL replay, not SQLite analytics or retention controls. See [SQLite storage research](sqlite-storage-research.md) for evidence and future migration candidates.
 - Runs created before canonical telemetry can be queried by known UUID as `legacy`, but are omitted from the run list.
 - Polling, not WebSocket or SSE.
-- No remote access or authentication. Loopback reduces network exposure but does not protect prompt bodies from other local processes or users that can reach the observer.
+- The observer itself has no remote listener or authentication. Automatic intake's separate gateway provides run-scoped temporary access; loopback still does not protect prompt bodies from other local processes or users that can reach the observer.
 - No raw artifact downloads.
 - No credentialed exe.dev smoke proof for observer slice yet.

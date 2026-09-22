@@ -1,20 +1,48 @@
 #!/usr/bin/env node
 
 import { randomUUID } from "node:crypto";
+import { request as httpRequest } from "node:http";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { listAgents } from "../agents/index.js";
+import { AutomaticLaunchUncertainError, runAutomaticIntakeService } from "../automatic-intake.js";
+import {
+  deployIntakeController,
+  destroyIntakeController,
+  statusIntakeController,
+} from "../intake-controller.js";
+import { intakeControllerStatePath } from "../intake-controller-state.js";
+import {
+  createObserverGateway,
+  deriveRunAccessToken,
+  loadOrCreateGatewaySecret,
+  readAccessRecords,
+  validatePublicGatewayUrl,
+  writeAccessRecords,
+} from "../observer/gateway.js";
 import { runPlan } from "../workflows/plan.js";
 import { runWorkerLifecycle } from "../workflows/worker.js";
 import { runControllerChain } from "../controller-chain.js";
 import { runBuiltInMaquila } from "./maquila-runtime.js";
 import { readPersistedDecisionRequest } from "../controller.js";
+import { readControllerState } from "../run-state.js";
 import { createRemoteProtocolWriter } from "../remote-protocol.js";
 import { loadMaquilaConfig } from "../config.js";
 import { resolveControllerCredentials } from "../credentials.js";
 import { runDoctor } from "../doctor.js";
+import {
+  createLinearAutomaticRunComment,
+  fetchLinearIssue,
+  isAutomaticLinearCandidate,
+  LinearIssueValidationError,
+} from "../integrations/linear.js";
 import { runSetup, SetupCancelled } from "../setup.js";
-import { LAUNCH_INSTANCE_ENV, startDetachedRun, writeLaunchHandshake } from "../run-launcher.js";
+import {
+  DetachedRunTerminationUnconfirmedError,
+  LAUNCH_INSTANCE_ENV,
+  startDetachedRun,
+  writeLaunchHandshake,
+} from "../run-launcher.js";
 import {
   createBatch,
   readBatchState,
@@ -24,6 +52,7 @@ import {
 } from "../run-batch.js";
 import { foldRunStatus, type RunStatusSummary } from "../run-status.js";
 import { maquilaRoot, hostStateRoot, isMain } from "../runtime.js";
+import { stateDirectory } from "../state-directory.js";
 import { resolveTargetRepository, validateResolvedTarget } from "../target.js";
 import {
   ensureObserver,
@@ -157,6 +186,233 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     const root = hostStateRoot(codeRoot);
 
     if ("command" in options) {
+      if (options.command === "intake-deploy") {
+        const target = resolveTargetRepository({ target: options.target });
+        const launchEnv = { ...process.env, MAQUILA_HOME: root };
+        const credentials = await resolveControllerCredentials({
+          env: launchEnv,
+          identityFlag: options.identity,
+          config: loadMaquilaConfig({ env: launchEnv }),
+        });
+        if (!options.json) process.stdout.write("Deploying Maquila intake controller...\n");
+        const result = await deployIntakeController({
+          codeRoot,
+          statePath: intakeControllerStatePath(stateDirectory(root)),
+          target,
+          credentials,
+          vmName: options.controllerName,
+          port: options.port,
+        });
+        const output = {
+          status: result.status,
+          vmName: result.vmName,
+          publicUrl: result.publicUrl,
+          webhookUrl: new URL("/hooks/linear", result.publicUrl).href,
+          target: result.targetFullName,
+          sourceSha: result.sourceSha,
+          sourceDirty: result.sourceDirty,
+          packageSha256: result.packageSha256,
+        };
+        if (options.json) json(output);
+        else
+          process.stdout.write(
+            `Controller: ${output.vmName}\nStatus: ${output.status}\nPublic URL: ${output.publicUrl}\nWebhook: ${output.webhookUrl}\nTarget: ${output.target}\n`,
+          );
+        return 0;
+      }
+      if (options.command === "intake-status") {
+        const result = await statusIntakeController({
+          statePath: intakeControllerStatePath(stateDirectory(root)),
+          identity: options.identity ?? process.env.MAQUILA_EXE_IDENTITY,
+        });
+        if (options.json) json(result);
+        else if (!result.state) process.stdout.write("Intake controller: absent\n");
+        else
+          process.stdout.write(
+            `Controller: ${result.state.vmName}\nDeployment: ${result.state.status}\nVM: ${result.vm}\nService: ${result.service}\nBoot persistent: ${result.state.bootPersistent ? "yes" : "no"}\nPublic URL: ${result.state.publicUrl}\nTarget: ${result.state.targetFullName}\n`,
+          );
+        return result.vm === "unknown" || result.service === "unknown" ? 1 : 0;
+      }
+      if (options.command === "intake-destroy") {
+        const launchEnv = { ...process.env, MAQUILA_HOME: root };
+        const credentials = await resolveControllerCredentials({
+          env: launchEnv,
+          identityFlag: options.identity,
+          config: loadMaquilaConfig({ env: launchEnv }),
+        });
+        const result = await destroyIntakeController({
+          statePath: intakeControllerStatePath(stateDirectory(root)),
+          credentials,
+        });
+        const output = result
+          ? { status: result.status, vmName: result.vmName }
+          : { status: "absent" as const };
+        if (options.json) json(output);
+        else process.stdout.write(`Intake controller: ${output.status}\n`);
+        return 0;
+      }
+      if (options.command === "intake-serve") {
+        const secret = process.env.MAQUILA_LINEAR_WEBHOOK_SECRET;
+        const publicUrl = process.env.MAQUILA_PUBLIC_URL;
+        if (!secret) throw new Error("MAQUILA_LINEAR_WEBHOOK_SECRET is required");
+        if (!publicUrl) throw new Error("MAQUILA_PUBLIC_URL is required");
+        validatePublicGatewayUrl(publicUrl);
+        const cliPath = process.argv[1];
+        if (!cliPath) throw new Error("intake CLI path unavailable");
+        const target = resolveTargetRepository({ target: options.target });
+        const launchEnv = { ...process.env, MAQUILA_HOME: root };
+        const credentials = await resolveControllerCredentials({
+          env: launchEnv,
+          config: loadMaquilaConfig({ env: launchEnv }),
+        });
+        const observer = await ensureObserver({
+          root,
+          port: 4600,
+          cliPath,
+          env: launchEnv,
+        });
+        const stateRoot = stateDirectory(root);
+        const accessPath = resolve(stateRoot, "automatic-intake-access.json");
+        const gatewaySecret = loadOrCreateGatewaySecret(
+          resolve(stateRoot, "automatic-intake-gateway.secret"),
+        );
+        const tokens = readAccessRecords(accessPath);
+        let gatewayUrl: ((runId: string, token: string) => string) | undefined;
+        const service = await runAutomaticIntakeService({
+          statePath: resolve(stateRoot, "automatic-intake.json"),
+          secret,
+          port: 0,
+          target: options.target,
+          linearToken: credentials.linearToken,
+          pollMilliseconds: options.pollMilliseconds,
+          launch: async (issueId, runId) => {
+            try {
+              return await startDetachedRun({
+                maquilaRoot: codeRoot,
+                root,
+                target: options.target,
+                issue: issueId,
+                runId,
+                owner: target.owner,
+                repo: target.repo,
+                baseRef: target.baseRef,
+                tag: target.tag,
+                timeoutSeconds: 900,
+                startupTimeoutMs: 60_000,
+                automaticAdmission: true,
+                cliPath,
+                env: {
+                  ...launchEnv,
+                  LINEAR_API_TOKEN: credentials.linearToken,
+                  GITHUB_TOKEN: credentials.githubToken,
+                  OPENROUTER_API_KEY: credentials.openRouterKey,
+                  ...(credentials.identity ? { MAQUILA_EXE_IDENTITY: credentials.identity } : {}),
+                },
+                ...(credentials.identity ? { identity: credentials.identity } : {}),
+              });
+            } catch (error) {
+              if (error instanceof DetachedRunTerminationUnconfirmedError)
+                throw new AutomaticLaunchUncertainError(error.message);
+              throw error;
+            }
+          },
+          eligible: async (issueId) => {
+            try {
+              return isAutomaticLinearCandidate(
+                await fetchLinearIssue({ token: credentials.linearToken, issue: issueId }),
+              );
+            } catch (error) {
+              if (error instanceof LinearIssueValidationError) return false;
+              throw error;
+            }
+          },
+          admitted: async (issueId, runId) => {
+            const path = resolve(stateRoot, "controllers", runId);
+            if (!existsSync(resolve(path, "controller-state.json"))) return false;
+            return readControllerState(path).issueUuid === issueId;
+          },
+          onAccepted: async (issueId, runId, acceptedAt) => {
+            const now = Date.now();
+            for (const [tokenRunId, record] of tokens)
+              if (Date.parse(record.expiresAt) <= now) tokens.delete(tokenRunId);
+            const expiresAt = new Date(Date.parse(acceptedAt) + 24 * 60 * 60 * 1000).toISOString();
+            const issued = deriveRunAccessToken(runId, gatewaySecret, expiresAt);
+            tokens.set(runId, issued.record);
+            writeAccessRecords(accessPath, tokens);
+            const dashboard = gatewayUrl?.(runId, issued.token);
+            if (!dashboard) throw new Error("dashboard gateway unavailable");
+            await createLinearAutomaticRunComment({
+              token: credentials.linearToken,
+              issueId,
+              runId,
+              dashboardUrl: dashboard,
+              expiresAt,
+            });
+            process.stdout.write(`Run: ${runId}\nIssue: ${issueId}\nDashboard: ${dashboard}\n`);
+          },
+        });
+        let gateway: Awaited<ReturnType<typeof createObserverGateway>>;
+        try {
+          gateway = await createObserverGateway({
+            port: options.port,
+            bindHost: "0.0.0.0",
+            observerUrl: observer.url,
+            tokens,
+            publicBaseUrl: publicUrl,
+            webhook: async (request, response) => {
+              const upstream = httpRequest(
+                `http://127.0.0.1:${service.port()}/hooks/linear`,
+                {
+                  method: request.method,
+                  headers: {
+                    "content-type": request.headers["content-type"],
+                    "linear-signature": request.headers["linear-signature"],
+                    "linear-delivery": request.headers["linear-delivery"],
+                    "linear-timestamp": request.headers["linear-timestamp"],
+                  },
+                },
+                (reply) => {
+                  response.statusCode = reply.statusCode ?? 502;
+                  reply.pipe(response);
+                },
+              );
+              let timedOut = false;
+              upstream.setTimeout(4_500, () => {
+                timedOut = true;
+                upstream.destroy(new Error("intake webhook deadline exceeded"));
+              });
+              upstream.once("error", () => {
+                if (!response.headersSent) response.statusCode = timedOut ? 504 : 502;
+                response.end();
+              });
+              request.pipe(upstream);
+            },
+          });
+        } catch (error) {
+          await service.close();
+          throw error;
+        }
+        gatewayUrl = (runId, token) => gateway.url(runId, token);
+        void service.tick().catch(() => undefined);
+        process.stdout.write(
+          `Intake: ${new URL("/hooks/linear", publicUrl).href}\nDashboard gateway: ${publicUrl}\n`,
+        );
+        let finish: (() => void) | undefined;
+        const stopped = new Promise<void>((resolveStop) => {
+          finish = resolveStop;
+        });
+        let closing = false;
+        const close = async () => {
+          if (closing) return;
+          closing = true;
+          await Promise.allSettled([service.close(), gateway.close()]);
+          finish?.();
+        };
+        process.once("SIGINT", () => void close());
+        process.once("SIGTERM", () => void close());
+        await stopped;
+        return 0;
+      }
       if (options.command === "setup") {
         const result = await runSetup({
           json: options.json,
@@ -372,7 +628,12 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         {
           runId: options.runId,
           maquilaRoot: codeRoot,
-          onAccepted: () => writeLaunchHandshake(root, options.runId, instanceId),
+          ...(options.automaticAdmission
+            ? {
+                automaticAdmission: true,
+                onAdmitted: () => writeLaunchHandshake(root, options.runId, instanceId),
+              }
+            : { onAccepted: () => writeLaunchHandshake(root, options.runId, instanceId) }),
         },
       );
       process.stdout.write(`Controller evidence: ${result.runDirectory}\n`);

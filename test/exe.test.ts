@@ -74,6 +74,58 @@ test("create VM uses fixed image, safe tag, and validates response", async () =>
   assert.equal(fake.calls[0]?.timeout, 12_345);
 });
 
+test("controller key and public proxy commands stay strict", async () => {
+  const fake = runner([
+    { stdout: "{}", stderr: "" },
+    { stdout: "{}", stderr: "" },
+    { stdout: "{}", stderr: "" },
+    { stdout: "{}", stderr: "" },
+    { stdout: "{}", stderr: "" },
+  ]);
+  const client = new ExeClient(fake.run);
+  const publicKey = `ssh-ed25519 ${"A".repeat(68)} maquila-controller`;
+  await client.addSshKey(publicKey, "maquila-controller");
+  await client.configurePublicProxy("maquila-controller", 8080);
+  await client.makeProxyPrivate("maquila-controller");
+  await client.removeSshKey(publicKey);
+  assert.deepEqual(fake.calls[0]?.args.slice(-6), [
+    "exe.dev",
+    "ssh-key",
+    "add",
+    "--tag=maquila-controller",
+    `'${publicKey}'`,
+    "--json",
+  ]);
+  assert.deepEqual(fake.calls[1]?.args.slice(-5), [
+    "share",
+    "port",
+    "maquila-controller",
+    "8080",
+    "--json",
+  ]);
+  assert.deepEqual(fake.calls[2]?.args.slice(-4), [
+    "share",
+    "set-public",
+    "maquila-controller",
+    "--json",
+  ]);
+  assert.deepEqual(fake.calls[3]?.args.slice(-4), [
+    "share",
+    "set-private",
+    "maquila-controller",
+    "--json",
+  ]);
+  assert.deepEqual(fake.calls[4]?.args.slice(-5), [
+    "exe.dev",
+    "ssh-key",
+    "remove",
+    `'${publicKey}'`,
+    "--json",
+  ]);
+  await assert.rejects(() => client.addSshKey("unsafe", "maquila-controller"), /invalid/);
+  await assert.rejects(() => client.configurePublicProxy("unsafe name", 8080), /invalid/);
+});
+
 test("identity-less client uses OpenSSH defaults without agent forwarding", async () => {
   const fake = runner([{ stdout: JSON.stringify({ vms: [] }), stderr: "" }]);
   await new ExeClient(fake.run, 30_000).listVms();
@@ -86,9 +138,10 @@ test("dedicated SSH identity supports unattended commands", async () => {
   const fake = runner([{ stdout: JSON.stringify({ vms: [] }), stderr: "" }]);
   await new ExeClient(fake.run, 30_000, "/tmp/maquila-key").listVms();
   assert.ok(fake.calls[0]?.args.includes("IdentitiesOnly=yes"));
-  assert.deepEqual(fake.calls[0]?.args.slice(-5), [
+  assert.deepEqual(fake.calls[0]?.args.slice(-6), [
     "-i",
     "/tmp/maquila-key",
+    "-n",
     "exe.dev",
     "ls",
     "--json",

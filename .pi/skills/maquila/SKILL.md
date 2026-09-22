@@ -22,7 +22,7 @@ A built-in `feature-pr` run:
 8. destroys the VM;
 9. attaches required screenshots and optional video to the PR body before publishing a ready-for-review bot PR.
 
-The CLI also provides setup/doctor, detached start/status, a loopback observer dashboard, retained Linear decision waits, and serial batches of 2–10 issues. It does not discover issues automatically, add readiness labels, accept arbitrary workflow recipes, merge PRs, or make unresolved product decisions.
+The CLI also provides setup/doctor, detached start/status, a loopback observer dashboard, retained Linear decision waits, serial batches of 2–10 issues, and operator-started automatic Linear intake on a persistent trusted controller host. Automatic intake requires assigned `Todo` plus exact `maquila-ready`, starts at most one automatic run per issue, and exposes only one run through a 24-hour token gateway. It does not add readiness labels, install an OS boot service, accept arbitrary workflow recipes, merge PRs, or make unresolved product decisions.
 
 ## Keep one execution context
 
@@ -71,6 +71,26 @@ maquila doctor --json
 ```
 
 Proceed when exit code is zero and JSON has `ok: true`; warnings such as resetting or BYOK-excluded OpenRouter limits are not fixed spending locks. UI runs also require a host `gh` build whose `gh pr edit --help` lists `--attach`; controller checks this before creating its branch or draft PR. For noninteractive agent guidance use `maquila setup --agent`; it never prompts for secrets.
+
+## Automatic intake service
+
+Enable only when the human explicitly asks to deploy automatic intake. Never place webhook secrets, API credentials, or run tokens in chat or visible command arguments.
+
+From the operator host, run the same target through preflight and first-party deployment:
+
+```bash
+maquila doctor --target /absolute/path/to/repository --json
+maquila intake deploy --target /absolute/path/to/repository --allow-credential-transfer --controller-name maquila-controller --port 8080
+maquila intake status --json
+```
+
+Deploy owns controller VM creation, pinned runtime bootstrap, exact local package upload, dedicated exe.dev key registration, target checkout, owner-only credential transfer, managed intake service, HTTPS proxy, and marked Linear webhook. It posts one idempotent accepted-run dashboard link to the Linear issue. Use only the first-party rollback:
+
+```bash
+maquila intake destroy --json
+```
+
+Do not set `maquila-ready` yourself; that label is human authorization. Proceed to a live issue only when status reports deployment `running`, VM `running`, and service `active`.
 
 ## Preflight and start
 

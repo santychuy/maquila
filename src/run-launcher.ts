@@ -54,6 +54,8 @@ interface SpawnedChild {
   once(event: "error", listener: (error: Error) => void): unknown;
 }
 
+export class DetachedRunTerminationUnconfirmedError extends Error {}
+
 export interface StartDetachedRunOptions {
   maquilaRoot: string;
   /** Host home for state; omitted legacy callers use maquilaRoot. */
@@ -72,6 +74,7 @@ export interface StartDetachedRunOptions {
   instanceId?: string;
   startupTimeoutMs?: number;
   terminationTimeoutMs?: number;
+  automaticAdmission?: boolean;
   resolveTarget?: (options: Parameters<typeof resolveTargetRepository>[0]) => TargetRepository;
   spawnChild?: (
     command: string,
@@ -260,6 +263,7 @@ export async function startDetachedRun(options: StartDetachedRunOptions): Promis
     target.tag,
     "--timeout-seconds",
     String(options.timeoutSeconds),
+    ...(options.automaticAdmission ? ["--automatic-admission"] : []),
   ]);
   let child: SpawnedChild;
   try {
@@ -309,7 +313,9 @@ export async function startDetachedRun(options: StartDetachedRunOptions): Promis
       if (!exited(child)) {
         recordTerminationUnconfirmed(root, runId, instanceId, child.pid);
         child.unref();
-        throw new Error(`controller child termination unconfirmed for run ${runId}`);
+        throw new DetachedRunTerminationUnconfirmedError(
+          `controller child termination unconfirmed for run ${runId}`,
+        );
       }
       child.unref();
       if (existsSync(telemetry) && readFileSync(telemetry).length === 0) rmSync(telemetry);

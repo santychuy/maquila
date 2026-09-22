@@ -78,7 +78,8 @@ export class LinearWorkItemProvider implements WorkItemProvider {
       !sha256(snapshot.snapshotSha256)
     )
       throw new Error("Linear work item is malformed");
-    if (snapshot.identifier !== parsed.id) throw new Error("Linear work item reference mismatch");
+    if (snapshot.identifier !== parsed.id && snapshot.uuid !== parsed.id)
+      throw new Error("Linear work item reference mismatch");
     return {
       provider: LINEAR_PROVIDER,
       id: snapshot.uuid,
@@ -102,7 +103,7 @@ export class LinearWorkItemProvider implements WorkItemProvider {
     const parsed = validateWorkItemReference(reference, LINEAR_PROVIDER);
     if (
       request.workItem.provider !== LINEAR_PROVIDER ||
-      request.workItem.key !== parsed.id ||
+      (request.workItem.key !== parsed.id && request.workItem.id !== parsed.id) ||
       request.principal.id !== request.workItem.decisionPrincipal?.id ||
       request.principal.url !== request.workItem.decisionPrincipal?.url
     )

@@ -138,6 +138,7 @@ export function parseRunCommand(
       "base-ref",
       "tag",
       "timeout-seconds",
+      "automatic-admission",
     ]);
     const issue = singleIssue(values.issue);
     if (
@@ -161,6 +162,7 @@ export function parseRunCommand(
         typeof values["timeout-seconds"] === "string" ? values["timeout-seconds"] : undefined,
         "900",
       ),
+      ...(values["automatic-admission"] ? { automaticAdmission: true } : {}),
     };
   }
 

@@ -41,7 +41,7 @@ test("one Linear provider handles sequential references and delegates decisions 
   let requested: unknown;
   const provider = new LinearWorkItemProvider({
     token,
-    fetchIssue: async ({ issue: id }) => issue(id),
+    fetchIssue: async ({ issue: id }) => issue(id === "uuid-ENG-1" ? "ENG-1" : id),
     createDecisionComment: async (value) => {
       requested = value;
       return {
@@ -68,9 +68,11 @@ test("one Linear provider handles sequential references and delegates decisions 
   });
   const first = await provider.fetchWorkItem({ provider: "linear", id: "ENG-1" });
   const second = await provider.fetchWorkItem({ provider: "linear", id: "ENG-2" });
+  const byUuid = await provider.fetchWorkItem({ provider: "linear", id: first.id });
   assert.equal(second.key, "ENG-2");
+  assert.equal(byUuid.key, "ENG-1");
   const receipt = await provider.requestDecision(
-    { provider: "linear", id: "ENG-1" },
+    { provider: "linear", id: first.id },
     {
       workItem: first,
       principal: first.decisionPrincipal!,

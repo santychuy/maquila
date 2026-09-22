@@ -1637,6 +1637,66 @@ function controllerOptions(root: string, exe: ControllerExe) {
   };
 }
 
+test("automatic admission rejects removed readiness label before VM creation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "maquila-automatic-admission-"));
+  const exe = new FakeExe();
+  try {
+    let admitted = false;
+    const result = await runController({
+      ...controllerOptions(root, exe),
+      automaticAdmission: true,
+      onAdmitted: () => {
+        admitted = true;
+      },
+    });
+    assert.equal(admitted, false);
+    assert.equal(result.status, "failed");
+    assert.match(result.error ?? "", /automatic Linear intake is no longer eligible/);
+    assert.equal(
+      exe.calls.some((call) => call.operation === "create"),
+      false,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("automatic launch is acknowledged only after durable controller admission", async () => {
+  const root = mkdtempSync(join(tmpdir(), "maquila-automatic-admitted-"));
+  const exe = new FakeExe();
+  let admitted = false;
+  const createVm = exe.createVm.bind(exe);
+  exe.createVm = async (input) => {
+    assert.equal(admitted, true);
+    return createVm(input);
+  };
+  try {
+    const result = await runController({
+      ...controllerOptions(root, exe),
+      runId: ids[0]!,
+      automaticAdmission: true,
+      intake: async () => ({
+        ...snapshot,
+        issue: {
+          ...snapshot.issue,
+          labels: [{ id: "label-ready", name: "maquila-ready" }],
+        },
+      }),
+      onAdmitted: () => {
+        assert.equal(
+          existsSync(resolve(root, ".maquila", "controllers", ids[0]!, "controller-state.json")),
+          true,
+        );
+        admitted = true;
+      },
+    });
+    assert.equal(result.status, "completed", result.error);
+    assert.equal(admitted, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("provider-backed generic work item writes canonical intake and state before execution failure", async () => {
   const root = mkdtempSync(join(tmpdir(), "maquila-provider-intake-"));
   const stateDirectory = join(root, "arbitrary-state-directory");
@@ -1840,6 +1900,106 @@ test("controller resumes the same VM and planner session after a Linear decision
     assert.ok(resumed.includes("--resume-session"));
     assert.ok(resumed.includes("--session-id"));
     assert.ok(resumed.includes("planner-session"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("provider-backed controller refreshes provider intake after a decision", async () => {
+  const root = mkdtempSync(join(tmpdir(), "maquila-provider-decision-"));
+  const exe = new ResumingPlannerExe();
+  let workItemFetches = 0;
+  const workItem = {
+    provider: "linear",
+    id: "issue-uuid",
+    key: "RIFF-39",
+    title: "Assess architecture",
+    body: "Document assessment only.",
+    url: "https://linear.app/riff/issue/RIFF-39",
+    snapshotSha256: "b".repeat(64),
+    decisionPrincipal: {
+      id: "user-1",
+      name: "Santiago",
+      url: "https://linear.app/riff/profiles/santiago",
+    },
+  };
+  const sourceControl = {
+    provider: "github",
+    repositoryId: 1,
+    repository: "santychuy/bookbounce",
+    fullName: "santychuy/bookbounce",
+    baseRef: "main",
+    baseSha: BASE_SHA,
+    private: true,
+    defaultBranch: "main",
+    snapshotSha256: "c".repeat(64),
+  };
+  try {
+    const result = await runController({
+      ...controllerOptions(root, exe),
+      linearToken: "",
+      githubToken: "",
+      inlineDecisionWaiter: async () => ({
+        commentId: "reply-1",
+        body: "Keep the sign-in card",
+        createdAt: "2026-01-02T00:00:00.000Z",
+        sha256: "a".repeat(64),
+      }),
+      infrastructure: {
+        stateDirectory: join(root, ".maquila"),
+        workItemReference: {},
+        sourceControlReference: {},
+        executionReference: {},
+        workItems: {
+          fetchWorkItem: async () => {
+            workItemFetches += 1;
+            return workItem;
+          },
+          requestDecision: async (_reference, request) => ({
+            provider: "linear",
+            commentId: "decision-comment-1",
+            commentUrl: "https://linear.app/riff/comment/decision-comment-1",
+            workItemId: workItem.id,
+            principalId: workItem.decisionPrincipal.id,
+            generation: request.generation ?? 1,
+            questionSha256: "e".repeat(64),
+            questionCount: request.decisions.length,
+            requestedAt: "2026-01-01T00:00:00.000Z",
+            marker: `<!-- maquila-decision:${request.runId}:${request.generation ?? 1}:${"e".repeat(64)} -->`,
+          }),
+          waitForDecision: async () => undefined,
+        },
+        sourceControl: {
+          fetchSourceControl: async () => sourceControl,
+          cloneUrl: () => "https://example.invalid/santychuy/bookbounce.git",
+          dryRunPublication: () => {
+            throw new Error("unused");
+          },
+          publishReviewedPatch: async () => publishedPullRequest,
+        },
+        execution: {
+          createVm: async (_reference, options) => {
+            const vm = await exe.createVm(options);
+            return { name: vm.vmName, status: vm.status, destination: vm.sshDest };
+          },
+          destroyVm: (_reference, name) => exe.destroyVm(name),
+          exec: (_reference, destination, argv, timeoutMs) =>
+            exe.exec(destination, argv, timeoutMs),
+          execStream: (_reference, destination, argv, onStdout, timeoutMs) =>
+            exe.execStream(destination, argv, onStdout, timeoutMs),
+          copyTo: async (_reference, destination, localPath, remotePath) => {
+            await exe.copyTo(destination, localPath, remotePath);
+            return { stdout: "", stderr: "" };
+          },
+          copyFrom: async (_reference, destination, remotePath, localPath) => {
+            await exe.copyFrom(destination, remotePath, localPath);
+            return { stdout: "", stderr: "" };
+          },
+        },
+      },
+    });
+    assert.equal(result.status, "completed", result.error);
+    assert.equal(workItemFetches, 2);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

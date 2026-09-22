@@ -23,6 +23,7 @@ import { harvest } from "./runs/evidence.js";
 import { createIntake, createProviderIntake, providerIntakeFromLegacy } from "./intake.js";
 import {
   createLinearDecisionComment,
+  isAutomaticLinearCandidate,
   LinearIssueValidationError,
   type LinearDecisionReply,
   type LinearDecisionRequest as LinearDecisionThreadRequest,
@@ -101,12 +102,12 @@ const REMOTE_NODE = "/home/exedev/.local/node/bin/node";
 const REMOTE_NPM = "/home/exedev/.local/node/bin/npm";
 const REMOTE_BUN = "/home/exedev/.local/bun/bin/bun";
 const REMOTE_AGENT_BROWSER = "/home/exedev/.local/agent-browser/bin/agent-browser";
-const REMOTE_PATH =
+export const REMOTE_PATH =
   "/home/exedev/.local/agent-browser/bin:/home/exedev/.local/bun/bin:/home/exedev/.local/node/bin:/usr/local/bin:/usr/bin:/bin";
-const NODE_VERSION = "24.15.0";
-const BUN_VERSION = "1.3.14";
+export const NODE_VERSION = "24.15.0";
+export const BUN_VERSION = "1.3.14";
 const AGENT_BROWSER_VERSION = "0.38.1";
-const NODE_CHECKSUMS: Record<string, string> = {
+export const NODE_CHECKSUMS: Record<string, string> = {
   x64: "472655581fb851559730c48763e0c9d3bc25975c59d518003fc0849d3e4ba0f6",
   arm64: "f3d5a797b5d210ce8e2cb265544c8e482eaedcb8aa409a8b46da7e8595d0dda0",
 };
@@ -161,6 +162,7 @@ export interface ControllerOptions {
   publish?: typeof publishGitHubPullRequest;
   publicationMode?: "publish" | "dry-run";
   onAccepted?: () => void;
+  onAdmitted?: () => void;
   heartbeatMilliseconds?: number;
   decision?: ControllerDecisionContext;
   createDecisionComment?: typeof createLinearDecisionComment;
@@ -168,6 +170,8 @@ export interface ControllerOptions {
     request: ControllerDecisionRequest,
     expiresAt: string,
   ) => Promise<LinearDecisionReply>;
+  /** Internal entry used by automatic intake; never accepted from remote input. */
+  automaticAdmission?: boolean;
   /** Internal entry used by `maquila run resume`; never accepted from remote input. */
   resumeExisting?: boolean;
 }
@@ -1208,6 +1212,11 @@ export async function runController(options: ControllerOptions): Promise<Control
         ),
       );
     const nativeIntake = intake.native;
+    if (
+      options.automaticAdmission &&
+      (!nativeIntake || !isAutomaticLinearCandidate(nativeIntake.issue))
+    )
+      throw new Error("automatic Linear intake is no longer eligible");
     if (resuming) {
       state = readControllerState(runDir);
       let persisted: PersistedDecisionRequest;
@@ -1453,6 +1462,7 @@ export async function runController(options: ControllerOptions): Promise<Control
         renameSync(resolve(provisional, name), resolve(runDir, name));
       rmSync(provisional, { recursive: true, force: true });
       evidenceDir = runDir;
+      options.onAdmitted?.();
       advance(runDir, "creating_vm");
       vm = await exe.createVm({ name: vmName(state.runId), tag: options.tag });
       state = recordControllerVm(runDir, {
@@ -2319,19 +2329,31 @@ export async function runController(options: ControllerOptions): Promise<Control
         } catch {
           throw new PlannerDecisionRequired(decisionRequest);
         }
-        const refreshed = await (options.intake ?? createIntake)(
-          { token: options.linearToken, issue: options.issue },
-          {
-            token: options.githubToken,
-            owner: options.owner,
-            repo: options.repo,
-            baseRef: options.baseRef,
-          },
-        );
+        const refreshedProviderIntake = infrastructure
+          ? await createProviderIntake({
+              workItemProvider: infrastructure.workItems,
+              workItemReference: infrastructure.workItemReference,
+              sourceControlProvider: infrastructure.sourceControl,
+              sourceControlReference: infrastructure.sourceControlReference,
+            })
+          : undefined;
+        const refreshed =
+          refreshedProviderIntake ??
+          providerIntakeFromLegacy(
+            await (options.intake ?? createIntake)(
+              { token: options.linearToken, issue: options.issue },
+              {
+                token: options.githubToken,
+                owner: options.owner,
+                repo: options.repo,
+                baseRef: options.baseRef,
+              },
+            ),
+          );
         if (
-          refreshed.issue.snapshotSha256 !== state.issueSnapshotSha256 ||
-          refreshed.repository.snapshotSha256 !== state.repositorySnapshotSha256 ||
-          refreshed.repository.baseSha !== state.baseSha
+          refreshed.workItem.snapshotSha256 !== state.issueSnapshotSha256 ||
+          refreshed.sourceControl.snapshotSha256 !== state.repositorySnapshotSha256 ||
+          refreshed.sourceControl.baseSha !== state.baseSha
         ) {
           state = transitionControllerState(runDir, "failed");
           throw new Error("decision wait input drifted");
