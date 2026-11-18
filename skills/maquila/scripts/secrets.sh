@@ -64,23 +64,23 @@ verify() { # NAME VALUE
 
 wrap() { fold -s -w 68 | sed 's/^/  /; s/ *$//'; } # 2-space indent, <= 72 cols
 
-lines=""; names=(); N=0; TOTAL=3
+lines=""; names=(); summary=""; N=0; TOTAL=3
 ask() { # NAME LABEL URL HINT
-  local name=$1 v; N=$((N+1))
+  local name=$1 v rej=skipped; N=$((N+1))
   echo; echo "[$N/$TOTAL] $name — $2"
   { echo "Create: $3"; [ -z "$4" ] || echo "$4"; } | while IFS= read -r l; do
     case "$l" in Create:*) printf '  %s\n' "$l" ;; *) printf '%s\n' "$l" | wrap ;; esac
   done
   while :; do
     read -rsp "› " v; echo
-    [ -z "$v" ] && return 0
+    [ -z "$v" ] && { summary+=" $name=$rej"; return 0; }
     if [[ "$v" == *[\"\'\\]* || "$v" == *$'\n'* || "$v" != "${v#[[:space:]]}" || "$v" != "${v%[[:space:]]}" ]]; then
       echo "✗ $name must not contain quotes, backslashes, or leading/trailing spaces"; continue
     fi
     if verify "$name" "$v"; then
-      echo "✓ $name verified"; lines+="$name=$v"$'\n'; names+=("$name"); return 0
+      echo "✓ $name verified"; lines+="$name=$v"$'\n'; names+=("$name"); summary+=" $name=ok"; return 0
     fi
-    echo "✗ $name was rejected (HTTP $CODE)"
+    echo "✗ $name was rejected (HTTP $CODE)"; rej=rejected
   done
 }
 
@@ -89,11 +89,13 @@ ask "$AI_NAME" "AI provider" "$AI_URL" ""
 ask GH_TOKEN "GitHub token (lets the agent open PRs)" "$GH_URL" "$GH_HINT"
 ask LINEAR_API_KEY "Linear (issues labelled maquila become jobs)" "$LN_URL" "$LN_HINT"
 
-if [ ${#names[@]} -eq 0 ]; then echo; echo "Nothing saved"; exit 0; fi
+echo; echo "Verified:$summary" # one short greppable line: panes may wrap the ✓/✗ lines
+
+if [ ${#names[@]} -eq 0 ]; then echo "Nothing saved"; exit 0; fi
 
 # Merge into the remote env file (replace same names, keep others); values travel on stdin only.
 printf '%s' "$lines" | ssh "$VM.exe.xyz" 'umask 077; mkdir -p ~/.maquila; f=~/.maquila/env; touch "$f"; t=$(mktemp); cat > "$t"
 { awk -F= "NR==FNR{n[\$1];next} !(\$1 in n)" "$t" "$f"; cat "$t"; } > "$f.new"; mv "$f.new" "$f"; chmod 600 "$f"; rm -f "$t"
 sudo systemctl restart maquila 2>/dev/null || true'
 
-echo; echo "Saved to $VM: ${names[*]}"
+echo "Saved to $VM: ${names[*]}"
