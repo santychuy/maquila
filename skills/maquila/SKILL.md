@@ -14,7 +14,7 @@ Turn the repository the user is in into a running software factory: a sandbox VM
 ## How to run this
 
 - You drive every step yourself, with short progress updates; stop with a clear message if a step fails. Ask the user only for: the in-chat answers under "Ask", interactive signups/logins, secrets in the hidden prompt, and approving OAuth/MCP sign-ins.
-- Interactive commands (`ssh exe.dev` signup, `secrets.sh`) need a real terminal: agent shells (including Claude Code's `!`) have no interactive stdin. If you can control a terminal multiplexer (e.g. tmux, zellij, herdr, Rex), open a new pane in the repo directory, run the command there, tell the user to type in that pane, watch its output until it finishes, then close the pane. Otherwise ask the user to run it in a separate terminal tab and tell you when done. Call this the **pane rule**.
+- Interactive commands (`ssh exe.dev` signup, `secrets.sh`) need a real terminal: agent shells (including Claude Code's `!`) have no interactive stdin. If you can control a terminal multiplexer (e.g. tmux, zellij, herdr, Rex), open a new pane in the repo directory (an interactive shell pane, so it stays open after the command exits), type the command into that shell, and tell the user to answer in that pane. Do not end your turn: in the same turn, run one long-running polling command (generous timeout, e.g. 15 min) that reads the pane's output until a completion marker appears (`secrets.sh`: a line starting with `Saved to ` or `Nothing saved`; `ssh exe.dev` signup: the shell prompt returns / connection closed). Then read the output, relay the ✓/✗ and `Saved to` lines (names only, never values), close the pane, and continue to the next step automatically. Otherwise ask the user to run it in a separate terminal tab and tell you when done. Call this the **pane rule**.
 - Clean up: before the hand-off, close every pane/tab/session you opened and delete temp files you created (e.g. the deploy key `.pub` file). Leave the user's working tree as you found it.
 
 ## Ask
@@ -126,7 +126,7 @@ Keep the VM **private** (the exe.dev default). The exe.dev proxy then lets only 
 Only if the user saved `LINEAR_API_KEY`.
 
 - With Linear MCP tools (e.g. `list_issue_labels` / `save_issue_label`): check for a workspace label named `maquila` and create it if missing (description: "Issues with this label are worked by the Maquila factory"). Ask which team/project the repo's issues live in only if you will file a test issue.
-- Without them, recommend Linear's official MCP server so you can do this and future Linear work: `https://mcp.linear.app/mcp` (streamable HTTP, OAuth; in Claude Code: `claude mcp add --transport http linear https://mcp.linear.app/mcp`, then the user signs in via `/mcp`). If they decline, ask them to create the `maquila` label themselves.
+- Without them, recommend Linear's official MCP server so you can do this and future Linear work: `https://mcp.linear.app/mcp` (streamable HTTP, OAuth). Ask first, and add it at a scope that does not touch their repo (never edit the committed `.mcp.json`); in Claude Code: `claude mcp add --transport http --scope local linear https://mcp.linear.app/mcp`. Tell the user the tools may only appear after a session restart/reload and that they sign in via `/mcp`; resume this step afterwards. If they decline, ask them to create the `maquila` label themselves.
 - Tip: Linear's GitHub integration (Linear → Settings → Integrations → GitHub) makes issue status follow the PR, since branch names include the issue id.
 
 ## 10. Hand off
