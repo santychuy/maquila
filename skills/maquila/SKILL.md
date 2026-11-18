@@ -11,7 +11,11 @@ metadata:
 
 Turn the repository the user is in into a running software factory: a sandbox VM that holds a clone of the repo and runs the Maquila service (durable Pi agent + web UI) 24/7.
 
-You lead the whole process. Ask the user only what is listed under "Ask". Run every command yourself, show short progress updates, and stop with a clear message if a step fails.
+## How to run this
+
+- You drive every step yourself, with short progress updates; stop with a clear message if a step fails. Ask the user only for: the in-chat answers under "Ask", interactive signups/logins, secrets in the hidden prompt, and approving OAuth/MCP sign-ins.
+- Interactive commands (`ssh exe.dev` signup, `secrets.sh`) need a real terminal: agent shells (including Claude Code's `!`) have no interactive stdin. If you can control a terminal multiplexer (e.g. tmux, zellij, herdr, Rex), open a new pane in the repo directory, run the command there, tell the user to type in that pane, watch its output until it finishes, then close the pane. Otherwise ask the user to run it in a separate terminal tab and tell you when done. Call this the **pane rule**.
+- Clean up: before the hand-off, close every pane/tab/session you opened and delete temp files you created (e.g. the deploy key `.pub` file). Leave the user's working tree as you found it.
 
 ## Ask
 
@@ -40,7 +44,7 @@ Pick a VM name: `<repo>-maquila`, lowercased, containing only `a-z`, `0-9`, and 
 ssh -o StrictHostKeyChecking=accept-new exe.dev ls --json
 ```
 
-- If the output contains `"Registration is required"`, the user has no account or key yet. Ask them to run `ssh exe.dev` themselves in an interactive terminal (in Claude Code: `! ssh exe.dev`), finish signup, then tell you to continue. Re-run the check.
+- If the output contains `"Registration is required"`, the user has no account or key yet. Run `ssh exe.dev` per the pane rule so the user can finish signup, then re-run the check.
 - If `vms[]` already contains `VM`, ask whether to reuse it (skip step 3) or choose another name.
 
 ## 3. Create the sandbox
@@ -57,13 +61,19 @@ ssh -o StrictHostKeyChecking=accept-new "$VM.exe.xyz" true
 
 ## 4. Secrets
 
-The user enters their secrets in a masked prompt they run themselves, so values never reach this chat, a command line, shell history, or the repo. Tell them to run, in their own terminal, this command with the absolute path and values filled in:
+The user enters secrets in a masked prompt, so values never reach this chat, a command line, shell history, or the repo. First list the token pages (tab-separated `NAME`, `URL`, `hint`):
+
+```bash
+bash <skill dir>/scripts/secrets.sh --links <VM> <OWNER/REPO> <provider>
+```
+
+Offer to open them in the user's browser (`open` on macOS, `xdg-open` on Linux) so they can create the tokens; the GitHub link is pre-filled except the repository selection. Then run the prompt per the pane rule (absolute path, values filled in):
 
 ```bash
 bash <skill dir>/scripts/secrets.sh <VM> <OWNER/REPO> <provider>
 ```
 
-It asks for an AI key, a GitHub token, and a Linear key; all optional, hidden input, each verified live. Say: run it in a separate terminal tab, not through your agent (agent shells, including Claude Code's `!` prefix, have no interactive input, so the script refuses to run there). Wait for the user to say done, then confirm names only:
+It asks for an AI key, a GitHub token, and a Linear key; all optional, hidden input, each verified live. When it finishes, confirm names only:
 
 ```bash
 ssh "$VM.exe.xyz" "cut -d= -f1 ~/.maquila/env"
@@ -111,15 +121,22 @@ If an AI key was saved, the health output must show `"providerConfigured":true`.
 
 Keep the VM **private** (the exe.dev default). The exe.dev proxy then lets only the user in, so Maquila needs no login of its own. Do not run `share set-public` unless the user explicitly asks.
 
-## 9. Hand off
+## 9. Linear
+
+Only if the user saved `LINEAR_API_KEY`.
+
+- With Linear MCP tools (e.g. `list_issue_labels` / `save_issue_label`): check for a workspace label named `maquila` and create it if missing (description: "Issues with this label are worked by the Maquila factory"). Ask which team/project the repo's issues live in only if you will file a test issue.
+- Without them, recommend Linear's official MCP server so you can do this and future Linear work: `https://mcp.linear.app/mcp` (streamable HTTP, OAuth; in Claude Code: `claude mcp add --transport http linear https://mcp.linear.app/mcp`, then the user signs in via `/mcp`). If they decline, ask them to create the `maquila` label themselves.
+- Tip: Linear's GitHub integration (Linear → Settings → Integrations → GitHub) makes issue status follow the PR, since branch names include the issue id.
+
+## 10. Hand off
 
 Reply with:
 
 - The factory URL: `https://$VM.exe.xyz`
 - Which integrations are on, from the saved names (AI key, `GH_TOKEN` for PRs, `LINEAR_API_KEY` for Linear). If any was skipped, they can add it later in **Settings → Secrets** or by re-running the script.
-- How to start a job: label a Linear issue `maquila`, or use the web UI.
+- How to start a job: label a Linear issue `maquila`, or use the web UI. **Jobs** shows each run's status, PR and transcript. Offer to file a small first issue with the `maquila` label (via the Linear MCP) so they see the factory pick it up, open a PR, and comment back within a couple of minutes.
 - One line on how the factory stays in sync: it fetches before every job, branches each job from the latest default branch, and pushes its work to branches.
-- If Linear is used, recommend enabling Linear's GitHub integration (Linear → Settings → Integrations → GitHub): branch names include the issue id, so issue status follows the PR.
 
 ## Tear down
 

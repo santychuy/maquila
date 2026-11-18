@@ -1,24 +1,40 @@
-#!/usr/bin/env bash
 # Runs on the USER's machine. Collects secrets with hidden input, verifies each
 # live, and writes them to the VM's ~/.maquila/env over ssh stdin only.
 # Usage: bash secrets.sh <VM> <OWNER/REPO> [openrouter|anthropic|openai]
+#        bash secrets.sh --links <VM> <OWNER/REPO> [provider]
+# --links prints "NAME<TAB>URL<TAB>hint" per secret and exits (no prompt, no TTY needed).
 set -euo pipefail
 
-VM="${1:?usage: secrets.sh <VM> <OWNER/REPO> [provider]}"
-REPO="${2:?usage: secrets.sh <VM> <OWNER/REPO> [provider]}"
+LINKS=0; [ "${1:-}" = --links ] && { LINKS=1; shift; }
+U="usage: secrets.sh [--links] <VM> <OWNER/REPO> [provider]"
+VM="${1:?$U}"
+REPO="${2:?$U}"
 PROVIDER="${3:-openrouter}"
-
-if [ ! -t 0 ]; then
-  echo "Run this in your own terminal: it reads secrets with hidden input." >&2
-  exit 1
-fi
+OWNER=${REPO%%/*}
 
 case "$PROVIDER" in
-  anthropic) AI_NAME=ANTHROPIC_API_KEY; AI_HELP="Create a key at https://console.anthropic.com/settings/keys" ;;
-  openai) AI_NAME=OPENAI_API_KEY; AI_HELP="Create a key at https://platform.openai.com/api-keys" ;;
-  openrouter) AI_NAME=OPENROUTER_API_KEY; AI_HELP="Create a key at https://openrouter.ai/keys" ;;
+  anthropic) AI_NAME=ANTHROPIC_API_KEY; AI_URL=https://console.anthropic.com/settings/keys ;;
+  openai) AI_NAME=OPENAI_API_KEY; AI_URL=https://platform.openai.com/api-keys ;;
+  openrouter) AI_NAME=OPENROUTER_API_KEY; AI_URL=https://openrouter.ai/settings/keys ;;
   *) echo "Unknown provider: $PROVIDER" >&2; exit 1 ;;
 esac
+AI_HINT="Create an API key"
+GH_URL="https://github.com/settings/personal-access-tokens/new?name=maquila-$VM&description=Maquila+factory+for+$OWNER%2F${REPO#*/}&target_name=$OWNER&expires_in=90&contents=write&pull_requests=write&metadata=read"
+GH_HINT="Repository access → Only select repositories → ${REPO#*/}"
+LN_URL=https://linear.app/settings/account/security
+LN_HINT="Personal API keys → New key"
+
+if [ "$LINKS" = 1 ]; then
+  printf '%s\t%s\t%s\n' "$AI_NAME" "$AI_URL" "$AI_HINT"
+  printf '%s\t%s\t%s\n' GH_TOKEN "$GH_URL" "$GH_HINT"
+  printf '%s\t%s\t%s\n' LINEAR_API_KEY "$LN_URL" "$LN_HINT"
+  exit 0
+fi
+
+if [ ! -t 0 ]; then
+  echo "Run this in a real terminal (a separate tab, or a multiplexer pane your agent opens): it reads secrets with hidden input." >&2
+  exit 1
+fi
 
 # Prints "<body>\n<http code>". The secret reaches curl via a config on stdin, never argv.
 call() { # NAME VALUE
@@ -46,12 +62,17 @@ verify() { # NAME VALUE
   if [ "$1" = LINEAR_API_KEY ] && [[ "$body" == *'"errors"'* ]]; then CODE="$code, API errors"; return 1; fi
 }
 
-lines=""; names=()
-ask() { # NAME GUIDANCE
-  local name=$1 v
-  echo; echo "$2"
+wrap() { fold -s -w 68 | sed 's/^/  /; s/ *$//'; } # 2-space indent, <= 72 cols
+
+lines=""; names=(); N=0; TOTAL=3
+ask() { # NAME LABEL URL HINT
+  local name=$1 v; N=$((N+1))
+  echo; echo "[$N/$TOTAL] $name — $2"
+  { echo "Create: $3"; [ -z "$4" ] || echo "$4"; } | while IFS= read -r l; do
+    case "$l" in Create:*) printf '  %s\n' "$l" ;; *) printf '%s\n' "$l" | wrap ;; esac
+  done
   while :; do
-    read -rsp "$name (Enter to skip): " v; echo
+    read -rsp "› " v; echo
     [ -z "$v" ] && return 0
     if [[ "$v" == *[\"\'\\]* || "$v" == *$'\n'* || "$v" != "${v#[[:space:]]}" || "$v" != "${v%[[:space:]]}" ]]; then
       echo "✗ $name must not contain quotes, backslashes, or leading/trailing spaces"; continue
@@ -63,9 +84,10 @@ ask() { # NAME GUIDANCE
   done
 }
 
-ask "$AI_NAME" "$AI_HELP"
-ask GH_TOKEN "Fine-grained token at https://github.com/settings/personal-access-tokens/new: Repository access → only $REPO; Permissions → Contents and Pull requests: Read and write. Lets the agent open PRs."
-ask LINEAR_API_KEY 'Linear → Settings → Security & access → Personal API keys. Issues labelled `maquila` become jobs (create that label).'
+echo "Maquila secrets for $VM (input is hidden; Enter skips)"
+ask "$AI_NAME" "AI provider" "$AI_URL" ""
+ask GH_TOKEN "GitHub token (lets the agent open PRs)" "$GH_URL" "$GH_HINT"
+ask LINEAR_API_KEY "Linear (issues labelled maquila become jobs)" "$LN_URL" "$LN_HINT"
 
 if [ ${#names[@]} -eq 0 ]; then echo; echo "Nothing saved"; exit 0; fi
 
