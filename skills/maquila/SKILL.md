@@ -15,10 +15,12 @@ You lead the whole process. Ask the user only what is listed under "Ask". Run ev
 
 ## Ask
 
-Ask both questions together, up front:
+Ask both questions together, up front, in chat:
 
 1. **Sandbox provider.** Only `exe.dev` is supported right now. Say so and confirm it.
-2. **AI provider (optional).** Ask for the provider (`anthropic`, `openai`, or `openrouter`), the model id (suggest `claude-sonnet-5-5` for anthropic), and the API key. The user can skip this and set it later in the factory's Settings page. Never echo the key back, write it to a file in the repo, or put it on a command line.
+2. **AI provider and model.** `anthropic`, `openai`, or `openrouter`; default `anthropic` / `claude-sonnet-5-5`.
+
+Never ask for keys or tokens in chat. If the user pastes one anyway, do not repeat it, and still use the secrets script (step 4).
 
 ## 1. Preflight (local machine)
 
@@ -53,7 +55,21 @@ Wait until it is reachable (retry for up to 2 minutes):
 ssh -o StrictHostKeyChecking=accept-new "$VM.exe.xyz" true
 ```
 
-## 4. Give the sandbox access to the repository
+## 4. Secrets
+
+The user enters their secrets in a masked prompt they run themselves, so values never reach this chat, a command line, shell history, or the repo. Tell them to run, in their own terminal, this command with the absolute path and values filled in:
+
+```bash
+bash <skill dir>/scripts/secrets.sh <VM> <OWNER/REPO> <provider>
+```
+
+It asks for an AI key, a GitHub token, and a Linear key; all optional, hidden input, each verified live. Say: run it in a terminal tab (in Claude Code you can also try `! <command>`). Wait for the user to say done, then confirm names only:
+
+```bash
+ssh "$VM.exe.xyz" "cut -d= -f1 ~/.maquila/env"
+```
+
+## 5. Give the sandbox access to the repository
 
 Create a key inside the VM and register it as a write-enabled deploy key. The key never leaves the VM.
 
@@ -65,7 +81,7 @@ rm /tmp/maquila_repo.pub
 
 If adding the key fails with a permissions error, the user is not an admin of the repo. Tell them so and stop.
 
-## 5. Install the factory
+## 6. Install the factory
 
 Run the bundled bootstrap script inside the VM. It installs Node if needed, clones Maquila and the user's repo, and starts the `maquila` systemd service on port 8000. It is safe to re-run.
 
@@ -75,32 +91,42 @@ ssh "$VM.exe.xyz" "REPO_SSH_URL='$SSH_URL' bash -s" < scripts/bootstrap.sh
 
 `scripts/bootstrap.sh` is relative to this skill's directory.
 
-## 6. AI provider (only if the user gave one)
+## 7. Provider and model
 
-Write the factory settings over stdin so the key never appears in a process list or shell history. The fields are `provider`, `model`, and `apiKey`.
+Write the settings (no key: keys live in `~/.maquila/env`) and restart:
 
 ```bash
-printf '{"provider":"%s","model":"%s","apiKey":"%s"}' "$PROVIDER" "$MODEL" "$KEY" \
+printf '{"provider":"%s","model":"%s"}' "$PROVIDER" "$MODEL" \
   | ssh "$VM.exe.xyz" 'umask 077; mkdir -p ~/.maquila; cat > ~/.maquila/settings.json; sudo systemctl restart maquila'
 ```
 
-## 7. Expose it and verify
+## 8. Expose it and verify
 
 ```bash
 ssh exe.dev share port "$VM" 8000
 ssh "$VM.exe.xyz" 'curl -fsS localhost:8000/api/health'
 ```
 
+If an AI key was saved, the health output must show `"providerConfigured":true`.
+
 Keep the VM **private** (the exe.dev default). The exe.dev proxy then lets only the user in, so Maquila needs no login of its own. Do not run `share set-public` unless the user explicitly asks.
 
-## 8. Hand off
+## 9. Hand off
 
 Reply with:
 
 - The factory URL: `https://$VM.exe.xyz`
-- Whether an AI provider is configured. If it is not, tell them to open **Settings** in the factory first.
-- Tell them to open **Settings → Secrets** to add `GH_TOKEN` (a fine-grained token, this repo only, Contents + Pull requests read/write, so the agent can open PRs) and `LINEAR_API_KEY` (issues labelled `maquila` become jobs; create that label in Linear).
+- Which integrations are on, from the saved names (AI key, `GH_TOKEN` for PRs, `LINEAR_API_KEY` for Linear). If any was skipped, they can add it later in **Settings → Secrets** or by re-running the script.
+- How to start a job: label a Linear issue `maquila`, or use the web UI.
 - One line on how the factory stays in sync: it pulls the latest default branch before every job and pushes its work to branches.
+
+## Tear down
+
+```bash
+ssh exe.dev rm "$VM"
+gh repo deploy-key list --repo "$OWNER/$REPO"   # find the id of maquila-$VM
+gh repo deploy-key delete <id> --repo "$OWNER/$REPO"
+```
 
 ## Troubleshooting
 

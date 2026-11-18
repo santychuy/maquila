@@ -12,7 +12,7 @@ Then, from inside your repository, ask your agent (Claude Code, Codex, Cursor, â
 
 > Set up Maquila for this repo.
 
-The agent takes it from there. It asks which sandbox to use and, optionally, your AI provider. Then it provisions the sandbox, clones your repo, starts the factory, and gives you the URL.
+The agent takes it from there. It asks which sandbox to use and, optionally, your AI provider. Then it provisions the sandbox, clones your repo, starts the factory, and gives you the URL. Setup will ask you to run one masked prompt in your own terminal for your keys, so they never pass through the chat.
 
 ## What you get
 
@@ -29,7 +29,7 @@ One factory is attached to one repository.
 - A GitHub repository you admin, with [`gh`](https://cli.github.com) authenticated locally
 - `git` and `ssh`
 - An [exe.dev](https://exe.dev) account (the setup walks you through signup)
-- Optionally, an API key for Anthropic, OpenAI, or OpenRouter (you can also add it later in Settings)
+- Optionally, an API key for Anthropic, OpenAI, or OpenRouter (entered in that masked prompt, or later in Settings)
 
 ## How it works
 
