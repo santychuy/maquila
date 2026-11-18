@@ -13,6 +13,8 @@ No auth of its own: it is meant to sit behind exe.dev's private HTTPS proxy.
 | `PORT` | `8000` | HTTP port |
 | `GH_TOKEN` | — | GitHub token for the agent's `gh` (open PRs) |
 | `LINEAR_API_KEY` | — | Enables the Linear channel |
+
+Secrets (`GH_TOKEN`, `LINEAR_API_KEY`, provider keys, any custom name) can be set in the UI under Settings → Secrets; they are written to `$MAQUILA_HOME/env` (mode 0600) and the service restarts.
 | `MAQUILA_LINEAR_LABEL` | `maquila` | Label that marks Linear issues as jobs |
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` | — | Used when Settings has no key for the chosen provider |
 
@@ -38,4 +40,5 @@ npm test
 - `POST /api/prompt` `{ "message": "..." }` queue a prompt (409 when no provider is configured)
 - `GET /api/events` Server-Sent Events: recent history, then `delta`, `assistant`, `tool`, `tool_result`, `error`, `end`
 - `GET|POST /api/settings` `{ provider, model, apiKey? }` (GET returns `apiKeySet`, never the key)
+- `GET|POST /api/secrets` `{ NAME: "value" | null }` set/remove env secrets, then restart (GET returns names only)
 - `GET /api/health` repo path, branch, whether a provider is configured

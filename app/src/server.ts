@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { openAgent } from "./agent.ts";
 import type { Channel, Factory } from "./factory.ts";
 import { importAll } from "./load.ts";
+import { applySecrets, loadSecretNames } from "./secrets.ts";
 import { applyUpdate, loadSettings, redact, saveSettings, type Settings } from "./settings.ts";
 
 const PORT = Number(process.env.PORT ?? 8000);
@@ -17,6 +18,7 @@ if (!REPO) {
 	process.exit(1);
 }
 const SETTINGS_PATH = join(HOME, "settings.json");
+const ENV_PATH = join(HOME, "env");
 const INDEX_PATH = new URL("../public/index.html", import.meta.url);
 const MAX_BODY = 64 * 1024;
 
@@ -91,6 +93,23 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 			await saveSettings(SETTINGS_PATH, next);
 			settings = next; // read live by the agent: no restart needed
 			return send(res, 200, redact(settings, await keyAvailable()));
+		}
+		case "GET /api/secrets":
+			return send(res, 200, { set: await loadSecretNames(ENV_PATH) });
+		case "POST /api/secrets": {
+			const body = await readJson(req);
+			if (typeof body !== "object" || body === null || Array.isArray(body)) {
+				return send(res, 400, { error: "Body must be a JSON object" });
+			}
+			try {
+				await applySecrets(ENV_PATH, body as Record<string, string | null>);
+			} catch (error) {
+				return send(res, (error as any).status ?? 500, { error: (error as Error).message });
+			}
+			send(res, 200, { set: await loadSecretNames(ENV_PATH), restarting: true });
+			// Restart is safe: the durable agent resumes unfinished runs. systemd relaunches with the new env.
+			res.on("finish", () => setTimeout(() => process.kill(process.pid, "SIGTERM"), 100));
+			return;
 		}
 		case "POST /api/prompt": {
 			const body = (await readJson(req)) as { message?: unknown } | null;

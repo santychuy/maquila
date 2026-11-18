@@ -58,7 +58,7 @@ docs/             Design notes
 
 Two primitives, both plain files you drop in and load on restart (`sudo systemctl restart maquila`). Custom files may import only node builtins and the packages already in `app/` (no install step yet). The contract is in `app/src/factory.ts`.
 
-**Channels** bring work in. Put a `.ts`/`.js` file in `~/.maquila/channels/` whose default export is a `Channel`: it gets the `factory` (`run`, `resume`, `syncRepo`, `subscribe`, `repo`, `home`), reads its own config from `process.env`, and returns early when unconfigured. A channel that throws is logged and skipped. Linear (`app/src/channels/linear.ts`) is built this way.
+**Channels** bring work in. Put a `.ts`/`.js` file in `~/.maquila/channels/` whose default export is a `Channel`: it gets the `factory` (`run`, `resume`, `syncRepo`, `subscribe`, `repo`, `home`), reads its own config from `process.env`, and returns early when unconfigured. A channel that throws is logged and skipped. Linear (`app/src/channels/linear.ts`) is built this way. Custom channels and extensions read their config from env; set it in the factory under Settings → Secrets.
 
 ```ts
 // ~/.maquila/channels/nightly.ts: run a prompt every 24h

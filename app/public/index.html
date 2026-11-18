@@ -37,6 +37,17 @@
     <label>API key <input name="apiKey" type="password" autocomplete="off"></label>
     <button>Save</button>
   </form>
+  <form id="secrets">
+    <h3>Secrets</h3>
+    <label>ANTHROPIC_API_KEY <input name="ANTHROPIC_API_KEY" type="password" autocomplete="off"></label>
+    <small>or pick another provider above</small>
+    <label>GH_TOKEN <input name="GH_TOKEN" type="password" autocomplete="off"></label>
+    <small>fine-grained token, Contents + Pull requests read/write on this repo — lets the agent open PRs</small>
+    <label>LINEAR_API_KEY <input name="LINEAR_API_KEY" type="password" autocomplete="off"></label>
+    <small>issues labelled `maquila` become jobs</small>
+    <label>Add another <input id="extraName" placeholder="NAME" autocomplete="off"> <input id="extraValue" type="password" placeholder="value" autocomplete="off"></label>
+    <button>Save and restart</button>
+  </form>
 </details>
 
 <script>
@@ -89,6 +100,8 @@ async function refresh() {
   if (s.provider) f.provider.value = s.provider;
   f.model.value = s.model ?? "";
   f.apiKey.placeholder = s.apiKeySet ? "set (leave blank to keep)" : "not set";
+  const { set } = await api("/api/secrets");
+  for (const input of $("secrets").querySelectorAll("input[name]")) input.placeholder = set.includes(input.name) ? "set" : "not set";
 }
 
 $("prompt").onsubmit = async (ev) => {
@@ -106,6 +119,19 @@ $("settings").onsubmit = async (ev) => {
     await api("/api/settings", { provider: f.provider.value, model: f.model.value, apiKey: f.apiKey.value || undefined });
     f.apiKey.value = ""; $("status").textContent = "Settings saved.";
     refresh();
+  } catch (err) { $("status").textContent = err.message; }
+};
+
+$("secrets").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const body = {};
+  for (const input of ev.target.querySelectorAll("input[name]")) if (input.value) body[input.name] = input.value;
+  if ($("extraName").value && $("extraValue").value) body[$("extraName").value.trim()] = $("extraValue").value;
+  if (!Object.keys(body).length) return;
+  try {
+    await api("/api/secrets", body);
+    $("status").textContent = "Restarting…";
+    setTimeout(() => location.reload(), 4000);
   } catch (err) { $("status").textContent = err.message; }
 };
 

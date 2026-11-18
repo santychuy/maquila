@@ -19,8 +19,6 @@ Ask both questions together, up front:
 
 1. **Sandbox provider.** Only `exe.dev` is supported right now. Say so and confirm it.
 2. **AI provider (optional).** Ask for the provider (`anthropic`, `openai`, or `openrouter`), the model id (suggest `claude-sonnet-5-5` for anthropic), and the API key. The user can skip this and set it later in the factory's Settings page. Never echo the key back, write it to a file in the repo, or put it on a command line.
-3. **GitHub token (optional).** A fine-grained token (Contents + Pull requests read/write, this repo only) so the agent can open PRs.
-4. **Linear API key (optional).** Issues labelled `maquila` become jobs. The user must create the `maquila` label in Linear.
 
 ## 1. Preflight (local machine)
 
@@ -86,17 +84,6 @@ printf '{"provider":"%s","model":"%s","apiKey":"%s"}' "$PROVIDER" "$MODEL" "$KEY
   | ssh "$VM.exe.xyz" 'umask 077; mkdir -p ~/.maquila; cat > ~/.maquila/settings.json; sudo systemctl restart maquila'
 ```
 
-## 6b. Integrations (only if the user gave a GitHub token and/or Linear key)
-
-Append them to the service env file over stdin, with the same rules as the AI key: no echo, never on a command line, never in the repo.
-
-```bash
-printf 'GH_TOKEN=%s\nLINEAR_API_KEY=%s\n' "$GH_TOKEN" "$LINEAR_KEY" \
-  | ssh "$VM.exe.xyz" 'umask 077; mkdir -p ~/.maquila; cat >> ~/.maquila/env; sudo systemctl restart maquila'
-```
-
-Write only the lines for the values the user gave. Remind them to create the `maquila` label in Linear.
-
 ## 7. Expose it and verify
 
 ```bash
@@ -112,6 +99,7 @@ Reply with:
 
 - The factory URL: `https://$VM.exe.xyz`
 - Whether an AI provider is configured. If it is not, tell them to open **Settings** in the factory first.
+- Tell them to open **Settings → Secrets** to add `GH_TOKEN` (a fine-grained token, this repo only, Contents + Pull requests read/write, so the agent can open PRs) and `LINEAR_API_KEY` (issues labelled `maquila` become jobs; create that label in Linear).
 - One line on how the factory stays in sync: it pulls the latest default branch before every job and pushes its work to branches.
 
 ## Troubleshooting
