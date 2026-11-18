@@ -37,17 +37,11 @@
     <label>API key <input name="apiKey" type="password" autocomplete="off"></label>
     <button>Save</button>
   </form>
-  <form id="secrets">
+  <div id="secrets">
     <h3>Secrets</h3>
-    <label>ANTHROPIC_API_KEY <input name="ANTHROPIC_API_KEY" type="password" autocomplete="off"></label>
-    <small>or pick another provider above</small>
-    <label>GH_TOKEN <input name="GH_TOKEN" type="password" autocomplete="off"></label>
-    <small>fine-grained token, Contents + Pull requests read/write on this repo — lets the agent open PRs</small>
-    <label>LINEAR_API_KEY <input name="LINEAR_API_KEY" type="password" autocomplete="off"></label>
-    <small>issues labelled `maquila` become jobs</small>
-    <label>Add another <input id="extraName" placeholder="NAME" autocomplete="off"> <input id="extraValue" type="password" placeholder="value" autocomplete="off"></label>
-    <button>Save and restart</button>
-  </form>
+    <div id="secretRows"></div>
+    <form id="addSecret"><label>Add a secret <input id="extraName" placeholder="NAME" autocomplete="off"> <input id="extraValue" type="password" placeholder="value" autocomplete="off"></label> <button>Add</button></form>
+  </div>
 </details>
 
 <script>
@@ -101,7 +95,7 @@ async function refresh() {
   f.model.value = s.model ?? "";
   f.apiKey.placeholder = s.apiKeySet ? "set (leave blank to keep)" : "not set";
   const { set } = await api("/api/secrets");
-  for (const input of $("secrets").querySelectorAll("input[name]")) input.placeholder = set.includes(input.name) ? "set" : "not set";
+  renderSecrets(set);
 }
 
 $("prompt").onsubmit = async (ev) => {
@@ -122,17 +116,46 @@ $("settings").onsubmit = async (ev) => {
   } catch (err) { $("status").textContent = err.message; }
 };
 
-$("secrets").onsubmit = async (ev) => {
-  ev.preventDefault();
-  const body = {};
-  for (const input of ev.target.querySelectorAll("input[name]")) if (input.value) body[input.name] = input.value;
-  if ($("extraName").value && $("extraValue").value) body[$("extraName").value.trim()] = $("extraValue").value;
-  if (!Object.keys(body).length) return;
+const KNOWN = {
+  OPENROUTER_API_KEY: "AI provider key (default provider); or ANTHROPIC_API_KEY / OPENAI_API_KEY for those providers",
+  GH_TOKEN: "fine-grained token, Contents + Pull requests read/write on this repo — lets the agent open PRs",
+  LINEAR_API_KEY: "issues labelled `maquila` become jobs",
+};
+
+async function sendSecrets(body) {
   try {
     await api("/api/secrets", body);
     $("status").textContent = "Restarting…";
     setTimeout(() => location.reload(), 4000);
   } catch (err) { $("status").textContent = err.message; }
+}
+
+function renderSecrets(set) {
+  const rows = $("secretRows");
+  rows.textContent = "";
+  for (const name of [...new Set([...Object.keys(KNOWN), ...set])]) {
+    const isSet = set.includes(name);
+    const row = document.createElement("div");
+    const input = Object.assign(document.createElement("input"), { type: "password", placeholder: "new value", autocomplete: "off" });
+    const save = Object.assign(document.createElement("button"), { type: "button", textContent: "Save" });
+    save.onclick = () => { if (!input.value) return; const v = input.value; input.value = ""; sendSecrets({ [name]: v }); };
+    row.append(`${name} (${isSet ? "set" : "not set"}) `, input, " ", save);
+    if (isSet) {
+      const revoke = Object.assign(document.createElement("button"), { type: "button", textContent: "Revoke" });
+      revoke.onclick = () => { if (confirm(`Revoke ${name}? The factory restarts.`)) sendSecrets({ [name]: null }); };
+      row.append(" ", revoke);
+    }
+    if (KNOWN[name]) row.append(Object.assign(document.createElement("small"), { textContent: KNOWN[name] }));
+    rows.append(row);
+  }
+}
+
+$("addSecret").onsubmit = (ev) => {
+  ev.preventDefault();
+  const name = $("extraName").value.trim(), value = $("extraValue").value;
+  if (!name || !value) return;
+  $("extraName").value = $("extraValue").value = "";
+  sendSecrets({ [name]: value });
 };
 
 connect();
