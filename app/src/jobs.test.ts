@@ -47,3 +47,15 @@ test("ids are validated", async () => {
 	assert.equal(validJobId("12"), true);
 	assert.equal(await (await openJobs(await tmp())).events("../x"), undefined);
 });
+
+test("a channel job's events land only in its own transcript", async () => {
+	const jobs = await openJobs(await tmp());
+	await jobs.start("1", { source: "linear", conversationId: "c1" }, "a");
+	await jobs.start("2", { source: "linear", conversationId: "c2" }, "b");
+	await jobs.append({ type: "user", text: "for 2" }, "2");
+	await jobs.append({ type: "user", text: "for 1" }, "1");
+	await jobs.append({ type: "user", text: "web" }); // root events never go to channel jobs
+	assert.equal((await jobs.events("1"))?.length, 1);
+	assert.equal((await jobs.events("2"))?.length, 1);
+	assert.equal(jobs.list().find((j) => j.id === "2")?.conversationId, "c2");
+});

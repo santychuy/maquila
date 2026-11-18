@@ -1,12 +1,14 @@
 import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
 import { join } from "node:path";
 
-export type JobMeta = { source?: string; title?: string; url?: string };
+export type JobMeta = { source?: string; title?: string; url?: string; conversationId?: string };
 export type Job = {
 	id: string;
 	source: string;
 	title: string;
 	url?: string;
+	/** Set for jobs that run in their own conversation (not the shared root). */
+	conversationId?: string;
 	status: "running" | "done" | "failed";
 	startedAt: string;
 	endedAt?: string;
@@ -40,12 +42,13 @@ export async function openJobs(home: string) {
 			if (jobs.some((j) => j.id === id)) return;
 			const job: Job = { id, source: meta.source ?? "web", title: meta.title ?? message.slice(0, 80), startedAt: new Date().toISOString(), status: "running" };
 			if (meta.url) job.url = meta.url;
+			if (meta.conversationId) job.conversationId = meta.conversationId;
 			jobs = [job, ...jobs].slice(0, MAX_JOBS);
 			return save();
 		},
-		/** shortcut: the agent has one shared root conversation that works submissions in order, so events go to the oldest running job; upgrade to per-job conversations. */
-		append(event: Record<string, unknown>) {
-			const job = jobs.findLast((j) => j.status === "running");
+		/** Events of a job's own conversation go to `jobId`; root-conversation events (web) go to the oldest running web job. */
+		append(event: Record<string, unknown>, jobId?: string) {
+			const job = jobId ? jobs.find((j) => j.id === jobId) : jobs.findLast((j) => j.status === "running" && !j.conversationId);
 			if (!job) return;
 			return queue(() => appendFile(join(dir, `${job.id}.jsonl`), JSON.stringify(event) + "\n", { mode: 0o600 }));
 		},

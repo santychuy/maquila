@@ -76,64 +76,96 @@ export async function openAgent(opts: { home: string; repo: string; getSettings:
 	const root = await harness.root(ctx);
 	harness.resume(); // continue any run the last process left unfinished
 
-	// Turn view changes into a flat event stream for the UI.
+	// Turn view changes into a flat event stream for the UI. Channel jobs write to their own transcript (`jobId`).
 	const listeners = new Set<(e: AgentEvent) => void>();
 	const jobs = await openJobs(home);
-	const emit = (e: AgentEvent) => {
-		listeners.forEach((l) => l(e));
-		if (e.type !== "delta") jobs.append(e);
-	};
-	const seen = new Set<string>();
-	let streamed = "";
-	let busy = false;
-	const watch = await root.watch(ctx);
-	let view = watch.value;
-	for (const e of view.entries) seen.add(String(e.id));
-	busy = view.docs["pi.live"]?.run !== undefined;
-	watch.start(async (call) => {
-		if (call.kind !== "value") return;
-		view = call.value;
-		const live = view.docs["pi.live"] as any;
-		const partial = textOf(live?.generation?.message);
-		if (partial.startsWith(streamed) && partial.length > streamed.length) {
-			emit({ type: "delta", text: partial.slice(streamed.length) });
-			streamed = partial;
-		}
-		for (const entry of view.entries) {
-			if (seen.has(String(entry.id))) continue;
-			seen.add(String(entry.id));
-			if (entry.kind === "pi.assistant") streamed = "";
-			entryEvents(entry).forEach(emit);
-		}
-		const nowBusy = live?.run !== undefined;
-		if (busy && !nowBusy) emit({ type: "end", failure: live?.runFailure ?? null });
-		busy = nowBusy;
-	});
+	type Conv = NonNullable<Awaited<ReturnType<typeof harness.conversation>>>;
+	const watches = new Map<string, { stop(): Promise<unknown> }>();
+	let rootView: any;
+	/** Watch one conversation. `replay` also emits entries already there (a fresh job conversation). */
+	async function track(conv: Conv, jobId?: string, replay = false) {
+		const emit = (e: AgentEvent) => {
+			listeners.forEach((l) => l(e));
+			if (e.type !== "delta") jobs.append(e, jobId);
+		};
+		const seen = new Set<string>();
+		let streamed = "";
+		const watch = await conv.watch(ctx);
+		let view = watch.value;
+		if (!replay) for (const e of view.entries) seen.add(String(e.id));
+		let busy = !replay && view.docs["pi.live"]?.run !== undefined;
+		const onValue = (v: typeof view) => {
+			view = v;
+			if (!jobId) rootView = v;
+			const live = view.docs["pi.live"] as any;
+			const partial = textOf(live?.generation?.message);
+			if (partial.startsWith(streamed) && partial.length > streamed.length) {
+				emit({ type: "delta", text: partial.slice(streamed.length) });
+				streamed = partial;
+			}
+			for (const entry of view.entries) {
+				if (seen.has(String(entry.id))) continue;
+				seen.add(String(entry.id));
+				if (entry.kind === "pi.assistant") streamed = "";
+				entryEvents(entry).forEach(emit);
+			}
+			const nowBusy = live?.run !== undefined;
+			if (busy && !nowBusy) emit({ type: "end", failure: live?.runFailure ?? null });
+			busy = nowBusy;
+		};
+		if (!jobId) rootView = view;
+		watch.start(async (call) => {
+			if (call.kind === "value") onValue(call.value);
+		});
+		if (replay) onValue(view);
+		return watch;
+	}
+	const rootWatch = await track(root);
 
-	async function outcome(submission: { wait: (c: typeof ctx) => Promise<any> }): Promise<AgentOutcome> {
+	async function outcome(submission: { id: unknown; wait: (c: typeof ctx) => Promise<any> }, conv: Conv): Promise<AgentOutcome> {
 		const settled = await submission.wait(ctx);
 		let result: AgentOutcome;
 		if (settled.status !== "done") result = { ok: false, text: String(settled.detail ?? settled.reason ?? "unanswered") };
 		else {
-			const entry = await root.commit((tx) => tx.entry(AssistantEntry, settled.answer), ctx);
+			const entry = await conv.commit((tx) => tx.entry(AssistantEntry, settled.answer), ctx);
 			result = { ok: true, text: textOf(entry?.model?.[0]) };
 		}
-		await jobs.finish(String(submission.id), result);
+		const id = String(submission.id);
+		await watches.get(id)?.stop();
+		watches.delete(id);
+		await jobs.finish(id, result);
 		return result;
+	}
+
+	/** The conversation a job runs in: its own for channel jobs, the root otherwise. */
+	async function convOf(id: string): Promise<Conv | undefined> {
+		const convId = jobs.list().find((j) => j.id === id)?.conversationId;
+		return convId ? harness.conversation(convId as any, ctx) : root;
+	}
+	async function reattach(id: string) {
+		const conv = await convOf(id);
+		const submission = conv && (await harness.submission(id as any, ctx));
+		if (!conv || !submission) return undefined;
+		if (jobs.list().find((j) => j.id === id)?.conversationId) watches.set(id, await track(conv, id));
+		return { submission, conv };
 	}
 
 	// Jobs left running by the last process: fail the lost ones, track the rest to completion.
 	await jobs.failMissing(async (id) => Boolean(await harness.submission(id as any, ctx)));
-	for (const j of jobs.running()) harness.submission(j.id as any, ctx).then((s) => s && outcome(s)).catch(() => {});
+	for (const j of jobs.running()) reattach(j.id).then((r) => r && outcome(r.submission, r.conv)).catch(() => {});
 
-	/** Submit and let the caller await the outcome. */
-	// shortcut: Linear jobs share the UI's single root conversation (so they show live in the UI), so they interleave with UI prompts; split into per-job conversations if that hurts.
+	/** Submit and let the caller await the outcome. Web prompts share the root conversation (the chat keeps its context); every other job gets its own. */
 	async function run(message: string, job?: JobMeta) {
 		const { provider, model } = getSettings();
-		if (provider && model) await root.configure({ model: { provider, modelId: model } }, ctx);
-		const submission = await root.submit({ type: "input", content: message }, ctx);
-		await jobs.start(String(submission.id), { source: "web", ...job }, message);
-		return { id: String(submission.id), done: outcome(submission) };
+		const meta = { source: "web", ...job };
+		const own = meta.source !== "web"; // handles compare by id, so keep a flag instead of `conv === root`
+		const conv = own ? await harness.createConversation({ ownership: { kind: "ownerless" } }, ctx) : root;
+		if (provider && model) await conv.configure({ model: { provider, modelId: model } }, ctx);
+		const submission = await conv.submit({ type: "input", content: message }, ctx);
+		const id = String(submission.id);
+		await jobs.start(id, own ? { ...meta, conversationId: String(conv.id) } : meta, message);
+		if (own) watches.set(id, await track(conv, id, true));
+		return { id, done: outcome(submission, conv) };
 	}
 
 	return {
@@ -141,7 +173,7 @@ export async function openAgent(opts: { home: string; repo: string; getSettings:
 		harness,
 		models,
 		/** Recent transcript as events, for a client that just connected. */
-		history: () => view.entries.flatMap(entryEvents),
+		history: () => rootView.entries.flatMap(entryEvents),
 		subscribe(listener: (e: AgentEvent) => void) {
 			listeners.add(listener);
 			return () => listeners.delete(listener);
@@ -152,12 +184,13 @@ export async function openAgent(opts: { home: string; repo: string; getSettings:
 		},
 		/** Re-attach to a submission after a restart. */
 		async resume(id: string) {
-			const submission = await harness.submission(id as any, ctx);
-			if (!submission) return { id, done: Promise.resolve({ ok: false, text: "submission not found" }) };
-			return { id, done: outcome(submission) };
+			const r = await reattach(id);
+			if (!r) return { id, done: Promise.resolve({ ok: false, text: "submission not found" }) };
+			return { id, done: outcome(r.submission, r.conv) };
 		},
 		async close() {
-			await watch.stop();
+			await rootWatch.stop();
+			await Promise.all([...watches.values()].map((w) => w.stop()));
 			await harness.close(ctx);
 		},
 	};

@@ -158,6 +158,7 @@ const server = createServer((req, res) => {
 const factory: Factory = {
 	repo: REPO,
 	home: HOME,
+	ready: configured,
 	run: agent.run,
 	resume: agent.resume,
 	syncRepo,

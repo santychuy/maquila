@@ -2,13 +2,14 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Channel, Factory } from "../factory.ts";
 
-export type Issue = { id: string; identifier: string; title: string; description?: string | null; url: string };
+export type Issue = { id: string; identifier: string; title: string; description?: string | null; url: string; comments?: { nodes: { body: string }[] } };
 type Entry = { identifier: string; submissionId?: string; status: "running" | "done" };
 type Gql = (query: string, variables: Record<string, unknown>) => Promise<any>;
 type Run = Awaited<ReturnType<Factory["run"]>>;
 
+const PICKED_UP = "Maquila picked this up";
 const POLL_MS = 60_000;
-const ISSUES = `query($label: String!) { issues(filter: { labels: { name: { eq: $label } }, state: { type: { nin: ["completed", "canceled"] } } }) { nodes { id identifier title description url } } }`;
+const ISSUES = `query($label: String!) { issues(filter: { labels: { name: { eq: $label } }, state: { type: { nin: ["completed", "canceled"] } } }) { nodes { id identifier title description url comments { nodes { body } } } } }`;
 const COMMENT = `mutation($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }`;
 
 export function issuePrompt(i: Issue) {
@@ -45,7 +46,7 @@ export async function startLinear(opts: {
 	apiKey: string;
 	label: string;
 	stateFile: string;
-	agent: Pick<Factory, "run" | "resume">;
+	agent: Pick<Factory, "run" | "resume" | "ready">;
 	syncRepo: Factory["syncRepo"];
 	gql?: Gql;
 	pollMs?: number;
@@ -82,14 +83,22 @@ export async function startLinear(opts: {
 		}
 	}
 
+	let warned = false;
 	async function poll() {
+		if (!(await agent.ready())) {
+			if (!warned) console.log("[linear] waiting for an AI provider/model before taking issues");
+			warned = true;
+			return;
+		}
 		const { issues } = await gql(ISSUES, { label });
 		for (const issue of issues.nodes as Issue[]) {
 			if (state[issue.id]) continue;
+			// Linear is the shared record: another factory (or a lost linear.json) may have taken it already.
+			if (issue.comments?.nodes.some((c) => c.body.startsWith(PICKED_UP))) continue;
 			state[issue.id] = { identifier: issue.identifier, status: "running" };
 			await save();
 			try {
-				await comment(issue.id, "Maquila picked this up and is working on it.");
+				await comment(issue.id, `${PICKED_UP} and is working on it.`);
 				await syncRepo();
 				const run = await agent.run(issuePrompt(issue), { source: "linear", title: `${issue.identifier}: ${issue.title}`, url: issue.url });
 				state[issue.id].submissionId = run.id;

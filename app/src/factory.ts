@@ -10,7 +10,9 @@ export type Factory = {
 	repo: string;
 	/** State directory (`~/.maquila`). */
 	home: string;
-	/** Submit work to the agent. `job` labels it in job history (source defaults to "web"). */
+	/** True when an AI provider, model and key are set; channels must not take work before. */
+	ready(): Promise<boolean>;
+	/** Submit work to the agent. `job` labels it in job history (source defaults to "web"); non-web jobs run in their own conversation. */
 	run(message: string, job?: { source?: string; title?: string; url?: string }): Promise<Run>;
 	/** Re-attach to a submission by id after a restart. */
 	resume(id: string): Promise<Run>;
