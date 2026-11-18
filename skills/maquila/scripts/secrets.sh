@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Runs on the USER's machine. Collects secrets with hidden input, verifies each
 # live, and writes them to the VM's ~/.maquila/env over ssh stdin only.
-# Usage: bash secrets.sh <VM> <OWNER/REPO> [anthropic|openai|openrouter]
+# Usage: bash secrets.sh <VM> <OWNER/REPO> [openrouter|anthropic|openai]
 set -euo pipefail
 
 VM="${1:?usage: secrets.sh <VM> <OWNER/REPO> [provider]}"
 REPO="${2:?usage: secrets.sh <VM> <OWNER/REPO> [provider]}"
-PROVIDER="${3:-anthropic}"
+PROVIDER="${3:-openrouter}"
 
 if [ ! -t 0 ]; then
   echo "Run this in your own terminal: it reads secrets with hidden input." >&2

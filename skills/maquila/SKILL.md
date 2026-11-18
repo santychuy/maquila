@@ -18,7 +18,7 @@ You lead the whole process. Ask the user only what is listed under "Ask". Run ev
 Ask both questions together, up front, in chat:
 
 1. **Sandbox provider.** Only `exe.dev` is supported right now. Say so and confirm it.
-2. **AI provider and model.** `anthropic`, `openai`, or `openrouter`; default `anthropic` / `claude-sonnet-5-5`.
+2. **AI provider and model.** `anthropic`, `openai`, or `openrouter`; default `openrouter` / `anthropic/claude-sonnet-5.5` (one key for any model).
 
 Never ask for keys or tokens in chat. If the user pastes one anyway, do not repeat it, and still use the secrets script (step 4).
 
@@ -63,7 +63,7 @@ The user enters their secrets in a masked prompt they run themselves, so values 
 bash <skill dir>/scripts/secrets.sh <VM> <OWNER/REPO> <provider>
 ```
 
-It asks for an AI key, a GitHub token, and a Linear key; all optional, hidden input, each verified live. Say: run it in a terminal tab (in Claude Code you can also try `! <command>`). Wait for the user to say done, then confirm names only:
+It asks for an AI key, a GitHub token, and a Linear key; all optional, hidden input, each verified live. Say: run it in a separate terminal tab, not through your agent (agent shells, including Claude Code's `!` prefix, have no interactive input, so the script refuses to run there). Wait for the user to say done, then confirm names only:
 
 ```bash
 ssh "$VM.exe.xyz" "cut -d= -f1 ~/.maquila/env"
