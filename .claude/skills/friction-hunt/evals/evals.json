@@ -1,0 +1,36 @@
+{
+  "skill_name": "friction-hunt",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "we just ran the maquila setup on my website, what frictions did you see?",
+      "expected_output": "A ranked friction table with classes and fixes, appended to docs/frictions.md.",
+      "expectations": [
+        "Checks evidence beyond the conversation (e.g. multiplexer panes, git status, or ssh to the factory)",
+        "Output is a table with friction, evidence, class, root cause, fix, impact and status columns, plus a 'Human needs to know' list",
+        "Each friction is classified as removable, necessary-human, or external",
+        "Appends entries to docs/frictions.md"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "the factory finished RIFF-68, do a retro and clean up anything left",
+      "expected_output": "Retro of the job with leftovers cleaned or asked about.",
+      "expectations": [
+        "Reads job state via /api/jobs or the job transcript and the PR (gh pr view/checks)",
+        "Lists leftovers (panes, temp files, branches, deploy keys) and cleans only what the agent created, asking about the rest",
+        "Marks a fix verified only when it cites evidence from a re-run"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "add a footer link to my site",
+      "expected_output": "Skill does not trigger; the agent just edits the site.",
+      "should_trigger": false,
+      "expectations": [
+        "Does not load friction-hunt or create entries in docs/frictions.md",
+        "Performs the footer edit task directly"
+      ]
+    }
+  ]
+}
