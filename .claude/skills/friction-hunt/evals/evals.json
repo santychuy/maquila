@@ -4,12 +4,12 @@
     {
       "id": 1,
       "prompt": "we just ran the maquila setup on my website, what frictions did you see?",
-      "expected_output": "A ranked friction table with classes and fixes, appended to docs/frictions.md.",
+      "expected_output": "A ranked friction table with classes and fixes, each filed as a GitHub issue labeled friction.",
       "expectations": [
         "Checks evidence beyond the conversation (e.g. multiplexer panes, git status, or ssh to the factory)",
         "Output is a table with friction, evidence, class, root cause, fix, impact and status columns, plus a 'Human needs to know' list",
         "Each friction is classified as removable, necessary-human, or external",
-        "Appends entries to docs/frictions.md"
+        "Searches existing friction issues for duplicates (gh issue list --label friction --state all --search) and files new ones or comments on existing ones, without secret values"
       ]
     },
     {
@@ -19,7 +19,7 @@
       "expectations": [
         "Reads job state via /api/jobs or the job transcript and the PR (gh pr view/checks)",
         "Lists leftovers (panes, temp files, branches, deploy keys) and cleans only what the agent created, asking about the rest",
-        "Marks a fix verified only when it cites evidence from a re-run"
+        "Closes a friction issue only when the closing comment cites evidence from a re-run"
       ]
     },
     {
@@ -28,7 +28,7 @@
       "expected_output": "Skill does not trigger; the agent just edits the site.",
       "should_trigger": false,
       "expectations": [
-        "Does not load friction-hunt or create entries in docs/frictions.md",
+        "Does not load friction-hunt or file friction issues",
         "Performs the footer edit task directly"
       ]
     }

@@ -1,6 +1,6 @@
 ---
 name: friction-hunt
-description: Finds and removes frictions in the Maquila experience after or during an end-to-end run of the setup skill or a factory job. A friction is any moment a human had to step in, wait, retry, copy-paste or clean up, any step that failed or needed a nudge, and any leftover panes, files, branches, VMs, deploy keys or edits to the user's repo. Use for "find frictions", "what slowed us down", "retro", "where did I have to step in", "blockers", "make setup smoother", "leave everything clean", or after a dogfood run or a finished job such as RIFF-68. Flags each friction, finds the root cause, proposes the smallest fix, and logs it in docs/frictions.md.
+description: Finds and removes frictions in the Maquila experience after or during an end-to-end run of the setup skill or a factory job. A friction is any moment a human had to step in, wait, retry, copy-paste or clean up, any step that failed or needed a nudge, and any leftover panes, files, branches, VMs, deploy keys or edits to the user's repo. Use for "find frictions", "what slowed us down", "retro", "where did I have to step in", "blockers", "make setup smoother", "leave everything clean", or after a dogfood run or a finished job such as RIFF-68. Flags each friction, finds the root cause, proposes the smallest fix, and tracks it as a GitHub issue labeled `friction`.
 license: MIT
 metadata:
   homepage: https://github.com/santychuy/maquila
@@ -43,7 +43,7 @@ List every leftover from the evidence. Clean what the agent created. Ask before 
 
 ## 7. Verify
 
-After a fix lands, re-run only the affected step. Mark `verified` only with evidence (output, pane capture, API response); a fix without a re-run stays `fixed`.
+After a fix lands, re-run only the affected step. Close the issue only with evidence (output, pane capture, API response) in the closing comment; a fix without a re-run stays open with a commit comment.
 
 ## Output
 
@@ -57,12 +57,27 @@ Human needs to know
 - <step the human must do or be aware of, and why>
 ```
 
-Then append one row per friction to `docs/frictions.md` (ledger columns: date, run, friction, class, fix, status `open` / `fixed` / `verified` / `accepted`). Update existing rows rather than duplicating them.
+## Ledger: GitHub issues
+
+Frictions live as issues in the Maquila repo (`gh repo view --json nameWithOwner`, normally `santychuy/maquila`) with label `friction`. Create the label once if missing: `gh label create friction --color D93F0B --description "Something that slowed down or blocked an agent-led Maquila run"`.
+
+Per friction:
+1. Search duplicates: `gh issue list --label friction --state all --search "<keywords>"`. If one exists, comment the new evidence instead of filing; reopen it if it was closed and the friction is back.
+2. Otherwise file it. Title: short friction statement. Body:
+   - **What happened**: evidence (commands, output, pane capture)
+   - **Class**: removable / necessary-human / external
+   - **Root cause**: where it lives (setup skill text, scripts, `app/`, docs, external)
+   - **Smallest fix**
+   - **Impact**: high / med / low
+   - **Run**: date and what was being run
+3. Status is the issue state: open = not fixed. When a fix lands, comment with the commit. Close only once verified by a re-run, with the evidence in the closing comment. Accepted (deliberately not fixed): `gh issue close <n> --reason "not planned" --comment "<reason>"`.
+
+Issues are public: never include secret values.
 
 ## Example
 
 Evidence: after `secrets.sh` the transcript shows the user asking "did it save?" and the pane gone.
 - Friction: the secrets pane closed on exit, losing the ✓/✗ lines.
 - Class: removable. Root cause: setup skill text opened a non-interactive pane.
-- Fix: open an interactive shell pane and keep it open until the agent has read the result. Impact: medium. Status: `fixed`, to be `verified` on the next setup run.
+- Fix: open an interactive shell pane and keep it open until the agent has read the result. Impact: medium. Status: fix committed (commented on the issue), to be closed after the next setup run.
 - Human needs to know: typing the secrets in that pane is by design.
