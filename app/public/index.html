@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maquila</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; max-width: 860px; margin: 0 auto; padding: 1rem; }
+  #log { border: 1px solid #ccc; height: 60vh; overflow-y: auto; padding: .5rem; white-space: pre-wrap; }
+  .user { color: #0645ad; } .tool, .tool_result { color: #666; font-family: monospace; font-size: 12px; }
+  .error { color: #b00; } .end { color: #999; font-style: italic; }
+  form { display: flex; gap: .5rem; margin-top: .5rem; } textarea, input { flex: 1; }
+</style>
+</head>
+<body>
+<h1>Maquila</h1>
+<p id="health">…</p>
+<div id="log" aria-live="polite"></div>
+<form id="prompt">
+  <label for="message" hidden>Message</label>
+  <textarea id="message" rows="3" placeholder="Ask the agent to do something"></textarea>
+  <button>Send</button>
+</form>
+<p id="status" role="status"></p>
+
+<details>
+  <summary>Settings</summary>
+  <form id="settings">
+    <label>Provider
+      <select name="provider">
+        <option value="anthropic">anthropic</option>
+        <option value="openai">openai</option>
+        <option value="openrouter">openrouter</option>
+      </select>
+    </label>
+    <label>Model <input name="model" placeholder="e.g. claude-sonnet-5-5" required></label>
+    <label>API key <input name="apiKey" type="password" autocomplete="off"></label>
+    <button>Save</button>
+  </form>
+</details>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const log = $("log");
+let streaming = null;
+
+function line(cls, text) {
+  const div = document.createElement("div");
+  div.className = cls;
+  div.textContent = text;
+  log.append(div);
+  log.scrollTop = log.scrollHeight;
+  return div;
+}
+
+function onEvent(e) {
+  switch (e.type) {
+    case "user": line("user", "> " + e.text); break;
+    case "delta": (streaming ??= line("assistant", "")).textContent += e.text; break;
+    case "assistant": if (streaming) streaming.textContent = e.text; else line("assistant", e.text); streaming = null; break;
+    case "tool": line("tool", `→ ${e.name} ${JSON.stringify(e.args)}`); break;
+    case "tool_result": line("tool_result", `${e.isError ? "✗" : "✓"} ${e.name}: ${e.text.slice(0, 300)}`); break;
+    case "error": line("error", "error: " + e.text); break;
+    case "end": streaming = null; line(e.failure ? "error" : "end", e.failure ? `run failed: ${e.failure.reason} ${e.failure.detail ?? ""}` : "— done —"); break;
+  }
+}
+
+let source;
+function connect() {
+  log.textContent = ""; streaming = null;
+  source?.close();
+  source = new EventSource("/api/events");
+  source.onmessage = (m) => onEvent(JSON.parse(m.data));
+  source.onerror = () => { source.close(); setTimeout(connect, 3000); };
+}
+
+async function api(path, body) {
+  const res = await fetch(path, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {});
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error);
+  return data;
+}
+
+async function refresh() {
+  const h = await api("/api/health");
+  $("health").textContent = `${h.repo} @ ${h.branch ?? "?"} · provider ${h.providerConfigured ? "configured" : "NOT configured (open Settings)"}`;
+  const s = await api("/api/settings");
+  const f = $("settings");
+  if (s.provider) f.provider.value = s.provider;
+  f.model.value = s.model ?? "";
+  f.apiKey.placeholder = s.apiKeySet ? "set (leave blank to keep)" : "not set";
+}
+
+$("prompt").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const message = $("message").value.trim();
+  if (!message) return;
+  try { await api("/api/prompt", { message }); $("message").value = ""; $("status").textContent = ""; }
+  catch (err) { $("status").textContent = err.message; }
+};
+
+$("settings").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  try {
+    await api("/api/settings", { provider: f.provider.value, model: f.model.value, apiKey: f.apiKey.value || undefined });
+    f.apiKey.value = ""; $("status").textContent = "Settings saved.";
+    refresh();
+  } catch (err) { $("status").textContent = err.message; }
+};
+
+connect();
+refresh();
+</script>
+</body>
+</html>
