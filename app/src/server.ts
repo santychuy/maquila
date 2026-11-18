@@ -26,14 +26,12 @@ const MAX_BODY = 64 * 1024;
 const exec = promisify(execFile);
 const git = async (...args: string[]) => (await exec("git", args, { cwd: REPO })).stdout.trim();
 
-/** Keep the clone current before each prompt; never discard local changes. */
+/** Fetch before each job so `origin/HEAD` is current; never touches the working tree. */
 async function syncRepo() {
-	for (const args of [["fetch", "--all", "--prune"], ["pull", "--ff-only"]]) {
-		try {
-			await git(...args);
-		} catch (error) {
-			console.warn(`[sync] git ${args.join(" ")} failed, continuing:`, (error as Error).message.trim());
-		}
+	try {
+		await git("fetch", "--all", "--prune");
+	} catch (error) {
+		console.warn("[sync] git fetch --all --prune failed, continuing:", (error as Error).message.trim());
 	}
 }
 

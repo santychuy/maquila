@@ -25,7 +25,7 @@ Why exe.dev: a real VM with systemd, persistent disk, an HTTPS proxy that is pri
 ### 3. Codebase access and sync
 
 - The VM generates its own SSH key. The user's machine registers it as a **write-enabled deploy key** with `gh repo deploy-key add`. No GitHub token ever leaves the user's machine, and the key is scoped to the one repo.
-- The factory runs `git fetch` + `git pull --ff-only` before every job and never discards local changes. The agent pushes its work to branches.
+- The factory runs `git fetch` before every job; every job branches from the latest default branch and pushes to its own branch. Local changes are never discarded.
 
 ### 4. The factory service: `app/`
 
@@ -67,6 +67,7 @@ When the second implementation of an axis lands, extract the narrowest interface
 ## Open questions
 
 - PR creation from the VM: a deploy key cannot open PRs. For now a fine-grained token in `~/.maquila/env` (`GH_TOKEN`) solves it; a GitHub App is likely the right long-term answer.
+- Identity: PRs, commits and Linear comments appear as the user who supplied `GH_TOKEN` and `LINEAR_API_KEY`. A bot identity (a GitHub App for PRs/commits, a Linear OAuth app acting as an agent) would make the factory's work distinguishable; deferred until needed.
 - Updating a running factory: re-run `bootstrap.sh` (it is idempotent), or add an "update" action to the skill.
 - Multiple users per factory: exe.dev `share add` already provides access control, but agent identity per user is undecided.
 - Public ingress for webhook channels: avoided for now by polling (Linear). Webhooks would need their own auth, since exe.dev allows only one public port per VM.

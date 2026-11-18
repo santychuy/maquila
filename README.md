@@ -39,7 +39,7 @@ your machine                          exe.dev VM (https://<repo>-maquila.exe.xyz
 │ your agent + skill   │ ───────────▶ │ maquila service (systemd, :8000)     │
 │  • preflight         │              │  ├─ web UI + settings                │
 │  • create VM         │              │  └─ durable Pi agent ──▶ ~/<repo>    │
-│  • add deploy key    │              │       (git pull before each job,     │
+│  • add deploy key    │              │       (git fetch before each job,     │
 │  • run bootstrap.sh  │              │        pushes work to branches)      │
 └──────────────────────┘              └──────────────────────────────────────┘
 ```

@@ -45,7 +45,8 @@ export async function openAgent(opts: { home: string; repo: string; getSettings:
 					"preamble",
 					() =>
 						`You are Maquila, a coding agent that works 24/7 on the git repository at ${repo}. ` +
-						"Work on branches, commit your changes, and never discard uncommitted work you did not make.",
+						"Work on branches, commit your changes, and never discard uncommitted work you did not make. " +
+						"Start new work on a fresh branch from the latest default branch (`origin/HEAD`), never on top of another job's branch.",
 					{ tag: false },
 				),
 			],

@@ -1,6 +1,6 @@
 # Maquila factory
 
-The service that runs inside the sandbox: one Node process hosting a durable [Pi](https://github.com/earendil-works/pi) coding agent attached to one cloned repository, plus a plain web UI. Runs survive restarts (SQLite-backed `@earendil-works/pi-durable`); unfinished work resumes on boot. Before each prompt it runs `git fetch --all --prune` and `git pull --ff-only`, and only logs failures (local changes are never discarded).
+The service that runs inside the sandbox: one Node process hosting a durable [Pi](https://github.com/earendil-works/pi) coding agent attached to one cloned repository, plus a plain web UI. Runs survive restarts (SQLite-backed `@earendil-works/pi-durable`); unfinished work resumes on boot. Before each prompt it runs `git fetch --all --prune` (failures are only logged), and every job branches from the latest default branch (`origin/HEAD`).
 
 No auth of its own: it is meant to sit behind exe.dev's private HTTPS proxy.
 
@@ -23,6 +23,8 @@ The AI provider is optional at boot. Pick provider, model, and key in the UI's S
 ## Linear channel
 
 With `LINEAR_API_KEY` set, the factory polls Linear every 60s for open issues labelled `maquila` and handles them one at a time: it comments that it picked the issue up, has the agent branch, implement, verify, push and open a PR (needs `GH_TOKEN`), then comments the result. Handled issues are tracked in `~/.maquila/linear.json`; a run interrupted by a restart is resumed and its result still posted. Jobs share the UI's conversation, so they show up live there.
+
+Maquila does not change issue status itself. Enable Linear's GitHub integration (Linear → Settings → Integrations → GitHub): branch names already include the issue id (`maquila/riff-67`), so the PR attaches to the issue, moving it to In Progress when opened and Done when merged.
 
 ## Run locally
 

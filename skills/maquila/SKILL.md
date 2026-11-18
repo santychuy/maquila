@@ -118,7 +118,8 @@ Reply with:
 - The factory URL: `https://$VM.exe.xyz`
 - Which integrations are on, from the saved names (AI key, `GH_TOKEN` for PRs, `LINEAR_API_KEY` for Linear). If any was skipped, they can add it later in **Settings → Secrets** or by re-running the script.
 - How to start a job: label a Linear issue `maquila`, or use the web UI.
-- One line on how the factory stays in sync: it pulls the latest default branch before every job and pushes its work to branches.
+- One line on how the factory stays in sync: it fetches before every job, branches each job from the latest default branch, and pushes its work to branches.
+- If Linear is used, recommend enabling Linear's GitHub integration (Linear → Settings → Integrations → GitHub): branch names include the issue id, so issue status follows the PR.
 
 ## Tear down
 
