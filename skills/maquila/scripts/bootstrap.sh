@@ -25,7 +25,7 @@ if ! command -v gh >/dev/null; then
 fi
 
 log "Configuring GitHub access with the deploy key"
-mkdir -p ~/.ssh && chmod 700 ~/.ssh
+mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/known_hosts
 grep -q 'maquila_repo' ~/.ssh/config 2>/dev/null || cat >> ~/.ssh/config <<'EOF'
 Host github.com
   IdentityFile ~/.ssh/maquila_repo

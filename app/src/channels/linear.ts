@@ -120,6 +120,7 @@ export async function startLinear(opts: {
 	};
 	const timer = setInterval(tick, opts.pollMs ?? POLL_MS);
 	timer.unref();
+	console.log(`[linear] polling every ${(opts.pollMs ?? POLL_MS) / 1000}s for open issues labelled "${label}"`);
 	await tick();
 	return { tick, stop: () => clearInterval(timer) };
 }
