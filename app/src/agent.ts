@@ -7,6 +7,7 @@ import { AssistantEntry, createRegistry, defineExtension, Harness, section } fro
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { createCodingTools } from "@earendil-works/pi-durable/tools";
+import { openJobs, type JobMeta } from "./jobs.ts";
 import { importAll } from "./load.ts";
 import type { Settings } from "./settings.ts";
 
@@ -76,7 +77,11 @@ export async function openAgent(opts: { home: string; repo: string; getSettings:
 
 	// Turn view changes into a flat event stream for the UI.
 	const listeners = new Set<(e: AgentEvent) => void>();
-	const emit = (e: AgentEvent) => listeners.forEach((l) => l(e));
+	const jobs = await openJobs(home);
+	const emit = (e: AgentEvent) => {
+		listeners.forEach((l) => l(e));
+		if (e.type !== "delta") jobs.append(e);
+	};
 	const seen = new Set<string>();
 	let streamed = "";
 	let busy = false;
@@ -106,21 +111,32 @@ export async function openAgent(opts: { home: string; repo: string; getSettings:
 
 	async function outcome(submission: { wait: (c: typeof ctx) => Promise<any> }): Promise<AgentOutcome> {
 		const settled = await submission.wait(ctx);
-		if (settled.status !== "done") return { ok: false, text: String(settled.detail ?? settled.reason ?? "unanswered") };
-		const entry = await root.commit((tx) => tx.entry(AssistantEntry, settled.answer), ctx);
-		return { ok: true, text: textOf(entry?.model?.[0]) };
+		let result: AgentOutcome;
+		if (settled.status !== "done") result = { ok: false, text: String(settled.detail ?? settled.reason ?? "unanswered") };
+		else {
+			const entry = await root.commit((tx) => tx.entry(AssistantEntry, settled.answer), ctx);
+			result = { ok: true, text: textOf(entry?.model?.[0]) };
+		}
+		await jobs.finish(String(submission.id), result);
+		return result;
 	}
+
+	// Jobs left running by the last process: fail the lost ones, track the rest to completion.
+	await jobs.failMissing(async (id) => Boolean(await harness.submission(id as any, ctx)));
+	for (const j of jobs.running()) harness.submission(j.id as any, ctx).then((s) => s && outcome(s)).catch(() => {});
 
 	/** Submit and let the caller await the outcome. */
 	// shortcut: Linear jobs share the UI's single root conversation (so they show live in the UI), so they interleave with UI prompts; split into per-job conversations if that hurts.
-	async function run(message: string) {
+	async function run(message: string, job?: JobMeta) {
 		const { provider, model } = getSettings();
 		if (provider && model) await root.configure({ model: { provider, modelId: model } }, ctx);
 		const submission = await root.submit({ type: "input", content: message }, ctx);
+		await jobs.start(String(submission.id), { source: "web", ...job }, message);
 		return { id: String(submission.id), done: outcome(submission) };
 	}
 
 	return {
+		jobs,
 		harness,
 		models,
 		/** Recent transcript as events, for a client that just connected. */
@@ -130,8 +146,8 @@ export async function openAgent(opts: { home: string; repo: string; getSettings:
 			return () => listeners.delete(listener);
 		},
 		run,
-		async prompt(message: string) {
-			return (await run(message)).id;
+		async prompt(message: string, job?: JobMeta) {
+			return (await run(message, job)).id;
 		},
 		/** Re-attach to a submission after a restart. */
 		async resume(id: string) {

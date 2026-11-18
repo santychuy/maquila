@@ -9,12 +9,15 @@
   #log { border: 1px solid #ccc; height: 60vh; overflow-y: auto; padding: .5rem; white-space: pre-wrap; }
   .user { color: #0645ad; } .tool, .tool_result { color: #666; font-family: monospace; font-size: 12px; }
   .error { color: #b00; } .end { color: #999; font-style: italic; }
+  #jobs div { cursor: pointer; padding: 2px 0; } #jobs div:hover { background: #f0f0f0; }
   form { display: flex; gap: .5rem; margin-top: .5rem; } textarea, input { flex: 1; }
 </style>
 </head>
 <body>
 <h1>Maquila</h1>
 <p id="health">…</p>
+<h3>Jobs <button id="live" hidden>Back to live</button></h3>
+<div id="jobs"></div>
 <div id="log" aria-live="polite"></div>
 <form id="prompt">
   <label for="message" hidden>Message</label>
@@ -66,9 +69,30 @@ function onEvent(e) {
     case "tool": line("tool", `→ ${e.name} ${JSON.stringify(e.args)}`); break;
     case "tool_result": line("tool_result", `${e.isError ? "✗" : "✓"} ${e.name}: ${e.text.slice(0, 300)}`); break;
     case "error": line("error", "error: " + e.text); break;
-    case "end": streaming = null; line(e.failure ? "error" : "end", e.failure ? `run failed: ${e.failure.reason} ${e.failure.detail ?? ""}` : "— done —"); break;
+    case "end": if (!viewing) loadJobs(); streaming = null; line(e.failure ? "error" : "end", e.failure ? `run failed: ${e.failure.reason} ${e.failure.detail ?? ""}` : "— done —"); break;
   }
 }
+
+let viewing = false;
+async function loadJobs() {
+  const box = $("jobs");
+  box.textContent = "";
+  for (const j of await api("/api/jobs")) {
+    const row = document.createElement("div");
+    row.append(`${j.source} · ${j.title} · ${j.status} · ${new Date(j.startedAt).toLocaleString()} `);
+    for (const [label, href] of [["PR", j.prUrl], ["issue", j.url]]) {
+      if (href) row.append(Object.assign(document.createElement("a"), { href, textContent: label, target: "_blank", onclick: (e) => e.stopPropagation() }), " ");
+    }
+    row.onclick = async () => {
+      const { events } = await api("/api/jobs/" + j.id);
+      source?.close(); viewing = true; $("live").hidden = false;
+      log.textContent = ""; streaming = null;
+      events.forEach(onEvent);
+    };
+    box.append(row);
+  }
+}
+$("live").onclick = () => { viewing = false; $("live").hidden = true; connect(); loadJobs(); };
 
 let source;
 function connect() {
@@ -76,7 +100,7 @@ function connect() {
   source?.close();
   source = new EventSource("/api/events");
   source.onmessage = (m) => onEvent(JSON.parse(m.data));
-  source.onerror = () => { source.close(); setTimeout(connect, 3000); };
+  source.onerror = () => { source.close(); if (!viewing) setTimeout(connect, 3000); };
 }
 
 async function api(path, body) {
@@ -160,6 +184,7 @@ $("addSecret").onsubmit = (ev) => {
 
 connect();
 refresh();
+loadJobs();
 </script>
 </body>
 </html>

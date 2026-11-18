@@ -10,8 +10,8 @@ export type Factory = {
 	repo: string;
 	/** State directory (`~/.maquila`). */
 	home: string;
-	/** Submit work to the agent. */
-	run(message: string): Promise<Run>;
+	/** Submit work to the agent. `job` labels it in job history (source defaults to "web"). */
+	run(message: string, job?: { source?: string; title?: string; url?: string }): Promise<Run>;
 	/** Re-attach to a submission by id after a restart. */
 	resume(id: string): Promise<Run>;
 	/** Fetch/pull the clone; call before `run`. */

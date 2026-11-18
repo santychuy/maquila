@@ -91,7 +91,7 @@ export async function startLinear(opts: {
 			try {
 				await comment(issue.id, "Maquila picked this up and is working on it.");
 				await syncRepo();
-				const run = await agent.run(issuePrompt(issue));
+				const run = await agent.run(issuePrompt(issue), { source: "linear", title: `${issue.identifier}: ${issue.title}`, url: issue.url });
 				state[issue.id].submissionId = run.id;
 				await save();
 				await finish(issue.id, run);

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { openAgent } from "./agent.ts";
 import type { Channel, Factory } from "./factory.ts";
+import { validJobId } from "./jobs.ts";
 import { importAll } from "./load.ts";
 import { applySecrets, loadSecretNames } from "./secrets.ts";
 import { applyUpdate, loadSettings, redact, saveSettings, type Settings } from "./settings.ts";
@@ -119,7 +120,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 				return send(res, 409, { error: "No AI provider configured. Open Settings and set a provider, model, and API key." });
 			}
 			await syncRepo();
-			return send(res, 202, { submissionId: await agent.prompt(message) });
+			return send(res, 202, { submissionId: await agent.prompt(message, { source: "web", title: message.slice(0, 80) }) });
 		}
 		case "GET /api/events": {
 			res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
@@ -134,8 +135,18 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 			});
 			return;
 		}
-		default:
+		case "GET /api/jobs":
+			return send(res, 200, agent.jobs.list());
+		default: {
+			const id = new URL(req.url ?? "/", "http://x").pathname.match(/^\/api\/jobs\/([^/]+)$/)?.[1];
+			if (req.method === "GET" && id !== undefined) {
+				if (!validJobId(id)) return send(res, 400, { error: "Invalid job id" });
+				const events = await agent.jobs.events(id);
+				if (!events) return send(res, 404, { error: "Unknown job" });
+				return send(res, 200, { job: agent.jobs.list().find((j) => j.id === id), events });
+			}
 			return send(res, 404, { error: "Not found" });
+		}
 	}
 }
 

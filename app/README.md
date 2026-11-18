@@ -39,6 +39,8 @@ npm test
 - `GET /` UI
 - `POST /api/prompt` `{ "message": "..." }` queue a prompt (409 when no provider is configured)
 - `GET /api/events` Server-Sent Events: recent history, then `delta`, `assistant`, `tool`, `tool_result`, `error`, `end`
+- `GET /api/jobs` job history, newest first: `{ id, source, title, url?, status, startedAt, endedAt?, result?, prUrl? }` (last 200)
+- `GET /api/jobs/:id` `{ job, events }` the job and its transcript (same events as `/api/events`, no `delta`)
 - `GET|POST /api/settings` `{ provider, model, apiKey? }` (GET returns `apiKeySet`, never the key)
 - `GET|POST /api/secrets` `{ NAME: "value" | null }` set/remove env secrets, then restart (GET returns names only)
 - `GET /api/health` repo path, branch, whether a provider is configured
